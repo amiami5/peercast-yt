@@ -1349,7 +1349,7 @@ void ServMgr::loadSettings(const char *fn)
             else if (iniFile.isName("autoConnect"))
                 this->autoConnect = iniFile.getBoolValue();
             else if (iniFile.isName("icyPassword"))     // depreciated
-                strcpy(this->password, iniFile.getStrValue());
+                Sys::strcpy_truncate(this->password, sizeof(this->password), iniFile.getStrValue());
             else if (iniFile.isName("forceIP"))
                 this->forceIP = iniFile.getStrValue();
             else if (iniFile.isName("isRoot"))
@@ -1358,7 +1358,7 @@ void ServMgr::loadSettings(const char *fn)
             {
                 chanMgr->broadcastID.fromStr(iniFile.getStrValue());
             }else if (iniFile.isName("htmlPath"))
-                strcpy(this->htmlPath, iniFile.getStrValue());
+                Sys::strcpy_truncate(this->htmlPath, sizeof(this->htmlPath), iniFile.getStrValue());
             else if (iniFile.isName("maxControlConnections"))
             {
                 this->maxControl = iniFile.getIntValue();
@@ -1419,7 +1419,7 @@ void ServMgr::loadSettings(const char *fn)
 
             // privacy settings
             else if (iniFile.isName("password"))
-                strcpy(this->password, iniFile.getStrValue());
+                Sys::strcpy_truncate(this->password, sizeof(this->password), iniFile.getStrValue());
             else if (iniFile.isName("maxUptime"))
                 chanMgr->maxUptime = iniFile.getIntValue();
 
