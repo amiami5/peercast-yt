@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-import configparser, re, urllib.request, html
+import configparser, re, urllib.request, urllib.error, urllib.parse, html
+import ipaddress, socket
 
 def print_bad_request(message):
   print("Status: 400 Bad Request")
@@ -7,9 +8,76 @@ def print_bad_request(message):
   print("")
   print(message)
 
+# ---------------------------------------------------------------------
+# 入力の検証と SSRF 対策
+#
+# fqdn, category, board_num, thread_id は利用者が指定する値で、そのまま URL に
+# 埋め込まれる。"127.0.0.1:7144/admin?cmd=shutdown#" のような値を渡されると、
+# PeerCast 自身の管理画面 (localhost は認証不要) や、内部ネットワーク、クラウド
+# のメタデータサーバー (169.254.169.254) などにこのスクリプトから要求が送ら
+# れてしまう。文字種を制限し、接続先が公開アドレスであることを確認する。
+
+_HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?$")
+_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_NUM_RE  = re.compile(r"^[0-9]{1,20}$")
+
+MAX_DOWNLOAD_SIZE = 16 * 1024 * 1024
+DOWNLOAD_TIMEOUT = 15
+
+def check_params(fqdn, category, board_num = "", thread_id = None):
+  """不正なら理由 (文字列) を、問題なければ None を返す。"""
+  if not _HOST_RE.match(fqdn):
+    return "bad fqdn"
+  if not _NAME_RE.match(category) or category in (".", ".."):
+    return "bad category"
+  if board_num != "" and not _NUM_RE.match(board_num):
+    return "bad board_num"
+  if thread_id is not None and not _NUM_RE.match(thread_id):
+    return "bad id"
+  return None
+
+def _check_public_host(hostname, port):
+  try:
+    infos = socket.getaddrinfo(hostname, port, proto = socket.IPPROTO_TCP)
+  except socket.gaierror:
+    raise urllib.error.URLError("cannot resolve host")
+  if not infos:
+    raise urllib.error.URLError("cannot resolve host")
+  for info in infos:
+    ip = ipaddress.ip_address(info[4][0].split("%")[0])
+    if getattr(ip, "ipv4_mapped", None):
+      ip = ip.ipv4_mapped
+    if not ip.is_global:
+      raise urllib.error.URLError("access to non-public address is not allowed")
+
+def _check_url(url):
+  parts = urllib.parse.urlsplit(url)
+  if parts.scheme not in ("http", "https"):
+    raise urllib.error.URLError("unsupported scheme")
+  if parts.hostname is None or parts.username is not None:
+    raise urllib.error.URLError("bad url")
+  port = parts.port or (443 if parts.scheme == "https" else 80)
+  _check_public_host(parts.hostname, port)
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+  # リダイレクト先が内部アドレスや http/https 以外でないことを確認する。
+  def redirect_request(self, req, fp, code, msg, headers, newurl):
+    _check_url(urllib.parse.urljoin(req.full_url, newurl))
+    return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def safe_urlopen(url_or_request, data = None):
+  """urllib.request.urlopen の代わり。公開アドレス以外への接続を拒否する。"""
+  url = url_or_request if isinstance(url_or_request, str) else url_or_request.full_url
+  _check_url(url)
+  opener = urllib.request.build_opener(_SafeRedirectHandler)
+  return opener.open(url_or_request, data, timeout = DOWNLOAD_TIMEOUT)
+
 class Board:
 
   def __init__(self, fqdn, category, board_num):
+    error = check_params(fqdn, category, board_num)
+    if error is not None:
+      raise ValueError(error)
     self.fqdn = fqdn
     self.shitaraba = "jbbs.shitaraba.net" in fqdn
     self.category = category
@@ -63,8 +131,11 @@ class Board:
     return threads
 
   def download(self, url):
-    response = urllib.request.urlopen(url)
-    return response.read()
+    response = safe_urlopen(url)
+    data = response.read(MAX_DOWNLOAD_SIZE + 1)
+    if len(data) > MAX_DOWNLOAD_SIZE:
+      raise urllib.error.URLError("response too large")
+    return data
 
   def __parse_settings(self, string):
     config = configparser.ConfigParser()

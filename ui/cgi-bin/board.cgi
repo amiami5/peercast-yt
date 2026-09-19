@@ -9,10 +9,15 @@ import bbs_reader
 form = cgi.FieldStorage()
 
 if "fqdn" not in form or "category" not in form:
-  common.print_bad_request("bad parameter")
+  bbs_reader.print_bad_request("bad parameter")
   sys.exit()
 
 board_num = form["board_num"].value if "board_num" in form else ""
+
+error = bbs_reader.check_params(form["fqdn"].value, form["category"].value, board_num)
+if error is not None:
+  bbs_reader.print_bad_request(error)
+  sys.exit()
 
 board = bbs_reader.Board(form["fqdn"].value, form["category"].value, board_num)
 settings = board.settings()

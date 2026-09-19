@@ -24,7 +24,7 @@ def post_message_nichan(fqdn, category, thread_id, name, mail, body):
   headers = {'Referer':referer}
   request = urllib.request.Request(url, data, headers)
   try:
-    with urllib.request.urlopen(request) as response:
+    with bbs_reader.safe_urlopen(request) as response:
       if response.getcode() == 200:
         return {'status':'ok'}
       else:
@@ -47,7 +47,7 @@ def post_message_shitaraba(fqdn, category, board_num, thread_id, name, mail, bod
   data = urllib.parse.urlencode(form_data).encode('ascii')
   headers = {'Referer':referer}
   request = urllib.request.Request(url, data, headers)
-  response = urllib.request.urlopen(request)
+  response = bbs_reader.safe_urlopen(request)
 
   if response.getcode() == 200:
     return {'status':'ok'}
@@ -66,6 +66,11 @@ name = form['name'].value if 'name' in form else ""
 mail = form['mail'].value if 'mail' in form else ""
 
 board_num = form["board_num"].value if "board_num" in form else ""
+
+error = bbs_reader.check_params(form["fqdn"].value, form["category"].value, board_num, form["id"].value)
+if error is not None:
+  bbs_reader.print_bad_request(error)
+  sys.exit()
 
 if 'shitaraba' in form['fqdn'].value:
   result = post_message_shitaraba(form['fqdn'].value,

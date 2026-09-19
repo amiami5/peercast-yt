@@ -19,6 +19,11 @@ else:
 
 board_num = form["board_num"].value if "board_num" in form else ""
 
+error = bbs_reader.check_params(form["fqdn"].value, form["category"].value, board_num, form["id"].value)
+if error is not None:
+  bbs_reader.print_bad_request(error)
+  sys.exit()
+
 board = bbs_reader.Board(form["fqdn"].value, form["category"].value, board_num)
 thread = board.thread(form["id"].value)
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import cgi, os, subprocess, sys
+import cgi, os, re, subprocess, sys
 
 if __name__ == "__main__":
   form = cgi.FieldStorage()
@@ -13,10 +13,28 @@ if __name__ == "__main__":
   id = form["id"].value
   preset = form["preset"].value
   audio_codec = form["audio_codec"].value
-  server_name = os.getenv("SERVER_NAME")
-  server_port = os.getenv("SERVER_PORT")
-  r = int(form["bitrate"].value) # チャンネルのビットレートを映像ビットレートとする。
-  if r == 0:
+  server_port = os.getenv("SERVER_PORT", "")
+
+  # このスクリプトは認証なしで (LAN 内から) 呼べるので、値を厳密に検証する。
+  # id は 32 桁の 16 進数 (チャンネル ID)、preset と audio_codec は英数字と
+  # '_' だけ。
+  if (not re.fullmatch(r"[0-9A-Fa-f]{32}", id) or
+      not re.fullmatch(r"[A-Za-z0-9_]{1,32}", preset) or
+      not re.fullmatch(r"[A-Za-z0-9_]{1,32}", audio_codec) or
+      not re.fullmatch(r"[0-9]{1,5}", server_port)):
+    print("Status: 400 Bad Request\n")
+    sys.exit()
+
+  # PeerCast 自身へは常にループバックで接続する。Host ヘッダー由来の
+  # SERVER_NAME を使うと、任意のホストから ffmpeg に取得させることができて
+  # しまう (SSRF)。ffmpeg はこのスクリプトと同じマシンで動いている。
+  server_name = "127.0.0.1"
+
+  try:
+    r = int(form["bitrate"].value) # チャンネルのビットレートを映像ビットレートとする。
+  except (KeyError, ValueError):
+    r = 0
+  if r <= 0 or r > 100000:
     # 正常なビットレートが渡されなかった場合は 500Kbps にする。
     r = 500
 
