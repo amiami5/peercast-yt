@@ -538,3 +538,33 @@ TEST_F(ServMgrFixture, procConnectArgs_tip)
     delete mock;
     chanMgr = tmp;
 }
+
+TEST_F(ServMgrFixture, isValidHtmlPath)
+{
+    // 正規の言語ディレクトリ
+    ASSERT_TRUE(ServMgr::isValidHtmlPath("html/en"));
+    ASSERT_TRUE(ServMgr::isValidHtmlPath("html/ja"));
+    ASSERT_TRUE(ServMgr::isValidHtmlPath("html/zh-TW"));
+    ASSERT_TRUE(ServMgr::isValidHtmlPath("html/pt_BR"));
+
+    // 空、プレフィックス違い
+    ASSERT_FALSE(ServMgr::isValidHtmlPath(""));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/"));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("en"));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("/html/en"));
+
+    // パストラバーサル
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/.."));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/../.."));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/en/../../etc"));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/en/sub"));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/en\\sub"));
+
+    // 改行 (HTTP レスポンススプリッティング)
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/en\r\nX-Injected: yes"));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/en\n"));
+
+    // 長すぎる名前
+    ASSERT_TRUE(ServMgr::isValidHtmlPath("html/" + std::string(64, 'a')));
+    ASSERT_FALSE(ServMgr::isValidHtmlPath("html/" + std::string(65, 'a')));
+}

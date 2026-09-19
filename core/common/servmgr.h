@@ -157,6 +157,10 @@ public:
 
     Servent             *findConnection(Servent::TYPE, const GnuID &);
 
+    // htmlPath として許容できる値かどうかを返す。"html/" に続く名前は
+    // 英数字・'-'・'_' のみ（'..' や '/'、改行を含められない）。
+    static bool         isValidHtmlPath(const std::string& path);
+
     static THREAD_PROC  serverProc(ThreadInfo *);
     static THREAD_PROC  idleProc(ThreadInfo *);
 

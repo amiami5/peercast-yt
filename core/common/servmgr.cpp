@@ -38,6 +38,28 @@
 #include "cgi.h"
 
 // -----------------------------------
+// -----------------------------------
+bool ServMgr::isValidHtmlPath(const std::string& path)
+{
+    static const std::string prefix = "html/";
+
+    if (path.compare(0, prefix.size(), prefix) != 0)
+        return false;
+
+    const size_t nameLen = path.size() - prefix.size();
+    if (nameLen == 0 || nameLen > 64)
+        return false;
+
+    for (size_t i = prefix.size(); i < path.size(); i++) {
+        const char c = path[i];
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!ok)
+            return false;
+    }
+    return true;
+}
+
 ServMgr::ServMgr()
     : serverIPAddresses({IP::parse("127.0.0.1"), IP::parse("::1")})
     , relayBroadcast(30) // オリジナルでは未初期化。
@@ -1358,7 +1380,12 @@ void ServMgr::loadSettings(const char *fn)
             {
                 chanMgr->broadcastID.fromStr(iniFile.getStrValue());
             }else if (iniFile.isName("htmlPath"))
-                Sys::strcpy_truncate(this->htmlPath, sizeof(this->htmlPath), iniFile.getStrValue());
+            {
+                if (isValidHtmlPath(iniFile.getStrValue()))
+                    Sys::strcpy_truncate(this->htmlPath, sizeof(this->htmlPath), iniFile.getStrValue());
+                else
+                    LOG_WARN("Ignoring invalid htmlPath in ini file");
+            }
             else if (iniFile.isName("maxControlConnections"))
             {
                 this->maxControl = iniFile.getIntValue();

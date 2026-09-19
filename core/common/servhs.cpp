@@ -1202,6 +1202,11 @@ void Servent::CMD_chooseLanguage(const char* cmd, HTTP& http, String& jumpStr)
             std::lock_guard<std::recursive_mutex> cs(servMgr->lock);
 
             auto newHtmlPath = "html/" + query.get(key);
+            if (!ServMgr::isValidHtmlPath(newHtmlPath)) {
+                LOG_WARN("CMD_chooseLanguage: invalid htmlPath");
+                http.send(HTTPResponse::badRequest());
+                return;
+            }
             auto vec = Regexp("html/[^/]+").exec(referer);
             if (vec.size())
             {
@@ -1283,8 +1288,11 @@ void Servent::CMD_apply(const char* cmd, HTTP& http, String& jumpStr)
             servMgr->forceIP = arg;
         else if (strcmp(curr, "htmlPath") == 0)
         {
-            Sys::strcpy_truncate(servMgr->htmlPath, sizeof(servMgr->htmlPath),
-                                 (std::string("html/") + arg).c_str());
+            const std::string newPath = std::string("html/") + arg;
+            if (ServMgr::isValidHtmlPath(newPath))
+                Sys::strcpy_truncate(servMgr->htmlPath, sizeof(servMgr->htmlPath), newPath.c_str());
+            else
+                LOG_WARN("Ignoring invalid htmlPath");
         }else if (strcmp(curr, "djmsg") == 0)
         {
             chanMgr->setBroadcastMsg(cgi::unescape(arg).c_str());
