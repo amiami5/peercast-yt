@@ -1725,9 +1725,9 @@ void Servent::CMD_login(const char* cmd, HTTP& http, String& jumpStr)
 
     http.writeLine(HTTP_SC_FOUND);
     if (servMgr->cookieList.neverExpire)
-        http.writeLineF("%s %d_id=%s; path=/; expires=\"Mon, 01-Jan-3000 00:00:00 GMT\"", HTTP_HS_SETCOOKIE, (int) servMgr->serverHost.port, idstr);
+        http.writeLineF("%s %d_id=%s; path=/; expires=\"Mon, 01-Jan-3000 00:00:00 GMT\"; SameSite=Lax", HTTP_HS_SETCOOKIE, (int) servMgr->serverHost.port, idstr);
     else
-        http.writeLineF("%s %d_id=%s; path=/", HTTP_HS_SETCOOKIE, (int) servMgr->serverHost.port, idstr);
+        http.writeLineF("%s %d_id=%s; path=/; SameSite=Lax", HTTP_HS_SETCOOKIE, (int) servMgr->serverHost.port, idstr);
 
     if (cgi::isSafeLocalPath(query.get("requested_path")))
         http.writeLineF("Location: %s", query.get("requested_path").c_str());
