@@ -128,8 +128,21 @@ public:
         return id;
     }
 
+    // ネストした atom を最大 maxDepth 段まで読み飛ばす。段数の上限が
+    // ないと、深くネストした atom (親 atom の子がまた親 atom …) を送り
+    // つけられて、再帰呼び出しでスタックを枯渇させられる (リモート DoS)。
+    static const int MAX_SKIP_DEPTH = 64;
+
     void skip(int c, int d)
     {
+        skip(c, d, 0);
+    }
+
+    void skip(int c, int d, int depth)
+    {
+        if (depth > MAX_SKIP_DEPTH)
+            throw StreamException("skip: atom nesting too deep");
+
         if (d)
             io.skip(d);
 
@@ -137,7 +150,7 @@ public:
         {
             int numc, data;
             read(numc, data);
-            skip(numc, data);
+            skip(numc, data, depth + 1);
         }
     }
 

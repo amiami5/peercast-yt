@@ -92,3 +92,41 @@ TEST_F(AtomStreamFixture, readAddress16)
     ASSERT_EQ(16, size);
     ASSERT_EQ(ip, a.readAddress());
 }
+
+TEST_F(AtomStreamFixture, skipDeeplyNestedThrows)
+{
+    // 深くネストした atom (親の子がまた親、を繰り返す) は、スタック
+    // 枯渇を防ぐため、上限を超えたら例外を投げて中断する。
+    StringStream s;
+    AtomStream writer(s);
+
+    const int depth = 1000;
+    for (int i = 0; i < depth; i++)
+        writer.writeParent(ID4("test"), 1);
+    // 一番内側は子を持たない (末端) atom。
+    writer.writeInt(ID4("leaf"), 42);
+
+    s.rewind();
+    AtomStream reader(s);
+    int c, d;
+    reader.read(c, d);
+    ASSERT_THROW(reader.skip(c, d), StreamException);
+}
+
+TEST_F(AtomStreamFixture, skipShallowNestingWorks)
+{
+    // 通常の深さのネストは、これまでどおりスキップできる。
+    StringStream s;
+    AtomStream writer(s);
+
+    writer.writeParent(ID4("test"), 1);
+    writer.writeParent(ID4("test"), 1);
+    writer.writeInt(ID4("leaf"), 42);
+
+    s.rewind();
+    AtomStream reader(s);
+    int c, d;
+    reader.read(c, d);
+    ASSERT_NO_THROW(reader.skip(c, d));
+    ASSERT_TRUE(reader.eof());
+}
