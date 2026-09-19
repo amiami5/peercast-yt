@@ -1283,8 +1283,8 @@ void Servent::CMD_apply(const char* cmd, HTTP& http, String& jumpStr)
             servMgr->forceIP = arg;
         else if (strcmp(curr, "htmlPath") == 0)
         {
-            strcpy(servMgr->htmlPath, "html/");
-            strcat(servMgr->htmlPath, arg);
+            Sys::strcpy_truncate(servMgr->htmlPath, sizeof(servMgr->htmlPath),
+                                 (std::string("html/") + arg).c_str());
         }else if (strcmp(curr, "djmsg") == 0)
         {
             chanMgr->setBroadcastMsg(cgi::unescape(arg).c_str());
