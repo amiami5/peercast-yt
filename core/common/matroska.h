@@ -106,6 +106,20 @@ public:
         return VInt(bytes);
     }
 
+    // 要素のサイズとして妥当な範囲 (int に安全に収まり、Stream::read /
+    // Stream::skip に渡せる) かどうかを確認して返す。MKV の VInt は最大
+    // 8 バイト (約 72 ペタバイト) を表現できるが、int にキャストすると
+    // 符号が反転して負の長さになり、Stream::read/skip がクラッシュする。
+    uint64_t checkedUint()
+    {
+        uint64_t v = uint();
+        if (v > MAX_SIZE)
+            throw std::runtime_error("MKV: element size too large");
+        return v;
+    }
+
+    static const uint64_t MAX_SIZE = 256 * 1024 * 1024; // 256 MiB
+
     std::string toName()
     {
         auto it = ID_TO_NAME.find(bytes);

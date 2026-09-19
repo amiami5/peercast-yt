@@ -22,6 +22,9 @@ void  StringStream::checkSize(size_t size)
 
 int  StringStream::read(void *buf, int count)
 {
+    if (count < 0)
+        throw StreamException("StringStream::read: negative count");
+
     if (m_pos == m_buffer.size())
         throw StreamException("End of stream");
 

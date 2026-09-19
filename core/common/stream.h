@@ -409,6 +409,9 @@ public:
 
     int read(void *p, int l) override
     {
+        if (l < 0)
+            throw StreamException("MemoryStream::read: negative length");
+
         if (pos+l <= len)
         {
             memcpy(p, &buf[pos], l);
@@ -423,7 +426,7 @@ public:
 
     void write(const void *p, int l) override
     {
-        if ((pos+l) > len)
+        if (l < 0 || (pos+l) > len)
             throw StreamException("Stream - premature end of write()");
         memcpy(&buf[pos], p, l);
         pos += l;

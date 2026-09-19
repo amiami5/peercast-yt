@@ -51,7 +51,7 @@ bool MKVStream::hasKeyFrame(const byte_string& cluster)
     {
         VInt id   = VInt::read(in);
         VInt size = VInt::read(in);
-        std::string blockData = static_cast<Stream*>(&in)->read((int) size.uint());
+        std::string blockData = static_cast<Stream*>(&in)->read((int) size.checkedUint());
 
         if (id.toName() == "SimpleBlock")
         {
@@ -149,7 +149,7 @@ void MKVStream::sendCluster(const byte_string& cluster, std::shared_ptr<Channel>
             buffer.clear();
         }
 
-        std::string payload = in.Stream::read((int) size.uint());
+        std::string payload = in.Stream::read((int) size.checkedUint());
 
         if (id.toName() == "Timecode")
         {
@@ -201,7 +201,7 @@ void MKVStream::readTracks(const std::string& data)
 
         if (id.toName() == "TrackEntry")
         {
-            int end = mem.getPosition() + size.uint();
+            int end = mem.getPosition() + (int) size.checkedUint();
             int trackno = -1;
             int tracktype = -1;
 
@@ -215,7 +215,7 @@ void MKVStream::readTracks(const std::string& data)
                 else if (id.toName() == "TrackType")
                     tracktype = (uint8_t) mem.readChar();
                 else
-                    mem.skip(size.uint());
+                    mem.skip((int) size.checkedUint());
             }
 
             if (tracktype == 1)
@@ -225,7 +225,7 @@ void MKVStream::readTracks(const std::string& data)
             }
         }else
         {
-            mem.skip(size.uint());
+            mem.skip((int) size.checkedUint());
         }
     }
 }
@@ -248,10 +248,10 @@ void MKVStream::readInfo(const std::string& data)
             LOG_TRACE("readInfo: Got %s 0x%lX with size=%d at pos %d",
                       id.toName().c_str(),
                       (unsigned long int) id.uint(),
-                      (int) size.uint(),
+                      (int) size.checkedUint(),
                       pos);
 
-            auto data = in.Stream::read((int) size.uint());
+            auto data = in.Stream::read((int) size.checkedUint());
 
             if (id.toName() == "TimecodeScale")
             {
@@ -283,7 +283,7 @@ void MKVStream::readHeader(Stream &in, std::shared_ptr<Channel> ch)
             {
                 // Segment 以外のレベル 0 要素は単にヘッドパケットに追加す
                 // る
-                auto data = in.read((int) size.uint());
+                auto data = in.read((int) size.checkedUint());
                 header.append(data.begin(), data.end());
             }else
             {
@@ -300,7 +300,7 @@ void MKVStream::readHeader(Stream &in, std::shared_ptr<Channel> ch)
                         header += id.bytes;
                         header += size.bytes;
 
-                        auto data = in.read((int) size.uint());
+                        auto data = in.read((int) size.checkedUint());
 
                         if (id.toName() == "Tracks")
                             readTracks(data);
@@ -320,7 +320,7 @@ void MKVStream::readHeader(Stream &in, std::shared_ptr<Channel> ch)
                         // スターを送信
 
                         byte_string cluster = id.bytes + size.bytes;
-                        auto data = in.read((int) size.uint());
+                        auto data = in.read((int) size.checkedUint());
                         cluster.append(data.begin(), data.end());
                         sendCluster(cluster, ch);
                         return;
@@ -361,7 +361,7 @@ int MKVStream::readPacket(Stream &in, std::shared_ptr<Channel> ch)
         }
 
         byte_string cluster = id.bytes + size.bytes;
-        auto data = in.read((int) size.uint());
+        auto data = in.read((int) size.checkedUint());
         cluster.append(data.begin(), data.end());
         sendCluster(cluster, ch);
 

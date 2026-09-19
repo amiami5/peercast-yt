@@ -248,6 +248,10 @@ int Stream::writeUTF8(unsigned int code)
 // -------------------------------------
 void Stream::skip(int len)
 {
+    // 負の長さは read(tmp, 負数) を呼んでバッファをはみ出す原因になる。
+    if (len < 0)
+        throw StreamException("Stream::skip: negative length");
+
     char tmp[4096];
     while (len)
     {

@@ -3,6 +3,7 @@
 #include "channel.h"
 #include "flv.h"
 #include "mp4.h"
+#include "mkv.h"
 #include "sstream.h"
 #include "amf0.h"
 
@@ -76,5 +77,62 @@ TEST(MediaParserSecurity, mp4BoxSizeHuge)
     StringStream in(be32(0xfffffff0u) + "ftyp" + std::string(64, '\0'));
     auto ch = std::make_shared<Channel>();
     MP4Stream stream;
+    ASSERT_THROW(stream.readHeader(in, ch), StreamException);
+}
+
+TEST(MediaParserSecurity, negativeLengthSkipAndReadThrow)
+{
+    // Stream::skip / read に負の長さを渡すと、以前は StringStream で
+    // スタックバッファ (4096 バイト) をはみ出してクラッシュした。
+    StringStream s(std::string(100000, 'A'));
+    char buf[3];
+    s.read(buf, 3);
+    ASSERT_THROW(s.skip((int) 0xFFFFFFF0u), StreamException);
+    ASSERT_THROW(s.read(buf, -1), StreamException);
+
+    std::string data(16, 'B');
+    MemoryStream m(&data[0], data.size());
+    ASSERT_THROW(m.read(buf, -1), StreamException);
+    ASSERT_THROW(m.write(buf, -1), StreamException);
+}
+
+TEST(MediaParserSecurity, mkvHugeElementSizeRejected)
+{
+    // Tracks 要素の TrackEntry の中に、サイズが 0xFFFFFFF0 (int にすると負) の
+    // 未知の子要素がある MKV ヘッダー。以前は readTracks() の skip() が
+    // スタックバッファをはみ出してクラッシュした。
+    std::string trackEntry;
+    trackEntry += std::string("\x86", 1);                                  // CodecID
+    trackEntry += std::string("\x01\x00\x00\x00\xff\xff\xff\xf0", 8);   // サイズ 0xFFFFFFF0
+    trackEntry += std::string(6, 'A');
+
+    std::string tracksBody;
+    tracksBody += std::string("\xae", 1);                                  // TrackEntry
+    tracksBody += std::string(1, (char)(0x80 | trackEntry.size()));
+    tracksBody += trackEntry;
+    // 後ろに 4096 バイトより大きい Void 要素を置く。負の skip() が
+    // 残りのデータをスタックの 4096 バイトのバッファにコピーしてしまう。
+    const int padding = 8000;
+    tracksBody += std::string("\xec", 1);                                  // Void
+    tracksBody += std::string(1, (char)(0x40 | (padding >> 8)));
+    tracksBody += std::string(1, (char)(padding & 0xff));
+    tracksBody += std::string(padding, 'A');
+
+    std::string tracks = std::string("\x16\x54\xae\x6b", 4) +
+                         std::string(1, (char)(0x40 | (tracksBody.size() >> 8))) +
+                         std::string(1, (char)(tracksBody.size() & 0xff)) + tracksBody;
+
+    // Segment: サイズは 8 バイトの VInt で表す
+    std::string segment = std::string("\x18\x53\x80\x67", 4) +
+                          std::string("\x01\x00\x00\x00\x00\x00", 6) +
+                          std::string(1, (char)(tracks.size() >> 8)) +
+                          std::string(1, (char)(tracks.size() & 0xff)) +
+                          tracks;
+
+    std::string ebml("\x1a\x45\xdf\xa3\x80", 5);
+
+    StringStream in(ebml + segment);
+    auto ch = std::make_shared<Channel>();
+    MKVStream stream;
     ASSERT_THROW(stream.readHeader(in, ch), StreamException);
 }
