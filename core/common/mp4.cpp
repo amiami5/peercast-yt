@@ -28,19 +28,30 @@
 //                           timestamp % 1000);
 // }
 
+static const size_t MAX_BOX_SIZE = 64 * 1024 * 1024;
+
 static std::shared_ptr<MP4Box> readBox(Stream &in)
 {
     LOG_DEBUG("readBox");
     uint8_t s[4];
     in.read(s, 4);
-    size_t size = s[0] << 24 | s[1] << 16 | s[2] << 8 | s[3];
+    size_t size = (size_t) s[0] << 24 | s[1] << 16 | s[2] << 8 | s[3];
     LOG_DEBUG("size: %d", (int) size);
-    uint8_t *data = new uint8_t[size];
-    memcpy(data, s, 4);
-    in.read(data + 4, size - 4);
+
+    // ボックスヘッダー (サイズ 4 バイト + 種別 4 バイト) より小さいと、
+    // 4 バイトの memcpy や type() でバッファをはみ出す。また、巨大な値では
+    // メモリを使い果たす。
+    if (size < 8)
+        throw StreamException("MP4: invalid box size");
+    if (size > MAX_BOX_SIZE)
+        throw StreamException("MP4: box too large");
+
+    // in.read() が例外を投げてもリークしないように unique_ptr で持つ。
+    std::unique_ptr<uint8_t[]> data(new uint8_t[size]);
+    memcpy(data.get(), s, 4);
+    in.read(data.get() + 4, size - 4);
     auto box = std::make_shared<MP4Box>();
-    box->data(data); // move
-    data = nullptr;
+    box->data(data.release()); // move
     LOG_TRACE("Box type %s", box->type().c_str());
     LOG_DEBUG("readBox End");
     return box;

@@ -152,6 +152,11 @@ int FLVStream::readPacket(Stream &in, std::shared_ptr<Channel> ch)
         if (metaData.type == FLVTag::T_SCRIPT) len += metaData.packetSize;
         if (avcHeader.type == FLVTag::T_VIDEO) len += avcHeader.packetSize;
         if (aacHeader.type == FLVTag::T_AUDIO) len += aacHeader.packetSize;
+
+        // headPack.data の容量を超えるとバッファオーバーフローになる。
+        if (len > ChanPacket::MAX_DATALEN)
+            throw StreamException("head packet too large");
+
         MemoryStream mem(ch->headPack.data, len);
         mem.write(fileHeader.data, fileHeader.size);
         if (metaData.type == FLVTag::T_SCRIPT) mem.write(metaData.packet, metaData.packetSize);

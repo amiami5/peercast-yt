@@ -129,8 +129,9 @@ void OggSubStream::readHeader(std::shared_ptr<Channel> ch, OggPage &ogg)
     if ((pack.bodyLen + ogg.bodyLen) >= OggPacket::MAX_BODYLEN)
         throw StreamException("OGG packet too big");
 
-    if (ch->headPack.len+(ogg.bodyLen+ogg.headLen) >= ChanMeta::MAX_DATALEN)
-        throw StreamException("OGG packet too big for headMeta");
+    // コピー先は ch->headPack.data (ChanPacket::MAX_DATALEN バイト)。
+    if (ch->headPack.len+(ogg.bodyLen+ogg.headLen) >= ChanPacket::MAX_DATALEN)
+        throw StreamException("OGG packet too big for headPack");
 
 // copy complete packet into head packet
     memcpy(&ch->headPack.data[ch->headPack.len], ogg.data, ogg.headLen+ogg.bodyLen);
