@@ -411,3 +411,33 @@ TEST(amf0Deserializer, moderateNestingStillWorks)
     ASSERT_TRUE(v.at("a").isObject());
     ASSERT_TRUE(v.at("a").at("b").isObject());
 }
+
+// 注意: Deserializer::readInt32() は 4 回の readChar() を 1 つの式に書いて
+// おり、評価順序が処理系依存。ここでは長さのバイト列を回文にして
+// (00 10 10 00 など)、どちらの順序で読まれても同じ値になるようにしている。
+
+TEST(amf0Deserializer, valueCountLimit)
+{
+    // 厳密配列 (0x0a) に AMF_NULL (0x05) を大量に並べる。1 バイトが 1 個の
+    // Value になるので、上限がないと入力の百倍以上のメモリを使う。
+    // 長さ = 0x00101000 (1052672) > MAX_VALUES。
+    std::string data("\x0a\x00\x10\x10\x00", 5);
+    data += std::string(Deserializer::MAX_VALUES + 10, '\x05');
+
+    StringStream s(data);
+    Deserializer d;
+    ASSERT_THROW(d.readValue(s), std::runtime_error);
+}
+
+TEST(amf0Deserializer, valueCountWithinLimitWorks)
+{
+    // 上限以内ならこれまでどおり読める。長さ = 0x00010100 (65792) < MAX_VALUES。
+    std::string data("\x0a\x00\x01\x01\x00", 5);
+    data += std::string(65792, '\x05');
+
+    StringStream s(data);
+    Deserializer d;
+    Value v = d.readValue(s);
+    ASSERT_TRUE(v.isStrictArray());
+    ASSERT_EQ(65792u, v.strictArray().size());
+}

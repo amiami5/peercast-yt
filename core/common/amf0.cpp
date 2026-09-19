@@ -41,15 +41,17 @@ double Deserializer::readDouble(Stream &in)
 
 std::vector<KeyValuePair> Deserializer::readObject(Stream &in)
 {
-    return readObject(in, 0);
+    int budget = MAX_VALUES;
+    return readObject(in, 0, budget);
 }
 
 Value Deserializer::readValue(Stream &in)
 {
-    return readValue(in, 0);
+    int budget = MAX_VALUES;
+    return readValue(in, 0, budget);
 }
 
-std::vector<KeyValuePair> Deserializer::readObject(Stream &in, int depth)
+std::vector<KeyValuePair> Deserializer::readObject(Stream &in, int depth, int& budget)
 {
     std::vector<KeyValuePair> list;
     while (true)
@@ -58,16 +60,19 @@ std::vector<KeyValuePair> Deserializer::readObject(Stream &in, int depth)
         if (key == "")
             break;
 
-        list.push_back({key, readValue(in, depth + 1)});
+        list.push_back({key, readValue(in, depth + 1, budget)});
     }
     in.readChar(); // OBJECT_END
     return list;
 }
 
-Value Deserializer::readValue(Stream &in, int depth)
+Value Deserializer::readValue(Stream &in, int depth, int& budget)
 {
     if (depth > MAX_DEPTH)
         throw std::runtime_error("AMF0: nesting too deep");
+
+    if (--budget < 0)
+        throw std::runtime_error("AMF0: too many values");
 
     char type = in.readChar();
 
@@ -83,7 +88,7 @@ Value Deserializer::readValue(Stream &in, int depth)
     }
     case AMF_OBJECT:
     {
-        return Value::object(readObject(in, depth));
+        return Value::object(readObject(in, depth, budget));
     }
     case AMF_BOOL:
     {
@@ -92,14 +97,14 @@ Value Deserializer::readValue(Stream &in, int depth)
     case AMF_ARRAY:
     {
         readInt32(in); // length
-        return Value::array(readObject(in, depth));
+        return Value::array(readObject(in, depth, budget));
     }
     case AMF_STRICTARRAY:
     {
         int len = readInt32(in);
         std::vector<Value> list;
         for (int i = 0; i < len; i++) {
-            list.push_back(readValue(in, depth + 1));
+            list.push_back(readValue(in, depth + 1, budget));
         }
         return Value::strictArray(list);
     }

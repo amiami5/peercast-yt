@@ -20,6 +20,8 @@ namespace rtmpserver
         int max_incoming_chunk_size;
         int max_outgoing_chunk_size;
 
+        static const int MAX_CONTROL_MESSAGE_LENGTH = 1024 * 1024;
+
         bool quitting;
 
         Session(std::shared_ptr<ClientSocket> aClient, FLVWriter& aFlvWriter)
@@ -133,6 +135,13 @@ namespace rtmpserver
                 }
 
                 Message& message = cstreams[cs_id];
+
+                // 音声・映像以外 (コマンド、メタデータ、制御メッセージ) は小さい
+                // はずなので、大きなものは拒否してメモリ消費を抑える。
+                if (message.type_id != 0x08 && message.type_id != 0x09 &&
+                    message.length > MAX_CONTROL_MESSAGE_LENGTH)
+                    throw std::runtime_error("message too large");
+
                 int chunk_size = std::min(message.remaining(),
                                           max_incoming_chunk_size);
                 message.add_data(client->Stream::read(chunk_size));

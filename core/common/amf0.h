@@ -354,9 +354,15 @@ namespace amf0
         // std::runtime_error を投げる (スタック枯渇の防止)。
         static const int MAX_DEPTH = 32;
 
+        // 1 回の readValue() で読める値 (数値、文字列、オブジェクト、配列の
+        // 要素など) の総数の上限。超えると std::runtime_error を投げる。
+        // 1 バイトで 1 個の値 (AMF_NULL の厳密配列など) を作れるため、上限が
+        // ないと入力サイズの百倍以上のメモリを消費させられる。
+        static const int MAX_VALUES = 100000;
+
     private:
-        std::vector<KeyValuePair> readObject(Stream &in, int depth);
-        Value readValue(Stream &in, int depth);
+        std::vector<KeyValuePair> readObject(Stream &in, int depth, int& budget);
+        Value readValue(Stream &in, int depth, int& budget);
     };
 
     std::string format(const amf0::Value& value, int allowance = 80, int indent = 0);
