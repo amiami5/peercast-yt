@@ -576,6 +576,21 @@ std::string unescape_html(const std::string& input)
     return res;
 }
 
+bool isSafeLocalPath(const std::string& path)
+{
+    if (path.empty() || path[0] != '/')
+        return false;
+
+    if (path.size() >= 2 && (path[1] == '/' || path[1] == '\\'))
+        return false;
+
+    for (unsigned char c : path)
+        if (c < 0x20 || c == 0x7f)
+            return false;
+
+    return true;
+}
+
 std::string escape_html(const std::string& input)
 {
     std::string dest;

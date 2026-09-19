@@ -135,3 +135,22 @@ TEST_F(cgiFixture, unescape_javascript)
     ASSERT_STREQ("あ", escape_javascript("あ").c_str());
     ASSERT_STREQ("\\x0D\\x0A", escape_javascript("\r\n").c_str());
 }
+
+TEST(cgiIsSafeLocalPath, accepts)
+{
+    ASSERT_TRUE(isSafeLocalPath("/"));
+    ASSERT_TRUE(isSafeLocalPath("/html/en/index.html"));
+    ASSERT_TRUE(isSafeLocalPath("/html/en/play.html?id=0123456789ABCDEF&x=%20y"));
+}
+
+TEST(cgiIsSafeLocalPath, rejects)
+{
+    ASSERT_FALSE(isSafeLocalPath(""));
+    ASSERT_FALSE(isSafeLocalPath("html/en/index.html"));
+    ASSERT_FALSE(isSafeLocalPath("http://example.com/"));
+    ASSERT_FALSE(isSafeLocalPath("//example.com/"));
+    ASSERT_FALSE(isSafeLocalPath("/\\example.com/"));
+    ASSERT_FALSE(isSafeLocalPath("/ok\r\nX-Injected: yes"));
+    ASSERT_FALSE(isSafeLocalPath("/ok\n"));
+    ASSERT_FALSE(isSafeLocalPath(std::string("/ok\0x", 5)));
+}

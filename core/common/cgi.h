@@ -16,6 +16,11 @@ std::string unescape_html(const std::string& input);
 std::string escape_html(const std::string& input);
 std::string escape_javascript(const std::string& input);
 
+// Location ヘッダーに書いてよいサイト内パスかどうかを返す。"/" で始まり、
+// "//" や "/\\" で始まらず (別ホストへのリダイレクトになる)、制御文字
+// (CR/LF を含む) を含まないもの。
+bool isSafeLocalPath(const std::string& path);
+
 class Query
 {
 public:

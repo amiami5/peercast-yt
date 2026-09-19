@@ -1710,7 +1710,7 @@ void Servent::CMD_login(const char* cmd, HTTP& http, String& jumpStr)
     else
         http.writeLineF("%s %d_id=%s; path=/", HTTP_HS_SETCOOKIE, (int) servMgr->serverHost.port, idstr);
 
-    if (query.get("requested_path") != "")
+    if (cgi::isSafeLocalPath(query.get("requested_path")))
         http.writeLineF("Location: %s", query.get("requested_path").c_str());
     else
         http.writeLineF("Location: /%s/index.html", servMgr->htmlPath);
