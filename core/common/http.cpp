@@ -159,6 +159,55 @@ void HTTP::getAuthUserPass(char *user, char *pass, size_t ulen, size_t plen)
 }
 
 //-----------------------------------------
+bool HTTP::isCrossOriginRequest(const std::string& secFetchSite,
+                                const std::string& origin,
+                                const std::string& host)
+{
+    if (!secFetchSite.empty()) {
+        const auto site = str::downcase(secFetchSite);
+        return site != "same-origin" && site != "none";
+    }
+
+    if (origin.empty())
+        return false;
+
+    // "null" など、scheme://host 形式でないものは拒否。
+    const auto pos = origin.find("://");
+    if (pos == std::string::npos)
+        return true;
+
+    return str::downcase(origin.substr(pos + 3)) != str::downcase(host);
+}
+
+//-----------------------------------------
+bool HTTP::isLoopbackHostHeader(const std::string& host)
+{
+    if (host.empty())
+        return true;
+
+    // IPv6 リテラル: "[::1]" または "[::1]:7144"
+    if (host[0] == '[')
+        return host.find(']') != std::string::npos;
+
+    const auto name = str::downcase(host.substr(0, host.find(':')));
+
+    if (name == "localhost")
+        return true;
+
+    // IPv4 リテラル (数字とドットのみ、ドットが3つ)
+    if (name.empty())
+        return false;
+    int dots = 0;
+    for (char c : name) {
+        if (c == '.')
+            dots++;
+        else if (c < '0' || c > '9')
+            return false;
+    }
+    return dots == 3;
+}
+
+//-----------------------------------------
 void HTTP::parseAuthorizationHeader(const char* arg, char* user, char* pass, size_t ulen, size_t plen)
 {
     if (arg)

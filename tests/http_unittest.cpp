@@ -222,3 +222,75 @@ TEST_F(HTTPFixture, send_streamBody)
     ASSERT_TRUE(str::contains(output, "200 OK"));
     ASSERT_TRUE(str::has_suffix(output, "fuga"));
 }
+
+TEST(HTTPCrossOrigin, secFetchSite)
+{
+    // ブラウザ由来: Sec-Fetch-Site があればそれだけで判断
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("same-origin", "", "127.0.0.1:7144"));
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("none", "", "127.0.0.1:7144"));
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("cross-site", "", "127.0.0.1:7144"));
+    // 別ポートの localhost は same-site だが別オリジン
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("same-site", "", "127.0.0.1:7144"));
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("unknown-value", "", "127.0.0.1:7144"));
+    // Sec-Fetch-Site が優先される (リバースプロキシで Host が書き換えられる場合)
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("same-origin", "https://example.com", "127.0.0.1:7144"));
+}
+
+TEST(HTTPCrossOrigin, originFallback)
+{
+    // Sec-Fetch-Site も Origin も無い (curl, スクリプト等) は許可
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("", "", "127.0.0.1:7144"));
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("", "", ""));
+    // Origin が Host と一致
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("", "http://127.0.0.1:7144", "127.0.0.1:7144"));
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("", "http://LocalHost:7144", "localhost:7144"));
+    // 不一致
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("", "http://evil.example", "127.0.0.1:7144"));
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("", "http://127.0.0.1:8080", "127.0.0.1:7144"));
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("", "null", "127.0.0.1:7144"));
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("", "http://127.0.0.1:7144", ""));
+}
+
+TEST(HTTPLoopbackHost, accepts)
+{
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader(""));
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader("localhost"));
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader("localhost:7144"));
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader("LOCALHOST:7144"));
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader("127.0.0.1"));
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader("127.0.0.1:7144"));
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader("192.168.1.10:7144"));
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader("[::1]"));
+    ASSERT_TRUE(HTTP::isLoopbackHostHeader("[::1]:7144"));
+}
+
+TEST(HTTPLoopbackHost, rejectsDomainNames)
+{
+    // DNS リバインディングで使われるドメイン名
+    ASSERT_FALSE(HTTP::isLoopbackHostHeader("evil.example"));
+    ASSERT_FALSE(HTTP::isLoopbackHostHeader("evil.example:7144"));
+    ASSERT_FALSE(HTTP::isLoopbackHostHeader("127.0.0.1.evil.example:7144"));
+    ASSERT_FALSE(HTTP::isLoopbackHostHeader("localhost.evil.example"));
+    ASSERT_FALSE(HTTP::isLoopbackHostHeader("mypc.local:7144"));
+    ASSERT_FALSE(HTTP::isLoopbackHostHeader(":7144"));
+    ASSERT_FALSE(HTTP::isLoopbackHostHeader("1.2.3"));
+}
+
+TEST(HTTPCrossOrigin, remoteAccess)
+{
+    // 別の機材 (ラズパイ、VPS など) で動かして LAN/インターネット越しに使う場合。
+    // Host は 127.0.0.1 ではなく LAN の IP やホスト名になる。
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("same-origin", "", "192.168.1.10:7144"));
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("same-origin", "", "pi.local:7144"));
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("same-origin", "", "peercast.example.com:7144"));
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("none", "", "192.168.1.10:7144"));
+
+    // Fetch Metadata の無い古いブラウザでも、Origin と Host が同じなら許可。
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("", "http://192.168.1.10:7144", "192.168.1.10:7144"));
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("", "http://pi.local:7144", "pi.local:7144"));
+    ASSERT_FALSE(HTTP::isCrossOriginRequest("", "https://peercast.example.com", "peercast.example.com"));
+
+    // 他のサイトからは、接続先がどこでも拒否。
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("cross-site", "", "192.168.1.10:7144"));
+    ASSERT_TRUE(HTTP::isCrossOriginRequest("", "http://evil.example", "192.168.1.10:7144"));
+}

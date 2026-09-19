@@ -490,7 +490,7 @@ void Servent::handshakeGET(HTTP &http)
             throw HTTPException(HTTP_SC_BADREQUEST, 400, "q missing");
         }else
         {
-            if (handshakeAuth(http, fn))
+            if (handshakeAuth(http, fn, true))
             {
                 this->type = T_COMMAND;
 
@@ -603,7 +603,7 @@ void Servent::handshakePOST(HTTP &http)
         if (!isAllowed(ALLOW_HTML))
             throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
 
-        if (handshakeAuth(http, args.c_str()))
+        if (handshakeAuth(http, args.c_str(), true))
             handshakeJRPC(http);
     }else if (path == "/")
     {
@@ -990,14 +990,33 @@ bool Servent::handshakeHTTPBasicAuth(HTTP &http)
 }
 
 // -----------------------------------
-bool Servent::handshakeAuth(HTTP &http, const char *args)
+bool Servent::handshakeAuth(HTTP &http, const char *args, bool rejectCrossOrigin)
 {
     std::string user, pass;
 
     http.readHeaders();
 
+    // 状態を変更する API (/admin, /cmd, /api/1) は、他のサイトのページからの
+    // リクエスト (CSRF) を受け付けない。
+    if (rejectCrossOrigin &&
+        HTTP::isCrossOriginRequest(http.headers.get("Sec-Fetch-Site"),
+                                   http.headers.get("Origin"),
+                                   http.headers.get("Host")))
+    {
+        LOG_WARN("Rejected cross-origin request");
+        throw HTTPException(HTTP_SC_FORBIDDEN, 403);
+    }
+
     if (sock->host.isLocalhost())
-        return true;
+    {
+        // Host が localhost や IP リテラルでない場合は DNS リバインディング
+        // の可能性があるので、localhost であることによる認証免除はしない。
+        if (HTTP::isLoopbackHostHeader(http.headers.get("Host")))
+            return true;
+
+        LOG_WARN("Host header is not a loopback name; not trusting localhost: %s",
+                 http.headers.get("Host").c_str());
+    }
 
     cgi::Query query(args);
     if (strlen(servMgr->password) && query.get("pass") == servMgr->password)
@@ -2083,7 +2102,7 @@ void Servent::handshakeCMD(HTTP& http, const std::string& query)
 {
     String jumpStr;
 
-    if (!handshakeAuth(http, query.c_str()))
+    if (!handshakeAuth(http, query.c_str(), true))
         return;
 
     std::string cmd = cgi::Query(query).get("cmd");

@@ -184,7 +184,7 @@ public:
     void    handshakeHTML(char *);
     void    handshakeXML();
     void    handshakeCMD(HTTP&, const std::string&);
-    bool    handshakeAuth(HTTP &, const char *);
+    bool    handshakeAuth(HTTP &, const char *, bool rejectCrossOrigin = false);
 
     bool    handshakeHTTPBasicAuth(HTTP &http);
 

@@ -300,6 +300,19 @@ public:
     static void parseAuthorizationHeader(const char* arg, char* user, char* pass, size_t ulen, size_t plen);
     static void parseAuthorizationHeader(const std::string& arg, std::string& user, std::string& pass);
 
+    // Sec-Fetch-Site / Origin / Host ヘッダーの値から、リクエストが同一オリジン
+    // からのものでない (CSRF の可能性がある) かどうかを返す。
+    // Sec-Fetch-Site があればそれだけで判断する ("same-origin" と "none"
+    // のみ許可)。無ければ (古いブラウザ、curl など) Origin があるときだけ
+    // Host と比較する。どちらも無ければ許可する。
+    static bool isCrossOriginRequest(const std::string& secFetchSite,
+                                     const std::string& origin,
+                                     const std::string& host);
+
+    // Host ヘッダーが loopback を指す表記 (localhost または IP リテラル)
+    // かどうかを返す。DNS リバインディング対策用。空の場合は true。
+    static bool isLoopbackHostHeader(const std::string& host);
+
     void    readHeaders()
     {
         while(nextHeader());
