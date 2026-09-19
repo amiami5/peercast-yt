@@ -275,9 +275,16 @@ public:
 class HTTP : public IndirectStream
 {
 public:
+    // 1 つのリクエスト/レスポンスで受け付けるヘッダー行数の上限。
+    static const int MAX_HEADERS = 128;
+
+    // POST のボディの上限 (getRequest() で読み込む分)。
+    static const int MAX_REQUEST_BODY = 1024 * 1024;
+
     HTTP(Stream &s)
         : arg(nullptr)
         , m_headersRead(false)
+        , m_headerCount(0)
     {
         cmdLine[0] = '\0';
         init(&s);
@@ -331,6 +338,7 @@ public:
         protocolVersion = "";
         headers.clear();
         m_headersRead = false;
+        m_headerCount = 0;
     }
 
     HTTPRequest getRequest();
@@ -342,6 +350,7 @@ public:
     char    cmdLine[8192], *arg;
 
     bool m_headersRead;
+    int  m_headerCount;
     std::shared_ptr<std::string> m_body;
 
     std::string method;

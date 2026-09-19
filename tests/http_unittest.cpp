@@ -294,3 +294,58 @@ TEST(HTTPCrossOrigin, remoteAccess)
     ASSERT_TRUE(HTTP::isCrossOriginRequest("cross-site", "", "192.168.1.10:7144"));
     ASSERT_TRUE(HTTP::isCrossOriginRequest("", "http://evil.example", "192.168.1.10:7144"));
 }
+
+TEST(HTTPLimits, tooManyHeaders)
+{
+    std::string req = "GET / HTTP/1.0\r\n";
+    for (int i = 0; i < HTTP::MAX_HEADERS + 10; i++)
+        req += "X-Header-" + std::to_string(i) + ": value\r\n";
+    req += "\r\n";
+
+    StringStream in(req);
+    HTTP http(in);
+    http.readRequest();
+    ASSERT_THROW(http.readHeaders(), StreamException);
+}
+
+TEST(HTTPLimits, reasonableNumberOfHeadersWorks)
+{
+    std::string req = "GET / HTTP/1.0\r\n";
+    for (int i = 0; i < 50; i++)
+        req += "X-Header-" + std::to_string(i) + ": value\r\n";
+    req += "\r\n";
+
+    StringStream in(req);
+    HTTP http(in);
+    http.readRequest();
+    ASSERT_NO_THROW(http.readHeaders());
+    ASSERT_EQ("value", http.headers.get("X-Header-49"));
+}
+
+TEST(HTTPLimits, postBodyTooLarge)
+{
+    // 認証前に body を全部メモリに読むので、巨大な Content-Length は拒否する。
+    StringStream in("POST /admin HTTP/1.0\r\nContent-Length: 2000000000\r\n\r\nx");
+    HTTP http(in);
+    http.readRequest();
+    http.readHeaders();
+    ASSERT_THROW(http.getRequest(), HTTPException);
+}
+
+TEST(HTTPLimits, postBodyNegativeLength)
+{
+    StringStream in("POST /admin HTTP/1.0\r\nContent-Length: -5\r\n\r\n");
+    HTTP http(in);
+    http.readRequest();
+    http.readHeaders();
+    ASSERT_THROW(http.getRequest(), HTTPException);
+}
+
+TEST(HTTPLimits, postBodyNormal)
+{
+    StringStream in("POST /admin HTTP/1.0\r\nContent-Length: 5\r\n\r\nhello");
+    HTTP http(in);
+    http.readRequest();
+    http.readHeaders();
+    ASSERT_EQ("hello", http.getRequest().body);
+}

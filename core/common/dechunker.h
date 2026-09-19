@@ -8,6 +8,9 @@
 class Dechunker : public Stream
 {
 public:
+    // 1 チャンクの大きさの上限。
+    static const size_t MAX_CHUNK_SIZE = 16 * 1024 * 1024;
+
     Dechunker(Stream& aStream)
         : m_eof(false)
         , m_stream(aStream)

@@ -60,6 +60,7 @@ int  Dechunker::read(void *buf, int aSize)
 void Dechunker::getNextChunk()
 {
     size_t size = 0;
+    int digits = 0;
 
     // チャンクサイズを読み込む。
     while (true)
@@ -75,9 +76,17 @@ void Dechunker::getNextChunk()
         int v = hexValue(c);
         if (v < 0)
             throw StreamException("Protocol error");
+
+        // 桁あふれを防ぐ。16 進 8 桁 (32 ビット) を超える大きさは不正。
+        if (++digits > 8)
+            throw StreamException("Chunk size too large");
         size *= 0x10;
         size += v;
     }
+
+    // 巨大なメモリ確保を防ぐ。
+    if (size > MAX_CHUNK_SIZE)
+        throw StreamException("Chunk size too large");
 
     if (size == 0)
     {

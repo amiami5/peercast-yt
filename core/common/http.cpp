@@ -96,6 +96,10 @@ bool    HTTP::nextHeader()
 
     if (readLine(cmdLine, sizeof(cmdLine)))
     {
+        // ヘッダーを無限に送りつけられてメモリを使い果たされないように。
+        if (++m_headerCount > MAX_HEADERS)
+            throw StreamException("Too many headers");
+
         char *ap = strstr(cmdLine, ":");
         if (ap)
             while (*++ap)
@@ -311,6 +315,13 @@ HTTPRequest HTTP::getRequest()
             } else {
                 HTTPRequest req(method, requestUrl, protocolVersion, headers);
                 int size = atoi(headers.get("Content-Length").c_str());
+
+                // 認証前に body 全体をメモリに読み込むので、上限がないと
+                // 巨大な Content-Length でメモリを使い果たされる。
+                if (size < 0)
+                    throw HTTPException(HTTP_SC_BADREQUEST, 400);
+                if (size > MAX_REQUEST_BODY)
+                    throw HTTPException("HTTP/1.0 413 Request Entity Too Large", 413);
 
                 if (m_body == nullptr) {
                     m_body = std::make_shared<std::string>();

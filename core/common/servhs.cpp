@@ -125,10 +125,14 @@ void Servent::handshakeJRPC(HTTP &http)
     if (content_length == -1)
         throw HTTPException("HTTP/1.0 411 Length required", 411);
 
-    if (content_length == 0)
+    if (content_length <= 0)
         throw HTTPException(HTTP_SC_BADREQUEST, 400);
 
-    unique_ptr<char> body(new char[content_length + 1]);
+    // content_length + 1 のオーバーフローや、巨大なメモリ確保を防ぐ。
+    if (content_length > HTTP::MAX_REQUEST_BODY)
+        throw HTTPException("HTTP/1.0 413 Request Entity Too Large", 413);
+
+    unique_ptr<char[]> body(new char[content_length + 1]);
     try {
         http.stream->read(body.get(), content_length);
         body.get()[content_length] = '\0';
@@ -2392,6 +2396,10 @@ void Servent::handshakeWMHTTPPush(HTTP& http, const std::string& path)
     LOG_DEBUG("%s", nlohmann::json(http.headers.m_headers).dump().c_str());
 
     int size = std::atoi(http.headers.get("Content-Length").c_str());
+    if (size < 0)
+        throw HTTPException(HTTP_SC_BADREQUEST, 400);
+    if (size > HTTP::MAX_REQUEST_BODY)
+        throw HTTPException("HTTP/1.0 413 Request Entity Too Large", 413);
 
     // エンコーダーの設定要求を読む。0 バイトの空の設定要求も合法。
     std::string setup = http.Stream::read(size);

@@ -85,3 +85,31 @@ TEST_F(DechunkerFixture, read)
     ASSERT_EQ(23, dechunker.read(buf, 23));
     ASSERT_STREQ("Wikipedia in\r\n\r\nchunks.", buf);
 }
+
+TEST_F(DechunkerFixture, chunkSizeOverflowIsRejected)
+{
+    // 16 進 16 桁 (size_t が 64 ビット) 。以前は桁あふれして巨大な
+    // new char[size] を行っていた。
+    StringStream in("FFFFFFFFFFFFFFFF\r\nabc\r\n0\r\n\r\n");
+    Dechunker dechunker(in);
+    char buf[3];
+    ASSERT_THROW(dechunker.read(buf, 3), StreamException);
+}
+
+TEST_F(DechunkerFixture, hugeChunkSizeIsRejected)
+{
+    // 8 桁に収まるが上限 (16 MiB) を超える。
+    StringStream in("7FFFFFFF\r\nabc\r\n0\r\n\r\n");
+    Dechunker dechunker(in);
+    char buf[3];
+    ASSERT_THROW(dechunker.read(buf, 3), StreamException);
+}
+
+TEST_F(DechunkerFixture, normalChunkStillWorks)
+{
+    StringStream in("3\r\nabc\r\n0\r\n\r\n");
+    Dechunker dechunker(in);
+    char buf[3];
+    ASSERT_EQ(3, dechunker.read(buf, 3));
+    ASSERT_EQ(0, memcmp(buf, "abc", 3));
+}
