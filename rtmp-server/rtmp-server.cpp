@@ -169,6 +169,10 @@ int main(int argc, char* argv[])
         } catch (EOFException& e)
         {
           printf("EOFException: %s\n", e.what());
+        } catch (std::exception& e)
+        {
+          // 不正なクライアントのためにサーバー全体を落とさない。
+          printf("Error: %s\n", e.what());
         }
         client->close();
     }

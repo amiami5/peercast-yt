@@ -110,7 +110,8 @@ namespace rtmpserver
                         throw std::runtime_error("protocol error");
 
                     Message prev = cstreams[cs_id];
-                    assert(prev.remaining() == 0);
+                    if (prev.remaining() != 0)
+                        throw std::runtime_error("protocol error");
 
                     int tdelta = to_integer_big_endian(client->Stream::read(3));
                     cstreams[cs_id] = Message(prev.timestamp + tdelta, prev.length, prev.type_id, prev.stream_id);
@@ -192,6 +193,9 @@ namespace rtmpserver
 
         void on_FCPublish(Value& transaction_id, const std::vector<Value>& params)
         {
+            if (params.size() < 2)
+                throw std::runtime_error("FCPublish: missing parameter");
+
             std::string data;
 
             data += Value("_result").serialize();
@@ -311,7 +315,17 @@ namespace rtmpserver
 
         void on_set_chunk_size(Message& message)
         {
-            int new_chunk_size = to_integer_big_endian(message.data.substr(0,4));
+            if (message.data.size() < 4)
+                throw std::runtime_error("SetChunkSize: message too short");
+
+            // 仕様上 1 〜 0x7FFFFFFF (通常は 16777215 まで)。負数や 0 は不正。
+            const uint32_t v = ((uint32_t)(uint8_t)message.data[0] << 24) |
+                               ((uint32_t)(uint8_t)message.data[1] << 16) |
+                               ((uint32_t)(uint8_t)message.data[2] << 8) |
+                               ((uint32_t)(uint8_t)message.data[3]);
+            if (v < 1 || v > 0xffffff)
+                throw std::runtime_error("SetChunkSize: invalid chunk size");
+            int new_chunk_size = (int) v;
             printf("max incoming chunk size is now %d (was %d)\n",
                    new_chunk_size,
                    max_incoming_chunk_size);

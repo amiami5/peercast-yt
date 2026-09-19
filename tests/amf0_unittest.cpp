@@ -364,3 +364,50 @@ TEST_F(amf0Fixture, Number_precision)
         ASSERT_EQ(std::stod(amf0::Value::number(v).inspect()), v);
     }
 }
+
+TEST(amf0Deserializer, nestingDepthLimit)
+{
+    // オブジェクトが 1 段深くなるたびに: 0x03 (AMF_OBJECT) + キー長 2 + キー "a"
+    // を繰り返す。深さ制限がないとスタックを使い切る。
+    std::string data;
+    const int depth = 100000;
+    for (int i = 0; i < depth; i++)
+        data += std::string("\x03\x00\x01" "a", 4);
+
+    StringStream s(data);
+    Deserializer d;
+    ASSERT_THROW(d.readValue(s), std::runtime_error);
+}
+
+TEST(amf0Deserializer, strictArrayNestingDepthLimit)
+{
+    // 厳密配列 (0x0a) 、要素数 1 を繰り返し入れ子にする。
+    std::string data;
+    const int depth = 100000;
+    for (int i = 0; i < depth; i++)
+        data += std::string("\x0a\x00\x00\x00\x01", 5);
+
+    StringStream s(data);
+    Deserializer d;
+    ASSERT_THROW(d.readValue(s), std::runtime_error);
+}
+
+TEST(amf0Deserializer, moderateNestingStillWorks)
+{
+    // 深さ 3 (onMetaData 相当の実用的なネスト) は読める。
+    // {"a": {"b": {}}}
+    std::string data =
+        std::string("\x03", 1) +
+        std::string("\x00\x01" "a", 3) + std::string("\x03", 1) +
+            std::string("\x00\x01" "b", 3) + std::string("\x03", 1) +
+                std::string("\x00\x00\x09", 3) +   // 空オブジェクト + END
+            std::string("\x00\x00\x09", 3) +
+        std::string("\x00\x00\x09", 3);
+
+    StringStream s(data);
+    Deserializer d;
+    Value v = d.readValue(s);
+    ASSERT_TRUE(v.isObject());
+    ASSERT_TRUE(v.at("a").isObject());
+    ASSERT_TRUE(v.at("a").at("b").isObject());
+}

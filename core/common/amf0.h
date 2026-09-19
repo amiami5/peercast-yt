@@ -349,6 +349,14 @@ namespace amf0
         double readDouble(Stream &in);
         std::vector<KeyValuePair> readObject(Stream &in);
         Value readValue(Stream &in);
+
+        // オブジェクト・配列のネストの深さの上限。これを超えると
+        // std::runtime_error を投げる (スタック枯渇の防止)。
+        static const int MAX_DEPTH = 32;
+
+    private:
+        std::vector<KeyValuePair> readObject(Stream &in, int depth);
+        Value readValue(Stream &in, int depth);
     };
 
     std::string format(const amf0::Value& value, int allowance = 80, int indent = 0);

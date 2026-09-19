@@ -41,6 +41,16 @@ double Deserializer::readDouble(Stream &in)
 
 std::vector<KeyValuePair> Deserializer::readObject(Stream &in)
 {
+    return readObject(in, 0);
+}
+
+Value Deserializer::readValue(Stream &in)
+{
+    return readValue(in, 0);
+}
+
+std::vector<KeyValuePair> Deserializer::readObject(Stream &in, int depth)
+{
     std::vector<KeyValuePair> list;
     while (true)
     {
@@ -48,14 +58,17 @@ std::vector<KeyValuePair> Deserializer::readObject(Stream &in)
         if (key == "")
             break;
 
-        list.push_back({key, readValue(in)});
+        list.push_back({key, readValue(in, depth + 1)});
     }
     in.readChar(); // OBJECT_END
     return list;
 }
 
-Value Deserializer::readValue(Stream &in)
+Value Deserializer::readValue(Stream &in, int depth)
 {
+    if (depth > MAX_DEPTH)
+        throw std::runtime_error("AMF0: nesting too deep");
+
     char type = in.readChar();
 
     switch (type)
@@ -70,7 +83,7 @@ Value Deserializer::readValue(Stream &in)
     }
     case AMF_OBJECT:
     {
-        return Value::object(readObject(in));
+        return Value::object(readObject(in, depth));
     }
     case AMF_BOOL:
     {
@@ -79,14 +92,14 @@ Value Deserializer::readValue(Stream &in)
     case AMF_ARRAY:
     {
         readInt32(in); // length
-        return Value::array(readObject(in));
+        return Value::array(readObject(in, depth));
     }
     case AMF_STRICTARRAY:
     {
         int len = readInt32(in);
         std::vector<Value> list;
         for (int i = 0; i < len; i++) {
-            list.push_back(readValue(in));
+            list.push_back(readValue(in, depth + 1));
         }
         return Value::strictArray(list);
     }
