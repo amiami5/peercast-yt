@@ -412,10 +412,6 @@ TEST(amf0Deserializer, moderateNestingStillWorks)
     ASSERT_TRUE(v.at("a").at("b").isObject());
 }
 
-// 注意: Deserializer::readInt32() は 4 回の readChar() を 1 つの式に書いて
-// おり、評価順序が処理系依存。ここでは長さのバイト列を回文にして
-// (00 10 10 00 など)、どちらの順序で読まれても同じ値になるようにしている。
-
 TEST(amf0Deserializer, valueCountLimit)
 {
     // 厳密配列 (0x0a) に AMF_NULL (0x05) を大量に並べる。1 バイトが 1 個の
@@ -440,4 +436,50 @@ TEST(amf0Deserializer, valueCountWithinLimitWorks)
     Value v = d.readValue(s);
     ASSERT_TRUE(v.isStrictArray());
     ASSERT_EQ(65792u, v.strictArray().size());
+}
+
+TEST(amf0Deserializer, strictArrayLength)
+{
+    // 長さ 1000 (00 00 03 e8) の厳密配列が、1000 要素として読める。
+    std::string data("\x0a\x00\x00\x03\xe8", 5);
+    data += std::string(1000, '\x05');
+
+    StringStream s(data);
+    Deserializer d;
+    Value v = d.readValue(s);
+    ASSERT_TRUE(v.isStrictArray());
+    ASSERT_EQ(1000u, v.strictArray().size());
+    ASSERT_TRUE(s.eof());
+}
+
+TEST(amf0Deserializer, stringLengthWithHighBit)
+{
+    // 長さの下位バイトが 0x80 以上 (200 = 00 c8) の文字列。
+    // 符号拡張されると長さが負になり、読み取りがずれる。
+    std::string payload(200, 'x');
+    std::string data = std::string("\x02\x00\xc8", 3) + payload;
+
+    StringStream s(data);
+    Deserializer d;
+    Value v = d.readValue(s);
+    ASSERT_TRUE(v.isString());
+    ASSERT_EQ(payload, v.string());
+    ASSERT_TRUE(s.eof());
+}
+
+TEST(amf0Deserializer, readInt32HighBytes)
+{
+    StringStream s(std::string("\x80\x01\x02\x03\xff\xff\xff\xff\x00\x00\x01\x00", 12));
+    Deserializer d;
+    ASSERT_EQ((int32_t) 0x80010203, d.readInt32(s));
+    ASSERT_EQ(-1, d.readInt32(s));
+    ASSERT_EQ(256, d.readInt32(s));
+}
+
+TEST(amf0Deserializer, readInt16HighBytes)
+{
+    StringStream s(std::string("\xff\xf0\x01\x80", 4));
+    Deserializer d;
+    ASSERT_EQ((int16_t) -16, d.readInt16(s));
+    ASSERT_EQ((int16_t) 0x0180, d.readInt16(s));
 }

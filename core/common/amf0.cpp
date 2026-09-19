@@ -12,19 +12,31 @@ bool Deserializer::readBool(Stream &in)
     return in.readChar() != 0;
 }
 
+// 1 つの式に readChar() を複数書くと、評価順序は処理系依存 (GCC では逆順に
+// なることがある)。また readChar() は char (符号付きのことがある) を返すので、
+// 0x80 以上のバイトが符号拡張されて上位ビットを壊す。1 バイトずつ順に読み、
+// 符号なしとして組み立てる。
 int32_t Deserializer::readInt32(Stream &in)
 {
-    return (in.readChar() << 24) | (in.readChar() << 16) | (in.readChar() << 8) | (in.readChar());
+    const uint32_t b0 = (uint8_t) in.readChar();
+    const uint32_t b1 = (uint8_t) in.readChar();
+    const uint32_t b2 = (uint8_t) in.readChar();
+    const uint32_t b3 = (uint8_t) in.readChar();
+    return (int32_t) ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3);
 }
 
 int16_t Deserializer::readInt16(Stream& in)
 {
-    return (in.readChar() << 8) | (in.readChar());
+    const uint16_t b0 = (uint8_t) in.readChar();
+    const uint16_t b1 = (uint8_t) in.readChar();
+    return (int16_t) (uint16_t) ((b0 << 8) | b1);
 }
 
 std::string Deserializer::readString(Stream &in)
 {
-    int len = (in.readChar() << 8) | (in.readChar());
+    const int b0 = (uint8_t) in.readChar();
+    const int b1 = (uint8_t) in.readChar();
+    const int len = (b0 << 8) | b1;   // 0..65535
     return in.read(len);
 }
 
