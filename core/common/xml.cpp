@@ -474,7 +474,7 @@ void XML::read(Stream &in)
 
                 bool singleTag = false;
 
-                if (buf[tp-1] == '/')           // check for single tag
+                if (tp > 0 && buf[tp-1] == '/') // check for single tag (空のタグ "<>" では buf[-1] を読んでしまう)
                 {
                     singleTag = true;
                     buf[tp-1] = 0;

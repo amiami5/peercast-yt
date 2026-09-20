@@ -69,7 +69,9 @@ std::pair<bool,int> FLVStream::readMetaData(void* data, int size)
                 return std::make_pair(true, ceil(bitrate));
         }
         return std::make_pair(false, 0);
-    } catch (std::runtime_error& e) {
+    } catch (std::exception& e) {
+        // std::runtime_error (AMF0 の形式エラー) のほか、データが足りない
+        // ときの StreamException も、メタデータなしとして扱う。
         LOG_ERROR("readMetaData: %s", e.what());
         return std::make_pair(false, 0);
     }

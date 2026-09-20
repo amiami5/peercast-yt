@@ -6,6 +6,9 @@
 #include "mkv.h"
 #include "mp3.h"
 #include "nsv.h"
+#include "ogg.h"
+#include <new>
+#include <memory>
 #include "sstream.h"
 #include "amf0.h"
 
@@ -171,4 +174,57 @@ TEST(MediaParserSecurity, nsvUnterminatedIcyMetadata)
     StringStream in(data);
     NSVStream stream;
     ASSERT_NO_THROW(stream.readPacket(in, ch));
+}
+
+// MemoryStream はデータが足りないと read() が 0 を返す (例外を投げない)。
+// Stream::read(int) はそれを繰り返し呼んで無限ループになっていた。
+TEST(MediaParserSecurity, streamReadOnShortMemoryStreamThrows)
+{
+    std::string data(4, 'A');
+    MemoryStream mem(&data[0], data.size());
+    ASSERT_THROW(mem.Stream::read(10), StreamException);
+}
+
+TEST(MediaParserSecurity, flvMetadataWithOversizedAmfStringDoesNotHang)
+{
+    // onMetaData の AMF オブジェクトのキーの長さが、データの残りより大きい。
+    std::string meta;
+    meta += amf0::Value("onMetaData").serialize();
+    meta += std::string("\x03\x00\x0d", 3) + "short";        // キー長 13、実際は 5 バイト
+
+    auto r = FLVStream::readMetaData(&meta[0], meta.size());
+    ASSERT_FALSE(r.first);
+}
+
+// Theora の BOS ページでヘッダー収集が始まったあと、シリアル番号 0 のページが来ると、
+// bos() されていない Vorbis サブストリームの readHeader() に渡り、未初期化の
+// numPackets / bodyLen を配列の添字にしていた。メモリを不定値で埋めて確認する。
+TEST(MediaParserSecurity, oggPageForInactiveSubstream)
+{
+    std::unique_ptr<char[]> mem(new char[sizeof(OGGStream)]);
+    memset(mem.get(), 0xab, sizeof(OGGStream));
+    OGGStream* stream = new (mem.get()) OGGStream();
+
+    auto page = [](int flags, uint32_t serial, const std::string& body) {
+        std::string p = "OggS";
+        p += '\0'; p += (char) flags; p += std::string(8, '\0');
+        p += std::string({ (char) serial, (char)(serial >> 8), (char)(serial >> 16), (char)(serial >> 24) });
+        p += std::string(8, '\0');                 // ページ番号 (4) と CRC (4)
+        p += (char) 1; p += (char) body.size(); p += body;
+        return p;
+    };
+
+    // Theora の BOS ページ (シリアル 0x1234)、続いてシリアル 0 のページ。
+    std::string data = page(2, 0x1234, std::string("\x80theora", 7) + std::string(20, 'x')) +
+                       page(0, 0, std::string(30, 'y'));
+
+    StringStream in(data);
+    auto ch = std::make_shared<Channel>();
+    try {
+        stream->readPacket(in, ch);
+        stream->readPacket(in, ch);
+    } catch (StreamException&) {
+    }
+    stream->~OGGStream();
+    SUCCEED();
 }

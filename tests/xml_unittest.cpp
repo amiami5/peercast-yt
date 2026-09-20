@@ -303,3 +303,12 @@ TEST_F(XMLFixture, node)
     ASSERT_EQ(nullptr, node.parent);
     ASSERT_EQ(nullptr, node.sibling);
 }
+
+// 空のタグ "<>" は、以前 buf[tp-1] (= buf[-1]) を読んでいた。
+// AddressSanitizer / UBSan を付けたビルドで検出される。
+TEST(XMLSecurity, emptyTag)
+{
+    StringStream in("<a><></a>");
+    XML xml;
+    ASSERT_NO_THROW(xml.read(in));
+}

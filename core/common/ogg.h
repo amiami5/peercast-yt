@@ -35,6 +35,13 @@ public:
         MAX_PACKETS = 256           // prolly too small too, but realloc?!?!?!
     };
 
+    // 初期化しないと、bos() が呼ばれる前のサブストリームが numPackets /
+    // bodyLen の不定値で packetSizes[] や body[] を読み書きしてしまう。
+    OggPacket() : bodyLen(0), numPackets(0)
+    {
+        packetSizes[0] = 0;
+    }
+
     void    addLacing(OggPage &);
 
     int             bodyLen;

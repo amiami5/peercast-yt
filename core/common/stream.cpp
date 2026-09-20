@@ -356,6 +356,12 @@ std::string Stream::read(int remaining)
     {
         int readSize = std::min(remaining, 4096);
         int r = read(buffer, readSize);
+
+        // MemoryStream::read() は、データが足りないと例外を投げずに 0 を
+        // 返す。そのままでは remaining が減らず、無限ループになる。
+        if (r <= 0)
+            throw StreamException("Stream::read: premature end of stream");
+
         res += std::string(buffer, buffer + r);
         remaining -= r;
     }

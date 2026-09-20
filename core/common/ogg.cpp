@@ -69,9 +69,12 @@ int OGGStream::readPacket(Stream &in, std::shared_ptr<Channel> ch)
 
     if (vorbis.needHeader() || theora.needHeader())
     {
-        if (ogg.getSerialNo() == vorbis.serialNo)
+        // eos() や未使用のサブストリームの serialNo は 0 なので、シリアル番号
+        // 0 のページが、bos() されていない (ヘッダーを必要としていない)
+        // サブストリームに渡らないように、needHeader() も確認する。
+        if (vorbis.needHeader() && ogg.getSerialNo() == vorbis.serialNo)
             vorbis.readHeader(ch, ogg);
-        else if (ogg.getSerialNo() == theora.serialNo)
+        else if (theora.needHeader() && ogg.getSerialNo() == theora.serialNo)
             theora.readHeader(ch, ogg);
         else
             throw StreamException("Bad OGG serial no.");
