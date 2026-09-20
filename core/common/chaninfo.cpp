@@ -17,6 +17,7 @@
 // GNU General Public License for more details.
 // ------------------------------------------------
 
+#include "str.h"
 #include "chaninfo.h"
 #include "pcp.h"
 #include "chanmgr.h"
@@ -463,6 +464,8 @@ void ChanInfo::readTrackAtoms(AtomStream &atom, int numc)
         }else if (id == PCP_CHAN_TRACK_URL)
         {
             atom.readString(track.contact.data, sizeof(track.contact.data), d);
+            if (!str::is_http_url(track.contact.cstr()))
+                track.contact.clear();
         }else if (id == PCP_CHAN_TRACK_ALBUM)
         {
             atom.readString(track.album.data, sizeof(track.album.data), d);
@@ -490,6 +493,10 @@ void ChanInfo::readInfoAtoms(AtomStream &atom, int numc)
         }else if (id == PCP_CHAN_INFO_URL)
         {
             atom.readString(url.data, sizeof(url.data), d);
+            // 他のノードから届いた URL は、UI でリンクとして表示される。
+            // "javascript:" などが入り込まないよう、http(s) のみ許可する。
+            if (!str::is_http_url(url.cstr()))
+                url.clear();
         }else if (id == PCP_CHAN_INFO_DESC)
         {
             atom.readString(desc.data, sizeof(desc.data), d);

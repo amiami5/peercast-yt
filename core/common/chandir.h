@@ -6,6 +6,7 @@
 #include <stdexcept> // runtime_error
 
 #include "cgi.h"
+#include "str.h"
 #include "gnuid.h"
 
 #include "varwriter.h"
@@ -25,7 +26,7 @@ public:
         name           = fields[0];
         id             = fields[1];
         tip            = fields[2];
-        url            = fields[3];
+        url            = str::is_http_url(fields[3]) ? fields[3] : "";
         genre          = fields[4];
         desc           = fields[5];
         numDirects     = std::atoi(fields[6].c_str());
@@ -35,7 +36,7 @@ public:
         trackArtist    = fields[10];
         trackAlbum     = fields[11];
         trackName      = fields[12];
-        trackContact   = fields[13];
+        trackContact   = str::is_http_url(fields[13]) ? fields[13] : "";
         encodedName    = fields[14];
         uptime         = fields[15];
         status         = fields[16];

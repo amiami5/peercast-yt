@@ -22,6 +22,9 @@ namespace str
     std::string json_inspect(const std::string& str);
     bool        is_prefix_of(const std::string&, const std::string&); // deprecated
     bool        has_prefix(const std::string& subject, const std::string& prefix);
+    // "http://" または "https://" で始まるか (大文字小文字は区別しない)。
+    // 他人が設定した URL を href に使う前の確認用。"javascript:" などを排除する。
+    bool        is_http_url(const std::string& url);
     bool        has_suffix(const std::string& subject, const std::string& suffix);
     std::string join(const std::string& delimiter, const std::vector<std::string>& vec);
     std::string repeat(const std::string&, int n);

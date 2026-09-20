@@ -349,3 +349,21 @@ TEST(HTTPLimits, postBodyNormal)
     http.readHeaders();
     ASSERT_EQ("hello", http.getRequest().body);
 }
+
+TEST(HTTPLimits, responseBodyTooLarge)
+{
+    // 相手が延々とデータを送り続ける場合 (YP のフィード取得など)。
+    std::string res = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 1\r\n\r\n";
+    res += std::string(HTTP::MAX_RESPONSE_BODY + 100, 'x');
+
+    StringStream in(res);
+    HTTP http(in);
+    ASSERT_THROW(http.getResponse(), StreamException);
+}
+
+TEST(HTTPLimits, responseBodyNormal)
+{
+    StringStream in("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello");
+    HTTP http(in);
+    ASSERT_EQ("hello", http.getResponse().body);
+}

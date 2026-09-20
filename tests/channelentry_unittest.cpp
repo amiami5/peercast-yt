@@ -33,3 +33,14 @@ TEST_F(ChannelEntryFixture, textToChannelEntries)
     ASSERT_EQ(-1, entry.numDirects);
     ASSERT_EQ(-1, entry.numRelays);
 }
+
+TEST_F(ChannelEntryFixture, nonHttpUrlsAreDropped)
+{
+    // YP のフィードの url と trackContact は UI でリンクになる。
+    std::vector<std::string> errors;
+    auto vec = ChannelEntry::textToChannelEntries(
+        "ch<>97968780D09CC97BB98D4A2BF221EDE7<>127.0.0.1:7144<>javascript:alert(1)<>g<>d<>-1<>-1<>428<>FLV<><><><>data:text/html,x<>ch<>1:14<>click<><>1\n", "", errors);
+    ASSERT_EQ(1, vec.size());
+    ASSERT_STREQ("", vec[0].url.c_str());
+    ASSERT_STREQ("", vec[0].trackContact.c_str());
+}

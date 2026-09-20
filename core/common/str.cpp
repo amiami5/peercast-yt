@@ -358,6 +358,12 @@ bool has_prefix(const std::string& subject, const std::string& prefix)
     return is_prefix_of(prefix, subject);
 }
 
+bool is_http_url(const std::string& url)
+{
+    const std::string head = downcase(url.substr(0, 8));
+    return has_prefix(head, "http://") || has_prefix(head, "https://");
+}
+
 bool has_suffix(const std::string& subject, const std::string& suffix)
 {
     if (subject.size() < suffix.size())

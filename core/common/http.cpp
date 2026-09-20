@@ -425,12 +425,19 @@ HTTPResponse HTTP::getResponse()
     readHeaders();
     HTTPResponse response(status, headers);
 
+    bool tooLarge = false;
+
     if (headers.get("Transfer-Encoding") == "chunked") {
         Dechunker stream1(*stream);
 
         try {
-            while (true)
+            while (true) {
                 response.body += stream1.readChar();
+                if (response.body.size() > MAX_RESPONSE_BODY) {
+                    tooLarge = true;
+                    break;
+                }
+            }
         }catch(StreamException& e)
         {
         }
@@ -441,18 +448,29 @@ HTTPResponse HTTP::getResponse()
             int length = atoi(contentLengthStr.c_str());
             if (length < 0)
                 throw StreamException("invalid Content-Length value");
+            if ((size_t) length > MAX_RESPONSE_BODY)
+                throw StreamException("response too large");
 
             response.body = stream->read(length);
         }else
         {
             try {
-                while (true)
+                while (true) {
                     response.body += stream->readChar();
+                    if (response.body.size() > MAX_RESPONSE_BODY) {
+                        tooLarge = true;
+                        break;
+                    }
+                }
             }catch(StreamException& e)
             {
             }
         }
     }
+
+    if (tooLarge)
+        throw StreamException("response too large");
+
     return response;
 }
 

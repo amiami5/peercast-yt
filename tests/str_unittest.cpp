@@ -465,3 +465,18 @@ TEST_F(strFixture, shellwords)
     ASSERT_EQ(str::shellwords("\'\\\\\'"), string_vector({"\\\\"}));
     ASSERT_EQ(str::shellwords("\\\\"), string_vector({"\\"}));
 }
+
+TEST(strIsHttpUrl, basic)
+{
+    ASSERT_TRUE(str::is_http_url("http://example.com/"));
+    ASSERT_TRUE(str::is_http_url("https://example.com/"));
+    ASSERT_TRUE(str::is_http_url("HTTP://EXAMPLE.COM/"));
+    ASSERT_FALSE(str::is_http_url(""));
+    ASSERT_FALSE(str::is_http_url("http:/x"));
+    ASSERT_FALSE(str::is_http_url("http:"));
+    ASSERT_FALSE(str::is_http_url("javascript:alert(1)"));
+    ASSERT_FALSE(str::is_http_url(" http://example.com/"));
+    ASSERT_FALSE(str::is_http_url("ftp://example.com/"));
+    ASSERT_FALSE(str::is_http_url("//example.com/"));
+    ASSERT_FALSE(str::is_http_url("www.example.com"));
+}

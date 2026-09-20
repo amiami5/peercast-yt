@@ -182,3 +182,69 @@ TEST_F(ChanInfoFixture, getPlayListExt)
     info.setContentType(ChanInfo::T_MKV);
     ASSERT_STREQ(".m3u", info.getPlayListExt());
 }
+
+// 他のノードから届いたチャンネルの URL は UI でリンクとして表示されるので、
+// "javascript:" などの http(s) 以外は捨てる。
+TEST_F(ChanInfoFixture, readInfoAtomsKeepsHttpUrl)
+{
+    info.url.set("https://example.com/path?x=1");
+    MemoryStream mem(4096);
+    AtomStream w(mem);
+    info.writeInfoAtoms(w);
+    mem.rewind();
+
+    AtomStream r(mem);
+    int c, d;
+    r.read(c, d);
+    ChanInfo other;
+    other.readInfoAtoms(r, c);
+    ASSERT_STREQ("https://example.com/path?x=1", other.url.cstr());
+}
+
+TEST_F(ChanInfoFixture, readInfoAtomsDropsNonHttpUrl)
+{
+    const char* bad[] = { "javascript:alert(document.cookie)", "JaVaScRiPt:alert(1)",
+                          " http://example.com/", "data:text/html,<script>1</script>",
+                          "vbscript:x", "//example.com/", "example.com" };
+    for (const char* url : bad) {
+        info.url.set(url);
+        MemoryStream mem(4096);
+        AtomStream w(mem);
+        info.writeInfoAtoms(w);
+        mem.rewind();
+
+        AtomStream r(mem);
+        int c, d;
+        r.read(c, d);
+        ChanInfo other;
+        other.readInfoAtoms(r, c);
+        ASSERT_STREQ("", other.url.cstr()) << url;
+    }
+}
+
+TEST_F(ChanInfoFixture, readTrackAtomsDropsNonHttpContact)
+{
+    info.track.contact.set("javascript:alert(1)");
+    MemoryStream mem(4096);
+    AtomStream w(mem);
+    info.writeTrackAtoms(w);
+    mem.rewind();
+
+    AtomStream r(mem);
+    int c, d;
+    r.read(c, d);
+    ChanInfo other;
+    other.readTrackAtoms(r, c);
+    ASSERT_STREQ("", other.track.contact.cstr());
+
+    info.track.contact.set("http://example.com/");
+    MemoryStream mem2(4096);
+    AtomStream w2(mem2);
+    info.writeTrackAtoms(w2);
+    mem2.rewind();
+    AtomStream r2(mem2);
+    r2.read(c, d);
+    ChanInfo other2;
+    other2.readTrackAtoms(r2, c);
+    ASSERT_STREQ("http://example.com/", other2.track.contact.cstr());
+}

@@ -31,7 +31,7 @@ TEST_F(ChannelDirectoryFixture, findTracker)
 TEST_F(ChannelDirectoryFixture, writeChannelVariable)
 {
     StringStream mem;
-    ChannelEntry entry({ "NAME", "01234567890123456789012345678901", "127.0.0.1:7144", "URL", "GENRE", "DESC", "100", "200", "1000", "WMV", "ARTIST", "ALBUM", "TRACK_NAME", "TRACK_CONTACT", "%20", "0:10", "click", "COMMENT", "1" }, "http://example.com/index.txt");
+    ChannelEntry entry({ "NAME", "01234567890123456789012345678901", "127.0.0.1:7144", "http://example.com/url", "GENRE", "DESC", "100", "200", "1000", "WMV", "ARTIST", "ALBUM", "TRACK_NAME", "TRACK_CONTACT", "%20", "0:10", "click", "COMMENT", "1" }, "http://example.com/index.txt");
 
     ASSERT_FALSE(dir.writeChannelVariable(mem, "name", 0));
 
@@ -63,7 +63,7 @@ TEST_F(ChannelDirectoryFixture, writeChannelVariable)
 
     mem.str("");
     EXPECT_TRUE(dir.writeChannelVariable(mem, "url", 0));
-    EXPECT_STREQ("URL", mem.str().c_str());
+    EXPECT_STREQ("http://example.com/url", mem.str().c_str());
 
     mem.str("");
     EXPECT_TRUE(dir.writeChannelVariable(mem, "tip", 0));

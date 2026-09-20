@@ -281,6 +281,10 @@ public:
     // POST のボディの上限 (getRequest() で読み込む分)。
     static const int MAX_REQUEST_BODY = 1024 * 1024;
 
+    // getResponse() で読み込む応答ボディの上限。YP のフィードなどを取得する
+    // ときに、相手が延々とデータを送り続けてもメモリを使い果たさない。
+    static const size_t MAX_RESPONSE_BODY = 32 * 1024 * 1024;
+
     HTTP(Stream &s)
         : arg(nullptr)
         , m_headersRead(false)
