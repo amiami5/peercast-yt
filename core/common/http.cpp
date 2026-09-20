@@ -505,7 +505,9 @@ Retry:
 
     std::shared_ptr<ClientSocket> rsock;
     if (feed.scheme() == "https") {
-        rsock = std::make_shared<SslClientSocket>();
+        auto ssl = std::make_shared<SslClientSocket>();
+        ssl->setHostname(feed.host()); // SNI とサーバー証明書の検証に使う。
+        rsock = ssl;
     } else {
         rsock = sys->createSocket();
     }

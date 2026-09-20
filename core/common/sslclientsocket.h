@@ -45,9 +45,16 @@ public:
     static std::shared_ptr<SslClientSocket> upgrade(std::shared_ptr<ClientSocket>);
     void setTimeoutOptions();
 
+    // 接続先のホスト名を設定する (open の前に呼び出す)。設定すると SNI を
+    // 送り、Unix 系のビルドではサーバー証明書とホスト名の検証を行う
+    // (検証に失敗した場合は connect が例外を投げる)。
+    // 設定しない場合 (サーバー側の upgrade など) は、従来どおり検証しない。
+    void setHostname(const std::string& hostname);
+
     static void configureServer(const std::string& certificate, const std::string& privatekey);
     static std::pair<std::string,std::string> getServerConfiguration();
 
+    std::string m_hostname;
     struct sockaddr_in6 m_remoteAddr;
     int m_socket;
     SSL_CTX* m_ctx;

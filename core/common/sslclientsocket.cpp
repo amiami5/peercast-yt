@@ -12,10 +12,12 @@
 
 #include "sslclientsocket.h"
 #include <openssl/ssl.h>
+#include <openssl/x509v3.h>
 #include <sys/types.h>
 #ifdef WIN32
 #else
 #include <sys/socket.h>
+#include <arpa/inet.h> // inet_pton
 #include "strerror.h"
 #endif
 #include <unistd.h>
@@ -95,6 +97,11 @@ void SslClientSocket::setTimeoutOptions()
 #endif
 }
 
+void SslClientSocket::setHostname(const std::string& hostname)
+{
+    m_hostname = hostname;
+}
+
 void SslClientSocket::open(const Host &rh)
 {
     m_socket = socket(AF_INET6, SOCK_STREAM, 0);
@@ -113,8 +120,43 @@ void SslClientSocket::open(const Host &rh)
 
     m_ctx = SSL_CTX_new(SSLv23_client_method());
     assert( m_ctx != nullptr ); // ライブラリが初期化されているから null は返らない。
+
+#ifndef WIN32
+    // サーバー証明書を検証する (Windows のビルドには OS の CA ストアを
+    // 読み込む処理がないので、従来どおり検証しない)。検証しないと、通信路上
+    // の第三者が YP のフィードなどを改ざんできてしまう。
+    if (!m_hostname.empty()) {
+        if (SSL_CTX_set_default_verify_paths(m_ctx) != 1)
+            throw SockException("Failed to load CA certificates");
+        SSL_CTX_set_verify(m_ctx, SSL_VERIFY_PEER, nullptr);
+    }
+#endif
+
     m_ssl = SSL_new(m_ctx);
     assert( m_ssl != nullptr );
+
+    if (!m_hostname.empty()) {
+        bool isIpAddress = false;
+#ifndef WIN32
+        unsigned char addr[sizeof(struct in6_addr)];
+        isIpAddress = inet_pton(AF_INET, m_hostname.c_str(), addr) == 1 ||
+                      inet_pton(AF_INET6, m_hostname.c_str(), addr) == 1;
+#endif
+        if (!isIpAddress) {
+            // SNI。証明書を複数のホストで共用しているサーバーで必要。
+            SSL_set_tlsext_host_name(m_ssl, m_hostname.c_str());
+        }
+
+#ifndef WIN32
+        X509_VERIFY_PARAM* param = SSL_get0_param(m_ssl);
+        X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        int ok = isIpAddress
+            ? X509_VERIFY_PARAM_set1_ip_asc(param, m_hostname.c_str())
+            : X509_VERIFY_PARAM_set1_host(param, m_hostname.c_str(), 0);
+        if (ok != 1)
+            throw SockException("Failed to set the host name to verify");
+#endif
+    }
 
     host = rh;
 
@@ -147,7 +189,11 @@ void SslClientSocket::connect()
     int r;
     r = SSL_connect(m_ssl);
     if (r != 1) {
-	throw SockException("SSL handshake failed");
+        const long vr = SSL_get_verify_result(m_ssl);
+        if (vr != X509_V_OK)
+            throw SockException(format("SSL handshake failed (certificate verification failed: %s)",
+                                       X509_verify_cert_error_string(vr)).c_str());
+        throw SockException("SSL handshake failed");
     }
 }
 
