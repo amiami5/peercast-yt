@@ -387,3 +387,32 @@ TEST_F(TemplateFixture, parse)
     val = Template::parse(tok);
     ASSERT_EQ(val.inspect(), "[\"array\"]");
 }
+
+// 外部から届く文字列 (チャンネルの説明など) を出力するときの、エスケープの確認。
+TEST_F(TemplateFixture, outputEscaping)
+{
+    locals.vars["x"] = std::string("</script><img src=x onerror=alert(1)>&\"'");
+
+    // {$...} : HTML エスケープ
+    {
+        StringStream in, out;
+        in.writeString("<b>{$x}</b>");
+        in.rewind();
+        temp.readTemplate(in, &out);
+        ASSERT_EQ("<b>&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;&amp;&quot;&#39;</b>", out.str());
+    }
+
+    // {\...} : JavaScript の文字列用。< > & は \xNN になり、"</script>" で
+    // script 要素を閉じられない。
+    {
+        StringStream in, out;
+        in.writeString("var s = \"{\\x}\";");
+        in.rewind();
+        temp.readTemplate(in, &out);
+        std::string result = out.str();
+        ASSERT_EQ(std::string::npos, result.find("</script>"));
+        ASSERT_EQ(std::string::npos, result.find('<'));
+        ASSERT_EQ(std::string::npos, result.find('>'));
+        ASSERT_NE(std::string::npos, result.find("\\x3C"));
+    }
+}

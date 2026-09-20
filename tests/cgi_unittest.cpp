@@ -134,6 +134,9 @@ TEST_F(cgiFixture, unescape_javascript)
     ASSERT_STREQ("\\\'\\\"\\\\", escape_javascript("\'\"\\").c_str());
     ASSERT_STREQ("あ", escape_javascript("あ").c_str());
     ASSERT_STREQ("\\x0D\\x0A", escape_javascript("\r\n").c_str());
+    // <script> の中でも安全なように、< > & は \xNN で書く。
+    ASSERT_STREQ("\\x3C/script\\x3E", escape_javascript("</script>").c_str());
+    ASSERT_STREQ("a\\x26b", escape_javascript("a&b").c_str());
 }
 
 TEST(cgiIsSafeLocalPath, accepts)

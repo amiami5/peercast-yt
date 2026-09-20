@@ -634,6 +634,15 @@ std::string escape_javascript(const std::string& input)
         {
             res += '\\';
             res += c;
+        } else if (c == '<' || c == '>' || c == '&')
+        {
+            // <script> の中に出力するときに "</script>" で script 要素を
+            // 抜けられないように、JavaScript 側では同じ文字になる \xNN で書く。
+            char buf[3];
+
+            res += "\\x";
+            sprintf(buf, "%02X", (unsigned char) c);
+            res += buf;
         } else if (iscntrl(c))
         {
             char buf[3];
