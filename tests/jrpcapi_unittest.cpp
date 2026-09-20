@@ -221,3 +221,31 @@ TEST_F(JrpcApiFixture, getYellowPages_whenYpIsNonEmpty)
     delete servMgr;
     servMgr = back;
 }
+
+// 深くネストした JSON は、json のコピーがスタックを使い果たして落ちていた。
+TEST_F(JrpcApiFixture, deeplyNestedJsonIsRejected)
+{
+    const int depth = 200000;
+    std::string params = std::string(depth, '[') + std::string(depth, ']');
+    std::string request = "{\"jsonrpc\":\"2.0\",\"method\":\"getStatus\",\"id\":1,\"params\":" + params + "}";
+
+    json response = json::parse(api.call(request));
+    ASSERT_EQ(-32700, response["error"]["code"]);
+
+    // 閉じていない入力でも同様。
+    response = json::parse(api.call(std::string(depth, '[')));
+    ASSERT_EQ(-32700, response["error"]["code"]);
+}
+
+TEST_F(JrpcApiFixture, nestingInsideStringsIsNotCounted)
+{
+    std::string request = "{\"jsonrpc\":\"2.0\",\"method\":\"getVersionInfo\",\"id\":1,\"params\":[]}";
+    json response = json::parse(api.call(request));
+    ASSERT_TRUE(response.count("result") == 1);
+
+    // 文字列の中の '[' は深さに数えない (エスケープされた引用符も含めて)。
+    std::string request2 = "{\"jsonrpc\":\"2.0\",\"method\":\"getServerStorageItem\",\"id\":2,\"params\":[\"" +
+                           std::string(500, '[') + "\\\"" + std::string(500, '[') + "\"]}";
+    response = json::parse(api.call(request2));
+    ASSERT_EQ(-32700 == (response.count("error") ? (int) response["error"]["code"] : 0), false);
+}

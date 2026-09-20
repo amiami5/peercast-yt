@@ -23,11 +23,43 @@ static json error_object(int code, const char* message, json id = nullptr, json 
     return j;
 }
 
+// JSON のネストの深さ ([ と { の入れ子) が max を超えていないかを調べる。
+// 文字列リテラルの中の括弧は数えない。
+static bool jsonNestingIsTooDeep(const string& s, int max)
+{
+    int depth = 0;
+    bool inString = false;
+
+    for (size_t i = 0; i < s.size(); i++) {
+        char c = s[i];
+        if (inString) {
+            if (c == '\\')
+                i++;            // エスケープされた文字を飛ばす
+            else if (c == '"')
+                inString = false;
+        } else if (c == '"') {
+            inString = true;
+        } else if (c == '[' || c == '{') {
+            if (++depth > max)
+                return true;
+        } else if (c == ']' || c == '}') {
+            if (depth > 0)
+                depth--;
+        }
+    }
+    return false;
+}
+
 json JrpcApi::call_internal(const string& input)
 {
     json j, id, method, params, result;
 
     LOG_DEBUG("jrpc request: %s", input.c_str());
+
+    // json のコピーやデストラクタは入れ子の深さだけ再帰するので、深い入力で
+    // スタックを使い果たして落ちる。正当なリクエストは数段しかない。
+    if (jsonNestingIsTooDeep(input, 64))
+        return error_object(kParseError, "Parse error");
 
     try {
         j = json::parse(input);
