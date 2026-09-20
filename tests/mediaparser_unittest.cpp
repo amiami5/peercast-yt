@@ -4,6 +4,8 @@
 #include "flv.h"
 #include "mp4.h"
 #include "mkv.h"
+#include "mp3.h"
+#include "nsv.h"
 #include "sstream.h"
 #include "amf0.h"
 
@@ -135,4 +137,38 @@ TEST(MediaParserSecurity, mkvHugeElementSizeRejected)
     auto ch = std::make_shared<Channel>();
     MKVStream stream;
     ASSERT_THROW(stream.readHeader(in, ch), StreamException);
+}
+
+// ICY メタデータ (ストリームに埋め込まれた 16 バイト単位のブロック) が NUL 終端
+// されていなくても、バッファの外を読まない。以前は char buf[1024] を未初期化・
+// 未終端のまま C 文字列として解析していた。
+// 通常のビルドでは検出できない。AddressSanitizer を付けたビルドで失敗する。
+TEST(MediaParserSecurity, mp3UnterminatedIcyMetadata)
+{
+    auto ch = std::make_shared<Channel>();
+    ch->icyMetaInterval = 16;
+
+    std::string data(16, 'x');
+    data += (char) 64;                  // メタデータ長 64 * 16 = 1024 バイト
+    data += std::string(1024, 'A');     // NUL も '=' も含まない
+    data += std::string(4096, 'B');
+
+    StringStream in(data);
+    MP3Stream stream;
+    ASSERT_NO_THROW(stream.readPacket(in, ch));
+}
+
+TEST(MediaParserSecurity, nsvUnterminatedIcyMetadata)
+{
+    auto ch = std::make_shared<Channel>();
+    ch->icyMetaInterval = 16;
+
+    std::string data(16, 'x');
+    data += (char) 64;
+    data += std::string(1024, 'A');
+    data += std::string(4096, 'B');
+
+    StringStream in(data);
+    NSVStream stream;
+    ASSERT_NO_THROW(stream.readPacket(in, ch));
 }

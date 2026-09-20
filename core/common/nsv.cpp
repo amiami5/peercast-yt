@@ -58,7 +58,11 @@ int NSVStream::readPacket(Stream &in, std::shared_ptr<Channel> ch)
         if (len)
         {
             if (len*16 > 1024) len = 1024/16;
-            char buf[1024];
+
+            // processMp3Metadata() は C 文字列として読む。終端がないと
+            // buf の外まで読み、さらに区切り文字を '\0' に書き換えてしまう。
+            char buf[1024 + 1];
+            memset(buf, 0, sizeof(buf));
             in.read(buf, len*16);
             ch->processMp3Metadata(buf);
         }

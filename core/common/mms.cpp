@@ -121,7 +121,7 @@ ASFInfo parseASFHeader(Stream &in)
             unsigned int l = obj.readHead(in);
             obj.readData(in, l);
 
-            MemoryStream data(obj.data, obj.lenLo);
+            MemoryStream data(obj.data, obj.dataLen); // lenLo は 24 バイト大きく、配列の外を指す
 
             switch (obj.type)
             {
