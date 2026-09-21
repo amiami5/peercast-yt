@@ -1,6 +1,15 @@
 # Uncomment following line to enabled RTMP fetch support
 WITH_RTMP = yes
 
+# Which rtmp-server (the RTMP receiver) to build:
+#   yes (default) : the Rust version in ../../rtmp-server-rs (needs cargo)
+#   no            : the original C++ version in ../../rtmp-server
+# Change it on the command line (make WITH_RUST_RTMP=no) or in Makefile.local.
+# Run "make clean" when switching, since the output file name is the same.
+WITH_RUST_RTMP = yes
+RUST_RTMP = ../../rtmp-server-rs
+CARGO ?= cargo
+
 CPPFLAGS = -g -Wall -std=c++11 -D_UNIX -D_REENTRANT -DADD_BACKTRACE $(INCLUDES) $(shell pkg-config openssl --cflags)
 ifeq ($(WITH_RTMP),yes)
   CPPFLAGS += -DWITH_RTMP
@@ -118,6 +127,7 @@ clean:
 	$(MAKE) -C .. clean
 	rm -f $(LINUXOBJ) $(COREOBJ) $(SYSOBJ) $(TARGET) ${LIBOBJSTATIC} $(COREOBJSTATIC) $(DEPENDFILE) $(RTMPSERVER) $(RTMPOBJ)
 	rm -rf $(HTML) $(PUBLIC)
+	rm -rf $(RUST_RTMP)/target
 	rm -rf peercast-yt/
 	rm -f $(DISTARCHIVE)
 
@@ -136,7 +146,18 @@ $(LIBOBJSTATIC): $(COREOBJ) $(SYSOBJ)
 $(TARGET): $(LINUXOBJ) $(LIBOBJSTATIC)
 	$(CXX) $(LDFLAGS) -o $@ $(LINUXOBJ) $(LIBOBJSTATIC) $(LIBS)
 
+ifeq ($(WITH_RUST_RTMP),yes)
+# Rust version: no dependency on the C++ core library or OpenSSL.
+$(RTMPSERVER): $(RUST_RTMP)/Cargo.toml $(wildcard $(RUST_RTMP)/src/*.rs)
+	@command -v $(CARGO) >/dev/null 2>&1 || { \
+	  echo "error: '$(CARGO)' not found. Install Rust (e.g. 'sudo apt install cargo')," >&2; \
+	  echo "       or build the C++ rtmp-server instead: make WITH_RUST_RTMP=no" >&2; \
+	  exit 1; }
+	$(CARGO) build --release --manifest-path $(RUST_RTMP)/Cargo.toml
+	cp $(RUST_RTMP)/target/release/rtmp-server $@
+else
 $(RTMPSERVER): $(RTMPOBJ) $(LIBOBJSTATIC)
 	$(CXX) $(LDFLAGS) -o $@ $(RTMPOBJ) $(LIBOBJSTATIC) $(LIBS)
+endif
 
 -include $(DEPENDFILE)
