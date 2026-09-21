@@ -1,0 +1,24 @@
+[package]
+name = "rtmp-server"
+version = "0.1.0"
+edition = "2021"
+description = "PeerCast YT の rtmp-server (C++) の Rust 版。コマンドライン互換のドロップイン置き換え。"
+license = "GPL-2.0-or-later"
+publish = false
+
+# 外部クレートには依存しない (サプライチェーンの面積を増やさないため)。
+[dependencies]
+
+[lib]
+name = "rtmpserver"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rtmp-server"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+overflow-checks = true   # 万一の算術オーバーフローを黙って通さず、セッションごと落とす
+lto = true
+strip = true
