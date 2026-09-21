@@ -2,6 +2,44 @@
 
 PeerCast のフォークです。
 
+## このフォークについて
+
+[plonk/peercast-yt](https://github.com/plonk/peercast-yt) をベースに、
+セキュリティ修正を加えたフォークです。本家は長く更新されていませんが、
+PeerCast はネットワークからの入力を扱うソフトなので、脆弱性の修正だけを行っています。
+新機能の追加はしません（技量的にできません）。主に Linux で使うことを想定しています。
+
+### 本家との違い
+
+**1. RTMP 受信サーバー (`rtmp-server`) が Rust 製になりました**
+
+OBS などから RTMP で配信を受け付ける `rtmp-server` を、C++ から Rust に書き直しました
+([`rtmp-server-rs/`](rtmp-server-rs/))。コマンドラインも、PeerCast 本体との接続方法も従来と
+同じなので、使い方は変わりません。外部から最初に入力を受ける部分なので、メモリ安全性が言語で
+保証される Rust にしています。C++ 版で問題になっていた次の場面も、Rust 版では直っています。
+
+| 場面 | C++ 版 | Rust 版 |
+|---|---|---|
+| エンコーダーが Shift_JIS などの非 UTF-8 文字列を送ってきた | 配信が切れる | 配信を続ける |
+| 出力先 (PeerCast 本体) に接続できない | プロセスごと異常終了する | その接続だけ切って待ち受けを続ける |
+| 巨大な未完了メッセージを大量に送りつけられた | 最大で約 1 GiB のメモリを確保する | 合計 64 MiB で打ち切る |
+
+Linux の `ui/linux` の Makefile では、これが既定です。C++ 版に戻すこともできます
+(→ [Linuxでのビルド](#linuxでのビルド))。
+
+**2. セキュリティ修正**
+
+* 管理画面・API: 同一オリジン検証 (CSRF 対策)、ログイン Cookie に `SameSite=Strict`、
+  リダイレクト先や `htmlPath` の検証
+* 入力の検証: HTTP・チャンネル情報の URL は http(s) のみ許可 (SSRF 対策)、HTTP ヘッダー数と
+  チャンクサイズの上限、JSON・AMF0・atom のネストの深さと値の数の上限
+* メモリ安全: `strcpy` / `sprintf` によるバッファオーバーフローの修正、FLV・MP4・OGG・MKV・
+  MP3・NSV の各パーサーの長さ検査と未初期化バッファの修正
+* TLS: SNI の送信と証明書のホスト名検証 (Unix 系ビルドのみ)
+* HTML テンプレート: JavaScript 文字列内の `<` `>` `&` をエスケープ
+
+個々の変更は `git log` で確認できます。ライセンスは本家と同じ GPL です。
+
 ## ブラウザインターフェイス
 
 ブラウザインターフェイスは、YPブラウザ、動画プレーヤー、したらば掲示板
@@ -35,37 +73,62 @@ PeerCast のフォークです。
 * HTML UI をメッセージカタログ化。各国語版で機能に違いがないようにしました。
 * Ajax による画面更新。
 
-# バイナリのダウンロード
-
-https://github.com/plonk/peercast-yt/releases/ に各プラットフォーム用
-のバイナリがあります。
-
-また、Docker HubにDockerイメージがあります。
-
-<dl>
-    <dt>AMD64版</dt>
-    <dd>https://hub.docker.com/r/plonk/peercast-yt</dd>
-    <dt>ARM版 (Raspbian用)</dt>
-    <dd>https://hub.docker.com/r/plonk/peercast-yt-arm</dd>
-</dl>
-
 # Linuxでのビルド
 
-## 必要なもの
+`ui/linux` の Makefile でビルドします (CMake でのビルドは [README_CMAKE.md](README_CMAKE.md))。
 
-コンパイラは、GCC 4.9 以降あるいは Clang 3.4 以降などの C++11 に準拠し
-たものを使ってください。
+## 1. 必要なものを入れる
 
-また、ビルド時に HTML ファイルの生成のために Ruby を必要とします。また、
-実行時(CGIスクリプト)に Python3 が必要です。
+Ubuntu / Debian なら、次の 1 行で揃います。
 
-## 手順
+```sh
+sudo apt install build-essential pkg-config libssl-dev librtmp-dev ruby python3 cargo
+```
 
-`ui/linux` ディレクトリに入って `make` したあと、`sudo make install` で
-/usr/local/ 以下にインストールできます。
+| パッケージ | 何に使うか | 備考 |
+|---|---|---|
+| `build-essential` | C++ コンパイラ | C++11 対応なら何でも可 (GCC 4.9 以降、Clang 3.4 以降) |
+| `pkg-config` `libssl-dev` | TLS (OpenSSL) | |
+| `librtmp-dev` | RTMP fetch (他サーバーからの取得) | 不要なら `WITH_RTMP = no` にする |
+| `ruby` | ビルド時の HTML 生成 | |
+| `python3` | 実行時の CGI スクリプト | |
+| `cargo` | RTMP 受信サーバー (Rust 版) のビルド | Rust 1.75 で確認。C++ 版でよければ不要 |
+| `libgtest-dev` | 単体テスト | テストを動かす場合だけ |
 
-また、`ui/linux/tests` ディレクトリで `make` すると一連の単体テストを実行する
-`test-all` コマンドが作成されます。
+`cargo` は `rustup` で入れてもかまいません。
+
+## 2. ビルドしてインストールする
+
+```sh
+git clone https://github.com/amiami5/peercast-yt.git
+cd peercast-yt/ui/linux
+make
+sudo make install
+```
+
+* `make` は**一般ユーザー**で実行し、`sudo` は `make install` だけにしてください。
+  (`rustup` で入れた cargo は `sudo` 環境では見つからず、ビルドに失敗します。)
+* インストール先は `/usr/local` です。変えるには `sudo make install PREFIX=/opt/peercast` のようにします。
+  `peercast` と `rtmp-server` は `bin/` に一緒に入ります。PeerCast は、自分の実行ファイルと同じ
+  ディレクトリにある `rtmp-server` を起動するので、別々の場所に置かないでください。
+
+### RTMP 受信サーバーを C++ 版にする
+
+既定では Rust 版の `rtmp-server` がビルドされます。cargo が使えない環境などでは、C++ 版を選べます。
+
+```sh
+make WITH_RUST_RTMP=no
+```
+
+毎回指定したくないときは、`ui/linux/Makefile.local` に `WITH_RUST_RTMP = no` と書いておきます。
+Rust 版と C++ 版を切り替えるときは、先に `make clean` してください。
+
+## 3. テスト (任意)
+
+```sh
+cd ui/linux/tests && make && ./test-all      # PeerCast 本体の単体テスト
+cd rtmp-server-rs && cargo test --release    # Rust 版 rtmp-server のテスト
+```
 
 # 実行
 
@@ -73,50 +136,12 @@ peercast コマンドを起動したあと、ウェブブラウザで `http://lo
 を開くと操作できます。なお、設定ファイル `peercast.ini` は `~/.config/peercast/`
 ディレクトリに作られます。
 
-# MSYS2でのビルド
-
-MSYS2 を使って Windows (MinGW)版をビルドできます。`ui/mingui` ディレク
-トリで`make` してください。
-
-また、`ui/mingui/tests` ディレクトリで `make` すると一連の単体テストを
-実行するファイル `test-all.exe` が作成されます。
-
-掲示板ビューワなどの機能を動かすには `peercast.exe` が存在するディレク
-トリから見て `python\python.exe` に Tiny Python が配置されている必要
-があります。
-
-## ヒント
-
-MSYS2 には MSYS、MinGW 32ビット、MinGW 64ビットの3つの開発環境があり、
-それぞれの環境で異なるコンパイラが使用されます。
-
-32ビット版の`peercast.exe`を作成したい場合は `MinGW 32-bit` のターミナ
-ルから、64ビット版の場合は `MinGW 64-bit` のターミナルから作業します。
-`MSYS` ターミナルからは正常に動く peercast バイナリが作成できません。
-
-開発ツールチェイン、Ruby、Google Testなどの必要なソフトウェアは
-`pacman`経由でインストールします。
-
-パッケージ名は、64ビット版のパッケージには `mingw-w64-x86_64-` のプレ
-フィックスが、32ビット版は `mingw-w64-i686-` のプレフィックスが付いて
-います。
-
-なお、パッケージのダウンロードに10秒以上かかるとエラーになる不具合に遭
-遇した場合は `pacman` に `--disable-download-timeout` 引数を追加します。
-
 # RTMP fetchサポート
 
 RTMP をサポートするストリーミングサーバーからストリームを取得して配信
 チャンネルを作成したい場合、PeerCast YT が RTMP fetch サポート付きでビ
 ルドされている必要があります。
 
-サポートをオンにするには `Makefile` の先頭で `WITH_RTMP` 変数の値を
-`yes` にしてビルドします。`librtmp` をリンクする必要があるので、インス
-トールしておいてください。
-
-MinGW の場合は rtmpdump-git パッケージを以下のように（64ビットの場合)インストール
-してください。
-
-```
-pacman -S mingw-w64-x86_64-rtmpdump-git
-```
+Linux (`ui/linux`) では既定でオンです (`Makefile` の先頭の `WITH_RTMP = yes`)。
+`librtmp` をリンクする必要があるので、インストールしておいてください。
+使わない場合は `WITH_RTMP = no` にしてビルドします。

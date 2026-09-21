@@ -1,3 +1,7 @@
+> **注意:** CMake でビルドされる `rtmp-server` は従来の C++ 版です。Rust 版
+> (`rtmp-server-rs/`) をビルドするのは `ui/linux` の Makefile だけです。
+> 詳しくは [README.md](README.md) を参照してください。
+
 # Linuxでのビルド
 
 

@@ -12,10 +12,22 @@ PeerCast 本体との境界は今までと同じ (別プロセス + ループバ
 
 ## ビルドと差し替え
 
+`ui/linux` の Makefile では、これが既定のビルド対象です (ルートの README.md を参照)。
+
+    cd ui/linux
+    make                      # rtmp-server は Rust 版 (cargo が必要)
+    sudo make install         # /usr/local/bin に peercast と rtmp-server が入る
+
+C++ 版に戻すには `make WITH_RUST_RTMP=no` (切り替え時は先に `make clean`)。
+CMake と MSYS2 (`ui/mingui`) のビルドは、今のところ C++ 版のままです。
+
+単体でビルドして差し替える場合:
+
     cargo build --release
     cp target/release/rtmp-server  <peercast の実行ファイルと同じディレクトリ>/rtmp-server
 
-Rust 1.75 以降。外部クレートには依存しません。戻したいときは C++ 版のバイナリを置き直すだけです。
+Rust 1.75 以降 (1.75 で確認)。外部クレートには依存せず、ビルド中のネットワークアクセスも不要です。
+戻したいときは C++ 版のバイナリを置き直すだけです。
 
 ## 検証
 
