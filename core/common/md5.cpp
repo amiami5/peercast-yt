@@ -295,6 +295,7 @@ void MD5_Final(unsigned char *result, MD5_CTX *ctx)
 
 namespace md5 {
 
+#ifndef WITH_RUST_CORE
 std::string hexdigest(std::string str)
 {
     MD5_CTX ctx;
@@ -312,5 +313,6 @@ std::string hexdigest(std::string str)
 
     return charbuf;
 }
+#endif // WITH_RUST_CORE
 
 }

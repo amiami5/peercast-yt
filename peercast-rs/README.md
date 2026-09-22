@@ -34,6 +34,8 @@ Rust コード自体は普通のライブラリですが、`crate-type = ["stati
 | `str::ascii_dump`, `str::extension_without_dot`, `str::count` | 同上 |
 | `str::rstrip`, `str::strip`, `str::escapeshellarg_unix` | 同上 |
 | `str::to_lines`, `str::indent_tab`, `str::shellwords` | 同上 |
+| `md5::hexdigest` | `core/common/md5.cpp` (段階1c) |
+| `GnuID::toStr`, `GnuID::fromStr`, `GnuID::encode` | `core/common/gnuid.cpp` (同上、純粋な部分のみ) |
 
 ## C++ 版との違い
 
@@ -58,6 +60,20 @@ Rust コード自体は普通のライブラリですが、`crate-type = ["stati
 * **`unescape` が不正な `%XX` で未初期化の値を使う**: `%` の直後が 16 進数 2 桁でない場合
   (`%zz`, `%4` など)、C++ 版は `sscanf` の戻り値を確認せず、初期化していない変数の値を
   出力に混ぜていた。Rust 版は `%` をそのまま出力する。
+
+## 段階1c で追加したもの
+
+`md5::hexdigest` (RFC 1321 の MD5。`core/common/chanmgr.cpp` でリレー可否を決める認証
+トークンの生成に使われている) と、`GnuID` の `toStr`/`fromStr`/`encode` を移植した。
+`GnuID::generate`/`GnuID::random`/`GnuIDList` は `sys->rnd()` (乱数) や `sys->getTime()` に
+依存する状態持ちのクラスなので、この段階では対象にしていない。
+
+`GnuID::encode` は、IP アドレスを `Host*` から受け取るが、C++ 版の実装は
+`(unsigned char*)&h->ip` の**先頭4バイトのメモリ表現**をそのまま使っており、実際の IPv4
+アドレスのバイト列とは限らない (`IP` クラスの内部レイアウト次第)。Rust 版もこれをそのまま
+踏襲しているだけで、意味のある IP アドレスの計算はしていない。
+
+C++ 版との違いは見つからなかった (MD5、GnuID とも、既知の相違点なし)。
 
 ## C++ 版との違い (段階1b で追加で見つかったもの)
 
@@ -87,6 +103,7 @@ make
 ./diff --exhaustive3         # さらに長さ3バイトを全網羅 (1,677万通り、数十秒)
 ./diff_strutil                # str.cpp のその他の関数: 乱数20万組 (既定)
 ./diff_strutil --random 300000  # 比較件数780万件相当まで増やして実行
+./diff_md5_gnuid              # md5::hexdigest と GnuID: 乱数20万組 (既定)
 ```
 
 C++ 版の関数をそのままコンパイルしたもの (`WITH_RUST_CORE` を定義しない `cgi.cpp` / `str.cpp`) と、

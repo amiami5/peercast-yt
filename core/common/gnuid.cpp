@@ -21,6 +21,7 @@
 #include "sys.h" // sys
 
 // ---------------------------
+#ifndef WITH_RUST_CORE
 void GnuID::encode(Host *h, const char *salt1, const char *salt2, unsigned char salt3)
 {
     for (int i=0; i<16; i++)
@@ -64,8 +65,10 @@ void GnuID::encode(Host *h, const char *salt1, const char *salt2, unsigned char 
         id[i%16] = ipb;
     }
 }
+#endif // WITH_RUST_CORE
 
 // ---------------------------
+#ifndef WITH_RUST_CORE
 void GnuID::toStr(char *str) const
 {
     str[0] = 0;
@@ -78,8 +81,10 @@ void GnuID::toStr(char *str) const
         strcat(str, tmp);
     }
 }
+#endif // WITH_RUST_CORE
 
 // ---------------------------
+#ifndef WITH_RUST_CORE
 void GnuID::fromStr(const char *str)
 {
     clear();
@@ -98,6 +103,7 @@ void GnuID::fromStr(const char *str)
         id[i] = (unsigned char)strtoul(buf, nullptr, 16);
     }
 }
+#endif // WITH_RUST_CORE
 
 // ---------------------------
 void GnuID::generate(unsigned char flags)

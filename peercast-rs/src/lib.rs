@@ -11,7 +11,9 @@ pub mod cgi;
 pub mod entities;
 #[allow(unsafe_code)]
 pub mod ffi;
+pub mod gnuid;
 pub mod inspect;
+pub mod md5;
 pub mod strutil;
 pub mod url;
 pub mod utf8;

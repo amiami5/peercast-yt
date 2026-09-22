@@ -414,3 +414,61 @@ pub unsafe extern "C" fn pcrs_str_shellwords(s: *const u8, n: usize, out: *mut P
         }
     }
 }
+
+// ---------------------------------------------------------------- md5
+
+use crate::md5;
+
+bytes_to_buf!(pcrs_md5_hexdigest, md5::hexdigest);
+
+// ---------------------------------------------------------------- gnuid
+
+use crate::gnuid;
+
+/// `id_out` に大文字16進数32文字 (NUL終端なし) を書く。呼び出し側は33バイト以上用意すること。
+///
+/// # Safety
+/// `id` は16バイト、`out` は32バイト書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_gnuid_to_str(id: *const u8, out: *mut u8) {
+    // SAFETY: 呼び出し側が約束する (関数の Safety 節)
+    let id_arr: [u8; 16] = unsafe { std::slice::from_raw_parts(id, 16) }.try_into().unwrap();
+    let s = gnuid::to_str(&id_arr);
+    // SAFETY: 呼び出し側が約束する
+    unsafe { std::ptr::copy_nonoverlapping(s.as_ptr(), out, 32) };
+}
+
+/// # Safety
+/// `s` は `n` バイト読めること。`out` は16バイト書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_gnuid_from_str(s: *const u8, n: usize, out: *mut u8) {
+    // SAFETY: 関数の Safety 節
+    let id = gnuid::from_str(unsafe { input(s, n) });
+    // SAFETY: 呼び出し側が約束する
+    unsafe { std::ptr::copy_nonoverlapping(id.as_ptr(), out, 16) };
+}
+
+/// `id` (16バイト、入出力共用) を、IPアドレス (`has_ip` が真なら `ip` の下位4バイトを使う) と
+/// ソルトで撹拌する。C++ 版 `GnuID::encode` に相当。
+///
+/// # Safety
+/// `id` は16バイト読み書きできること。`ip` は非NULLなら4バイト読めること。
+/// `salt1`/`salt2` はそれぞれの長さ分読めること (長さ0ならNULLでもよい)。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_gnuid_encode(
+    id: *mut u8, ip: *const u8, has_ip: bool,
+    salt1: *const u8, salt1n: usize, salt2: *const u8, salt2n: usize, salt3: u8,
+) {
+    // SAFETY: 呼び出し側が約束する (関数の Safety 節)
+    let mut id_arr: [u8; 16] = unsafe { std::slice::from_raw_parts(id, 16) }.try_into().unwrap();
+    let ip_bytes = if has_ip {
+        // SAFETY: has_ip が真なら ip は4バイト読める (関数の Safety 節)
+        Some(unsafe { std::slice::from_raw_parts(ip, 4) }.try_into().unwrap())
+    } else {
+        None
+    };
+    // SAFETY: 関数の Safety 節
+    gnuid::encode(&mut id_arr, ip_bytes, unsafe { input(salt1, salt1n) }, unsafe { input(salt2, salt2n) }, salt3);
+    // SAFETY: 呼び出し側が約束する
+    unsafe { std::ptr::copy_nonoverlapping(id_arr.as_ptr(), id, 16) };
+}

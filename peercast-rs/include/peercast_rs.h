@@ -80,6 +80,16 @@ int      pcrs_str_count(const uint8_t *h, size_t hn, const uint8_t *nd, size_t n
 /* error_kind: 0=閉じていない '、1=閉じていない "、2=末尾の \\ */
 int      pcrs_str_shellwords(const uint8_t *s, size_t n, pcrs_vec *out, int *error_kind);
 
+/* md5 (core/common/md5.cpp) */
+pcrs_buf pcrs_md5_hexdigest(const uint8_t *s, size_t n);
+
+/* gnuid (core/common/gnuid.cpp の純粋な部分) */
+void pcrs_gnuid_to_str(const uint8_t *id /* 16 bytes */, uint8_t *out /* 32 bytes */);
+void pcrs_gnuid_from_str(const uint8_t *s, size_t n, uint8_t *out /* 16 bytes */);
+void pcrs_gnuid_encode(uint8_t *id /* 16 bytes, in/out */, const uint8_t *ip /* 4 bytes or NULL */,
+                        bool has_ip, const uint8_t *salt1, size_t salt1n,
+                        const uint8_t *salt2, size_t salt2n, uint8_t salt3);
+
 #ifdef __cplusplus
 }
 #endif

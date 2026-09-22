@@ -12,6 +12,9 @@
 #include "cgi.h"
 #include "common.h" // FormatException
 #include "peercast_rs.h"
+#include "gnuid.h" // GnuID
+#include "host.h" // Host
+#include "md5.h" // md5::hexdigest
 #include "str.h"
 
 namespace
@@ -301,5 +304,38 @@ std::string valid_utf8(const std::string& s)
 }
 
 } // namespace str
+
+#endif // WITH_RUST_CORE
+
+#ifdef WITH_RUST_CORE
+
+std::string md5::hexdigest(std::string str)
+{
+    return RustBuf(pcrs_md5_hexdigest(reinterpret_cast<const uint8_t*>(str.data()), str.size())).str();
+}
+
+void GnuID::toStr(char *str) const
+{
+    uint8_t buf[32];
+    pcrs_gnuid_to_str(id, buf);
+    memcpy(str, buf, 32);
+    str[32] = 0;
+}
+
+void GnuID::fromStr(const char *str)
+{
+    pcrs_gnuid_from_str(reinterpret_cast<const uint8_t*>(str), strlen(str), id);
+}
+
+void GnuID::encode(Host *h, const char *salt1, const char *salt2, unsigned char salt3)
+{
+    // Rust 版と同じ意味にするため、元の C++ 実装 ((unsigned char*)&h->ip の先頭4バイト) を
+    // そのまま踏襲する。IP アドレスとしての正しさではなく、既存のビット列との互換性が目的。
+    const uint8_t* ip_bytes = h ? reinterpret_cast<const uint8_t*>(&h->ip) : nullptr;
+    pcrs_gnuid_encode(id, ip_bytes, h != nullptr,
+                       reinterpret_cast<const uint8_t*>(salt1), salt1 ? strlen(salt1) : 0,
+                       reinterpret_cast<const uint8_t*>(salt2), salt2 ? strlen(salt2) : 0,
+                       salt3);
+}
 
 #endif // WITH_RUST_CORE
