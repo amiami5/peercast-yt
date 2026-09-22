@@ -27,6 +27,7 @@ std::string hexdump(const std::string& in)
     return res;
 }
 
+#ifndef WITH_RUST_CORE
 static std::string inspect(char c, bool utf8)
 {
     int d = static_cast<unsigned char>(c);
@@ -58,7 +59,9 @@ static std::string inspect(char c, bool utf8)
             + "0123456789abcdef"[d&0xf];
     }
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string inspect(const std::string& str)
 {
     bool utf8 = validate_utf8(str);
@@ -70,7 +73,9 @@ std::string inspect(const std::string& str)
     res += "\"";
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 static std::string json_inspect(char c)
 {
     int d = static_cast<unsigned char>(c);
@@ -99,7 +104,9 @@ static std::string json_inspect(char c)
             + "0123456789abcdef"[d&0xf];
     }
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string json_inspect(const std::string& str)
 {
     bool utf8 = validate_utf8(str);
@@ -116,6 +123,7 @@ std::string json_inspect(const std::string& str)
     res += "\"";
     return res;
 }
+#endif // WITH_RUST_CORE
 
 std::string repeat(const std::string& in, int n)
 {
@@ -203,6 +211,7 @@ std::vector<std::string> split(const std::string& in, const std::string& separat
     }
 }
 
+#ifndef WITH_RUST_CORE
 std::string codepoint_to_utf8(uint32_t codepoint)
 {
     std::string res;
@@ -229,6 +238,7 @@ std::string codepoint_to_utf8(uint32_t codepoint)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
 #include <stdarg.h>
 std::string format(const char* fmt, ...)
@@ -358,11 +368,13 @@ bool has_prefix(const std::string& subject, const std::string& prefix)
     return is_prefix_of(prefix, subject);
 }
 
+#ifndef WITH_RUST_CORE
 bool is_http_url(const std::string& url)
 {
     const std::string head = downcase(url.substr(0, 8));
     return has_prefix(head, "http://") || has_prefix(head, "https://");
 }
+#endif // WITH_RUST_CORE
 
 bool has_suffix(const std::string& subject, const std::string& suffix)
 {
@@ -523,6 +535,7 @@ std::string indent_tab(const std::string& text, int n)
     return join("", lines);
 }
 
+#ifndef WITH_RUST_CORE
 bool validate_utf8(const std::string& str)
 {
     auto it = str.begin();
@@ -570,7 +583,9 @@ bool validate_utf8(const std::string& str)
     }
     return true;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string truncate_utf8(const std::string& str, size_t length)
 {
     std::string dest;
@@ -634,7 +649,9 @@ std::string truncate_utf8(const std::string& str, size_t length)
 Error:
     throw std::invalid_argument("truncate_utf8: UTF-8 validation failed");
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string valid_utf8(const std::string& bytes)
 {
     if (str::validate_utf8(bytes))
@@ -653,6 +670,7 @@ std::string valid_utf8(const std::string& bytes)
         return escaped;
     }
 }
+#endif // WITH_RUST_CORE
 
 std::vector<std::string> shellwords(const std::string& str)
 {

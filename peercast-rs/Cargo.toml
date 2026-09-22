@@ -1,0 +1,25 @@
+[package]
+name = "peercast-rs"
+version = "0.1.0"
+edition = "2021"
+description = "PeerCast YT の C++ コードを段階的に置き換える Rust 実装 (C++ から静的ライブラリとして呼ぶ)"
+license = "GPL-2.0-or-later"
+publish = false
+
+# 外部クレートには依存しない (サプライチェーンの面積を増やさないため)。
+[dependencies]
+
+[lib]
+name = "peercast_rs"
+path = "src/lib.rs"
+# staticlib: C++ 側にリンクする。rlib: Rust のテスト用。
+crate-type = ["staticlib", "rlib"]
+
+# extern "C" 関数からの unwind は未定義動作 (Rust 1.81 未満) なので、panic は常に abort にする。
+[profile.release]
+opt-level = 3
+overflow-checks = true
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

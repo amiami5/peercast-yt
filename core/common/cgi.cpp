@@ -5,6 +5,7 @@
 namespace cgi {
 
 // URLエスケープする。
+#ifndef WITH_RUST_CORE
 std::string escape(const std::string& in)
 {
     std::string res;
@@ -25,7 +26,9 @@ std::string escape(const std::string& in)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string unescape(const std::string& in)
 {
     std::string res;
@@ -47,6 +50,7 @@ std::string unescape(const std::string& in)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
 Query::Query(const std::string& queryString)
 {
@@ -220,6 +224,7 @@ time_t parseHttpDate(const std::string& str)
     }
 }
 
+#ifndef WITH_RUST_CORE
 static const std::map<std::string,uint32_t> entities = {
     { "quot",     0x0022 },
     { "amp",      0x0026 },
@@ -575,7 +580,9 @@ std::string unescape_html(const std::string& input)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 bool isSafeLocalPath(const std::string& path)
 {
     if (path.empty() || path[0] != '/')
@@ -590,7 +597,9 @@ bool isSafeLocalPath(const std::string& path)
 
     return true;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string escape_html(const std::string& input)
 {
     std::string dest;
@@ -623,7 +632,9 @@ std::string escape_html(const std::string& input)
     }
     return dest;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string escape_javascript(const std::string& input)
 {
     std::string res;
@@ -655,5 +666,6 @@ std::string escape_javascript(const std::string& input)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
 } // namespace cgi

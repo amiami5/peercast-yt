@@ -1,13 +1,19 @@
 # Uncomment following line to enabled RTMP fetch support
 WITH_RTMP = yes
 
-# Which rtmp-server (the RTMP receiver) to build:
-#   yes (default) : the Rust version in ../../rtmp-server-rs (needs cargo)
-#   no            : the original C++ version in ../../rtmp-server
-# Change it on the command line (make WITH_RUST_RTMP=no) or in Makefile.local.
-# Run "make clean" when switching, since the output file name is the same.
-WITH_RUST_RTMP = yes
+# Use the Rust implementation (needs cargo).  See docs/rust-migration.md.
+#   make WITH_RUST=no    : build everything from the original C++ code
+# The parts can also be switched individually:
+#   WITH_RUST_RTMP       : rtmp-server (../../rtmp-server-rs instead of ../../rtmp-server)
+#   WITH_RUST_CORE       : parts of the core library (../../peercast-rs, linked into peercast)
+# Change them on the command line or in Makefile.local.  Run "make clean"
+# when switching, since the output file names are the same.
+WITH_RUST = yes
+WITH_RUST_RTMP = $(WITH_RUST)
+WITH_RUST_CORE = $(WITH_RUST)
 RUST_RTMP = ../../rtmp-server-rs
+RUST_CORE = ../../peercast-rs
+RUST_CORE_LIB = $(RUST_CORE)/target/release/libpeercast_rs.a
 CARGO ?= cargo
 
 CPPFLAGS = -g -Wall -std=c++11 -D_UNIX -D_REENTRANT -DADD_BACKTRACE $(INCLUDES) $(shell pkg-config openssl --cflags)
@@ -31,6 +37,13 @@ LINUXDEPLOY = linuxdeploy-$(ARCH).AppImage
 AR = ar
 
 INCLUDES = -I../../core/common -I../../core/unix
+
+ifeq ($(WITH_RUST_CORE),yes)
+  CPPFLAGS += -DWITH_RUST_CORE
+  INCLUDES += -I$(RUST_CORE)/include
+  LIBS += $(RUST_CORE_LIB)
+  RUST_CORE_DEP = $(RUST_CORE_LIB)
+endif
 
 TARGET = peercast
 RTMPSERVER = rtmp-server
@@ -127,7 +140,7 @@ clean:
 	$(MAKE) -C .. clean
 	rm -f $(LINUXOBJ) $(COREOBJ) $(SYSOBJ) $(TARGET) ${LIBOBJSTATIC} $(COREOBJSTATIC) $(DEPENDFILE) $(RTMPSERVER) $(RTMPOBJ)
 	rm -rf $(HTML) $(PUBLIC)
-	rm -rf $(RUST_RTMP)/target
+	rm -rf $(RUST_RTMP)/target $(RUST_CORE)/target
 	rm -rf peercast-yt/
 	rm -f $(DISTARCHIVE)
 
@@ -143,20 +156,28 @@ $(RTMPOBJ): %.o : $(RTMP)/%.cpp
 $(LIBOBJSTATIC): $(COREOBJ) $(SYSOBJ)
 	$(AR) rcs $(LIBOBJSTATIC) $(COREOBJ) $(SYSOBJ)
 
-$(TARGET): $(LINUXOBJ) $(LIBOBJSTATIC)
+$(TARGET): $(LINUXOBJ) $(LIBOBJSTATIC) $(RUST_CORE_DEP)
 	$(CXX) $(LDFLAGS) -o $@ $(LINUXOBJ) $(LIBOBJSTATIC) $(LIBS)
+
+define CHECK_CARGO
+	@command -v $(CARGO) >/dev/null 2>&1 || { \
+	  echo "error: '$(CARGO)' not found. Install Rust (e.g. 'sudo apt install cargo')," >&2; \
+	  echo "       or build without Rust: make WITH_RUST=no" >&2; \
+	  exit 1; }
+endef
+
+$(RUST_CORE_LIB): $(RUST_CORE)/Cargo.toml $(wildcard $(RUST_CORE)/src/*.rs) $(wildcard $(RUST_CORE)/include/*.h)
+	$(CHECK_CARGO)
+	$(CARGO) build --release --manifest-path $(RUST_CORE)/Cargo.toml
 
 ifeq ($(WITH_RUST_RTMP),yes)
 # Rust version: no dependency on the C++ core library or OpenSSL.
 $(RTMPSERVER): $(RUST_RTMP)/Cargo.toml $(wildcard $(RUST_RTMP)/src/*.rs)
-	@command -v $(CARGO) >/dev/null 2>&1 || { \
-	  echo "error: '$(CARGO)' not found. Install Rust (e.g. 'sudo apt install cargo')," >&2; \
-	  echo "       or build the C++ rtmp-server instead: make WITH_RUST_RTMP=no" >&2; \
-	  exit 1; }
+	$(CHECK_CARGO)
 	$(CARGO) build --release --manifest-path $(RUST_RTMP)/Cargo.toml
 	cp $(RUST_RTMP)/target/release/rtmp-server $@
 else
-$(RTMPSERVER): $(RTMPOBJ) $(LIBOBJSTATIC)
+$(RTMPSERVER): $(RTMPOBJ) $(LIBOBJSTATIC) $(RUST_CORE_DEP)
 	$(CXX) $(LDFLAGS) -o $@ $(RTMPOBJ) $(LIBOBJSTATIC) $(LIBS)
 endif
 
