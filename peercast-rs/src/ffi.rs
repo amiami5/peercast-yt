@@ -164,3 +164,253 @@ mod tests {
         }
     }
 }
+
+// ---------------------------------------------------------------- strutil (str.cpp 残り)
+
+use crate::strutil;
+
+macro_rules! two_bytes_to_buf {
+    ($name:ident, $f:path) => {
+        /// # Safety
+        /// `s`/`t` はそれぞれ `sn`/`tn` バイト読めること (0 なら NULL でもよい)。
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(s: *const u8, sn: usize, t: *const u8, tn: usize) -> PcrsBuf {
+            // SAFETY: 関数の Safety 節
+            into_buf($f(unsafe { input(s, sn) }, unsafe { input(t, tn) }))
+        }
+    };
+}
+
+bytes_to_buf!(pcrs_str_hexdump, strutil::hexdump);
+bytes_to_buf!(pcrs_str_upcase, strutil::upcase);
+bytes_to_buf!(pcrs_str_downcase, strutil::downcase);
+bytes_to_buf!(pcrs_str_capitalize, strutil::capitalize);
+two_bytes_to_buf!(pcrs_str_group_digits, strutil::group_digits);
+
+/// # Safety
+/// `s`/`t` はそれぞれ `sn`/`tn` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_contains(s: *const u8, sn: usize, t: *const u8, tn: usize) -> bool {
+    // SAFETY: 関数の Safety 節
+    strutil::contains(unsafe { input(s, sn) }, unsafe { input(t, tn) })
+}
+
+/// # Safety
+/// `s`/`t` はそれぞれ `sn`/`tn` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_has_prefix(s: *const u8, sn: usize, t: *const u8, tn: usize) -> bool {
+    // SAFETY: 関数の Safety 節
+    strutil::has_prefix(unsafe { input(s, sn) }, unsafe { input(t, tn) })
+}
+
+/// # Safety
+/// `s`/`t` はそれぞれ `sn`/`tn` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_has_suffix(s: *const u8, sn: usize, t: *const u8, tn: usize) -> bool {
+    // SAFETY: 関数の Safety 節
+    strutil::has_suffix(unsafe { input(s, sn) }, unsafe { input(t, tn) })
+}
+
+/// # Safety
+/// `s`/`prefix`/`repl` はそれぞれの長さ分読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_replace_prefix(
+    s: *const u8, sn: usize, prefix: *const u8, pn: usize, repl: *const u8, rn: usize,
+) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    into_buf(strutil::replace_prefix(unsafe { input(s, sn) }, unsafe { input(prefix, pn) }, unsafe { input(repl, rn) }))
+}
+
+/// # Safety
+/// `s`/`suffix`/`repl` はそれぞれの長さ分読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_replace_suffix(
+    s: *const u8, sn: usize, suffix: *const u8, fn_: usize, repl: *const u8, rn: usize,
+) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    into_buf(strutil::replace_suffix(unsafe { input(s, sn) }, unsafe { input(suffix, fn_) }, unsafe { input(repl, rn) }))
+}
+
+/// # Safety
+/// `s` は `n` バイト読めること。`repl` は `rn` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_ascii_dump(s: *const u8, n: usize, repl: *const u8, rn: usize) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    into_buf(strutil::ascii_dump(unsafe { input(s, n) }, unsafe { input(repl, rn) }))
+}
+
+bytes_to_buf!(pcrs_str_extension_without_dot, strutil::extension_without_dot);
+bytes_to_buf!(pcrs_str_rstrip, strutil::rstrip);
+bytes_to_buf!(pcrs_str_strip, strutil::strip);
+bytes_to_buf!(pcrs_str_escapeshellarg_unix, strutil::escapeshellarg_unix);
+
+/// 長さの一覧と、それらをつなげたバイト列。C++ 側で `size_t` の配列に沿って切り分ける。
+#[repr(C)]
+pub struct PcrsVec {
+    pub joined: PcrsBuf,
+    pub lens: *mut usize,
+    pub count: usize,
+}
+
+fn into_vec(parts: Vec<Vec<u8>>) -> PcrsVec {
+    let mut joined = Vec::new();
+    let mut lens: Vec<usize> = Vec::with_capacity(parts.len());
+    for p in &parts {
+        lens.push(p.len());
+        joined.extend_from_slice(p);
+    }
+    let count = lens.len();
+    let lens_box = lens.into_boxed_slice();
+    let lens_ptr = if count == 0 { std::ptr::null_mut() } else { Box::into_raw(lens_box) as *mut usize };
+    PcrsVec { joined: into_buf(joined), lens: lens_ptr, count }
+}
+
+/// # Safety
+/// `v` は `pcrs_str_*` の関数が返した `PcrsVec` で、まだ解放されていないこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_vec_free(v: PcrsVec) {
+    // SAFETY: into_buf/into_vec で作ったポインタと長さの組
+    unsafe { pcrs_buf_free(v.joined) };
+    if !v.lens.is_null() {
+        // SAFETY: into_vec で Box<[usize]> として確保したのと同じポインタと長さ
+        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(v.lens, v.count)) });
+    }
+}
+
+/// # Safety
+/// `s`/`sep` はそれぞれ `sn`/`sepn` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_split(s: *const u8, sn: usize, sep: *const u8, sepn: usize) -> PcrsVec {
+    // SAFETY: 関数の Safety 節
+    into_vec(strutil::split(unsafe { input(s, sn) }, unsafe { input(sep, sepn) }))
+}
+
+/// 成功で 0、`limit <= 0` なら -1。
+///
+/// # Safety
+/// `s`/`sep` はそれぞれの長さ分読めること。`out` は書き込める `PcrsVec` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_split_limit(
+    s: *const u8, sn: usize, sep: *const u8, sepn: usize, limit: i32, out: *mut PcrsVec,
+) -> i32 {
+    // SAFETY: 関数の Safety 節
+    match strutil::split_limit(unsafe { input(s, sn) }, unsafe { input(sep, sepn) }, limit) {
+        Some(parts) => {
+            #[allow(unsafe_code)]
+            unsafe {
+                out.write(into_vec(parts));
+            }
+            0
+        }
+        None => -1,
+    }
+}
+
+/// # Safety
+/// `delim` は `dn` バイト読めること。`parts_joined`/`parts_lens` は、それぞれ `parts_count` 個の
+/// 部分文字列を、長さの合計が `parts_joined_len` になるよう連結して表す。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_join(
+    delim: *const u8, dn: usize, parts_joined: *const u8, parts_joined_len: usize,
+    parts_lens: *const usize, parts_count: usize,
+) -> PcrsBuf {
+    // SAFETY: 呼び出し側が約束する (関数の Safety 節)
+    let joined = unsafe { input(parts_joined, parts_joined_len) };
+    // SAFETY: 呼び出し側が約束する
+    let lens = unsafe { input_usize(parts_lens, parts_count) };
+    let mut parts = Vec::with_capacity(parts_count);
+    let mut p = 0usize;
+    for &len in lens {
+        parts.push(joined[p..p + len].to_vec());
+        p += len;
+    }
+    into_buf(strutil::join(unsafe { input(delim, dn) }, &parts))
+}
+
+/// # Safety
+/// `ptr` は、長さが 0 でなければ、`len` 個の `usize` が読める有効なポインタであること。
+unsafe fn input_usize<'a>(ptr: *const usize, len: usize) -> &'a [usize] {
+    if len == 0 || ptr.is_null() {
+        &[]
+    } else {
+        // SAFETY: 呼び出し側が保証する (関数の Safety 節)
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    }
+}
+
+/// # Safety
+/// `text` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_to_lines(text: *const u8, n: usize) -> PcrsVec {
+    // SAFETY: 関数の Safety 節
+    into_vec(strutil::to_lines(unsafe { input(text, n) }))
+}
+
+/// 成功で 0、`n < 0` なら -1。
+///
+/// # Safety
+/// `text` は `tn` バイト読めること。`out` は書き込める `PcrsBuf` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_indent_tab(text: *const u8, tn: usize, n: i32, out: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    store(out, unsafe { input(text, tn) }.pipe_indent(n))
+}
+
+trait PipeIndent {
+    fn pipe_indent(&self, n: i32) -> Option<Vec<u8>>;
+}
+impl PipeIndent for [u8] {
+    fn pipe_indent(&self, n: i32) -> Option<Vec<u8>> {
+        strutil::indent_tab(self, n)
+    }
+}
+
+/// 成功で 0、`haystack`/`needle` が空文字列なら -1。
+///
+/// # Safety
+/// `h`/`nd` はそれぞれの長さ分読めること。`out` は書き込める `i32` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_count(h: *const u8, hn: usize, nd: *const u8, ndn: usize, out: *mut i32) -> i32 {
+    // SAFETY: 関数の Safety 節
+    match strutil::count(unsafe { input(h, hn) }, unsafe { input(nd, ndn) }) {
+        Some(n) => {
+            #[allow(unsafe_code)]
+            unsafe {
+                out.write(n);
+            }
+            0
+        }
+        None => -1,
+    }
+}
+
+/// 成功 (=単語数) は 0 以上、失敗は -1 で、`*error_kind` にどの種類の構文エラーかを書く
+/// (0: 閉じていないシングルクォート, 1: 閉じていないダブルクォート, 2: 末尾のバックスラッシュ)。
+///
+/// # Safety
+/// `s` は `n` バイト読めること。`out`/`error_kind` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_str_shellwords(s: *const u8, n: usize, out: *mut PcrsVec, error_kind: *mut i32) -> i32 {
+    // SAFETY: 関数の Safety 節
+    match strutil::shellwords(unsafe { input(s, n) }) {
+        Ok(words) => {
+            #[allow(unsafe_code)]
+            unsafe {
+                out.write(into_vec(words));
+            }
+            0
+        }
+        Err(msg) => {
+            let kind = match msg {
+                "Unterminated single-quoted string" => 0,
+                "Unterminated double-quoted string" => 1,
+                _ => 2,
+            };
+            #[allow(unsafe_code)]
+            unsafe {
+                error_kind.write(kind);
+            }
+            -1
+        }
+    }
+}

@@ -26,6 +26,14 @@ Rust コード自体は普通のライブラリですが、`crate-type = ["stati
 | `str::validate_utf8`, `str::truncate_utf8`, `str::valid_utf8` | `core/common/str.cpp` |
 | `str::codepoint_to_utf8`, `str::inspect`, `str::json_inspect` | 同上 |
 | `str::is_http_url` | 同上 |
+| `str::hexdump`, `str::repeat`, `str::group_digits` | 同上 (段階1b) |
+| `str::split` (2引数・3引数), `str::contains` | 同上 |
+| `str::replace_prefix`, `str::replace_suffix` | 同上 |
+| `str::upcase`, `str::downcase`, `str::capitalize` | 同上 |
+| `str::has_prefix`, `str::has_suffix`, `str::join` | 同上 |
+| `str::ascii_dump`, `str::extension_without_dot`, `str::count` | 同上 |
+| `str::rstrip`, `str::strip`, `str::escapeshellarg_unix` | 同上 |
+| `str::to_lines`, `str::indent_tab`, `str::shellwords` | 同上 |
 
 ## C++ 版との違い
 
@@ -51,13 +59,34 @@ Rust コード自体は普通のライブラリですが、`crate-type = ["stati
   (`%zz`, `%4` など)、C++ 版は `sscanf` の戻り値を確認せず、初期化していない変数の値を
   出力に混ぜていた。Rust 版は `%` をそのまま出力する。
 
+## C++ 版との違い (段階1b で追加で見つかったもの)
+
+* **`str::split` (2引数・3引数の両方) が NUL バイトで壊れる**: `p = in.c_str()`、
+  `sep = separator.c_str()` として `strstr`/`strlen` で処理しているため、C 文字列の終端規則に
+  引きずられる。
+  - **出力が NUL の手前で切り詰まる**: `haystack` に埋め込み NUL があると、最後の要素
+    (`std::string(p)`、長さを指定しないコンストラクタ) が NUL のところで切れる。
+  - **区切り文字列が NUL を含むと、その手前の部分だけで区切ってしまう**: 例えば区切りが
+    `"a\0bc"` なら、実際には 1 バイトの `"a"` で区切ったのと同じ動きになる。
+  - **区切り文字列が NUL から始まる (または空文字列) だと、無限ループしてメモリを使い果たす**:
+    `strstr(p, "")` は常に `p` 自身にマッチするため `p` が全く前進せず、`res` に空文字列を
+    延々と積み続けて `std::bad_alloc` で落ちる。**外部からの入力を区切り文字列に使う経路が
+    あれば、サービス拒否 (DoS) に使える。** 差分テストでこれを実際に再現し、
+    AddressSanitizer で `str::split` (str.cpp) が原因であることを特定した。
+  Rust 版はバイト列をそのまま扱うので、この 3 つとも起こらない。区切りが空文字列の場合は
+  (2引数版のみ) 入力全体を 1 要素として返す。`split_limit` は `limit` で必ず打ち切られるので、
+  区切りが実質空でも無限ループにはならない (空要素を `limit - 1` 個積んでから残り全体を返す。
+  これは Rust 版でも C++ 版と同じ動き)。
+
 ## 差分テスト
 
 ```sh
 cd tests/differential
 make
-./diff                       # 長さ 0〜2 バイトを全網羅 + 乱数 30 万件 + 全コードポイント
-./diff --exhaustive3         # さらに長さ 3 バイトを全網羅 (1,677 万通り、数十秒)
+./diff                       # cgi/str の UTF-8・エスケープ系: 長さ0〜2バイト全網羅+乱数30万件+全コードポイント
+./diff --exhaustive3         # さらに長さ3バイトを全網羅 (1,677万通り、数十秒)
+./diff_strutil                # str.cpp のその他の関数: 乱数20万組 (既定)
+./diff_strutil --random 300000  # 比較件数780万件相当まで増やして実行
 ```
 
 C++ 版の関数をそのままコンパイルしたもの (`WITH_RUST_CORE` を定義しない `cgi.cpp` / `str.cpp`) と、

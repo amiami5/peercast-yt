@@ -13,6 +13,7 @@ namespace str
 
 using namespace std;
 
+#ifndef WITH_RUST_CORE
 std::string hexdump(const std::string& in)
 {
     std::string res;
@@ -26,6 +27,7 @@ std::string hexdump(const std::string& in)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
 #ifndef WITH_RUST_CORE
 static std::string inspect(char c, bool utf8)
@@ -125,6 +127,7 @@ std::string json_inspect(const std::string& str)
 }
 #endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string repeat(const std::string& in, int n)
 {
     std::string res;
@@ -134,7 +137,9 @@ std::string repeat(const std::string& in, int n)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string group_digits(const std::string& in, const std::string& separator)
 {
     std::string tail;
@@ -159,7 +164,9 @@ std::string group_digits(const std::string& in, const std::string& separator)
     std::reverse(res.begin(), res.end());
     return res + tail;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::vector<std::string> split(const std::string& in, const std::string& separator)
 {
     std::vector<std::string> res;
@@ -183,7 +190,9 @@ std::vector<std::string> split(const std::string& in, const std::string& separat
         }
     }
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::vector<std::string> split(const std::string& in, const std::string& separator, int limit)
 {
     if (limit <= 0)
@@ -210,6 +219,7 @@ std::vector<std::string> split(const std::string& in, const std::string& separat
         }
     }
 }
+#endif // WITH_RUST_CORE
 
 #ifndef WITH_RUST_CORE
 std::string codepoint_to_utf8(uint32_t codepoint)
@@ -279,11 +289,14 @@ std::string vformat(const char* fmt, va_list ap)
     return res;
 }
 
+#ifndef WITH_RUST_CORE
 bool contains(const std::string& haystack, const std::string& needle)
 {
     return haystack.find(needle) != std::string::npos;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string replace_prefix(const std::string& s, const std::string& prefix, const std::string& replacement)
 {
     if (s.size() < prefix.size()) return s;
@@ -293,7 +306,9 @@ std::string replace_prefix(const std::string& s, const std::string& prefix, cons
     else
         return s;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string replace_suffix(const std::string& s, const std::string& suffix, const std::string& replacement)
 {
     if (s.size() < suffix.size()) return s;
@@ -303,7 +318,9 @@ std::string replace_suffix(const std::string& s, const std::string& suffix, cons
     else
         return s;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string upcase(const std::string& input)
 {
     std::string res;
@@ -316,7 +333,9 @@ std::string upcase(const std::string& input)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string downcase(const std::string& input)
 {
     std::string res;
@@ -329,7 +348,9 @@ std::string downcase(const std::string& input)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string capitalize(const std::string& input)
 {
     std::string res;
@@ -354,7 +375,10 @@ std::string capitalize(const std::string& input)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
+// is_prefix_of は has_prefix (Rust 版に置き換え済み) の実装にも使われるので、
+// WITH_RUST_CORE の有無にかかわらず常にコンパイルする。
 bool is_prefix_of(const std::string& prefix, const std::string& string)
 {
     if (string.size() < prefix.size())
@@ -363,10 +387,12 @@ bool is_prefix_of(const std::string& prefix, const std::string& string)
     return string.substr(0, prefix.size()) == prefix;
 }
 
+#ifndef WITH_RUST_CORE
 bool has_prefix(const std::string& subject, const std::string& prefix)
 {
     return is_prefix_of(prefix, subject);
 }
+#endif // WITH_RUST_CORE
 
 #ifndef WITH_RUST_CORE
 bool is_http_url(const std::string& url)
@@ -376,6 +402,7 @@ bool is_http_url(const std::string& url)
 }
 #endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 bool has_suffix(const std::string& subject, const std::string& suffix)
 {
     if (subject.size() < suffix.size())
@@ -383,7 +410,9 @@ bool has_suffix(const std::string& subject, const std::string& suffix)
 
     return subject.substr(subject.size() - suffix.size(), suffix.size()) == suffix;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string join(const std::string& delimiter, const std::vector<std::string>& vec)
 {
     std::string res;
@@ -397,7 +426,9 @@ std::string join(const std::string& delimiter, const std::vector<std::string>& v
 
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string ascii_dump(const std::string& in, const std::string& replacement)
 {
     std::string res;
@@ -411,7 +442,9 @@ std::string ascii_dump(const std::string& in, const std::string& replacement)
     }
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string extension_without_dot(const std::string& filename)
 {
     auto i = filename.rfind('.');
@@ -420,7 +453,9 @@ std::string extension_without_dot(const std::string& filename)
     else
         return filename.substr(i + 1);
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 int count(const std::string& haystack, const std::string& needle)
 {
     if (needle.empty())
@@ -436,7 +471,9 @@ int count(const std::string& haystack, const std::string& needle)
     }
     return n;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string rstrip(const std::string& str)
 {
     std::string res = str;
@@ -452,7 +489,9 @@ std::string rstrip(const std::string& str)
 
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string strip(const std::string& str)
 {
     auto it = str.begin();
@@ -475,7 +514,9 @@ std::string strip(const std::string& str)
 
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string escapeshellarg_unix(const std::string& str)
 {
     std::string buf = "\'";
@@ -490,12 +531,14 @@ std::string escapeshellarg_unix(const std::string& str)
     buf += "\'";
     return buf;
 }
+#endif // WITH_RUST_CORE
 
 std::string STR()
 {
     return "";
 }
 
+#ifndef WITH_RUST_CORE
 std::vector<std::string> to_lines(const std::string& text)
 {
     std::vector<std::string> res;
@@ -520,7 +563,9 @@ std::vector<std::string> to_lines(const std::string& text)
 
     return res;
 }
+#endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::string indent_tab(const std::string& text, int n)
 {
     if (n < 0)
@@ -534,6 +579,7 @@ std::string indent_tab(const std::string& text, int n)
 
     return join("", lines);
 }
+#endif // WITH_RUST_CORE
 
 #ifndef WITH_RUST_CORE
 bool validate_utf8(const std::string& str)
@@ -672,6 +718,7 @@ std::string valid_utf8(const std::string& bytes)
 }
 #endif // WITH_RUST_CORE
 
+#ifndef WITH_RUST_CORE
 std::vector<std::string> shellwords(const std::string& str)
 {
     std::vector<std::string> words;
@@ -745,5 +792,6 @@ std::vector<std::string> shellwords(const std::string& str)
     }
     return words;
 }
+#endif // WITH_RUST_CORE
 
 } // namespace str

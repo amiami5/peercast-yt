@@ -43,6 +43,43 @@ pcrs_buf pcrs_str_inspect(const uint8_t *s, size_t n);
 int      pcrs_str_json_inspect(const uint8_t *s, size_t n, pcrs_buf *out);
 bool     pcrs_str_is_http_url(const uint8_t *s, size_t n);
 
+/* strutil (core/common/str.cpp の一部) */
+typedef struct pcrs_vec {
+    pcrs_buf joined;   /* 全部の要素を連結したバイト列 */
+    size_t *lens;      /* 各要素の長さ (count 個)。count が 0 なら NULL でもよい */
+    size_t count;
+} pcrs_vec;
+
+void pcrs_vec_free(pcrs_vec v);
+
+pcrs_buf pcrs_str_hexdump(const uint8_t *s, size_t n);
+pcrs_buf pcrs_str_upcase(const uint8_t *s, size_t n);
+pcrs_buf pcrs_str_downcase(const uint8_t *s, size_t n);
+pcrs_buf pcrs_str_capitalize(const uint8_t *s, size_t n);
+pcrs_buf pcrs_str_group_digits(const uint8_t *s, size_t sn, const uint8_t *sep, size_t sepn);
+bool     pcrs_str_contains(const uint8_t *s, size_t sn, const uint8_t *t, size_t tn);
+bool     pcrs_str_has_prefix(const uint8_t *s, size_t sn, const uint8_t *t, size_t tn);
+bool     pcrs_str_has_suffix(const uint8_t *s, size_t sn, const uint8_t *t, size_t tn);
+pcrs_buf pcrs_str_replace_prefix(const uint8_t *s, size_t sn, const uint8_t *prefix, size_t pn,
+                                  const uint8_t *repl, size_t rn);
+pcrs_buf pcrs_str_replace_suffix(const uint8_t *s, size_t sn, const uint8_t *suffix, size_t fn_,
+                                  const uint8_t *repl, size_t rn);
+pcrs_buf pcrs_str_ascii_dump(const uint8_t *s, size_t n, const uint8_t *repl, size_t rn);
+pcrs_buf pcrs_str_extension_without_dot(const uint8_t *s, size_t n);
+pcrs_buf pcrs_str_rstrip(const uint8_t *s, size_t n);
+pcrs_buf pcrs_str_strip(const uint8_t *s, size_t n);
+pcrs_buf pcrs_str_escapeshellarg_unix(const uint8_t *s, size_t n);
+pcrs_vec pcrs_str_split(const uint8_t *s, size_t sn, const uint8_t *sep, size_t sepn);
+int      pcrs_str_split_limit(const uint8_t *s, size_t sn, const uint8_t *sep, size_t sepn,
+                               int limit, pcrs_vec *out);
+pcrs_buf pcrs_str_join(const uint8_t *delim, size_t dn, const uint8_t *parts_joined,
+                        size_t parts_joined_len, const size_t *parts_lens, size_t parts_count);
+pcrs_vec pcrs_str_to_lines(const uint8_t *text, size_t n);
+int      pcrs_str_indent_tab(const uint8_t *text, size_t tn, int n, pcrs_buf *out);
+int      pcrs_str_count(const uint8_t *h, size_t hn, const uint8_t *nd, size_t ndn, int32_t *out);
+/* error_kind: 0=閉じていない '、1=閉じていない "、2=末尾の \\ */
+int      pcrs_str_shellwords(const uint8_t *s, size_t n, pcrs_vec *out, int *error_kind);
+
 #ifdef __cplusplus
 }
 #endif

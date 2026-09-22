@@ -12,5 +12,6 @@ pub mod entities;
 #[allow(unsafe_code)]
 pub mod ffi;
 pub mod inspect;
+pub mod strutil;
 pub mod url;
 pub mod utf8;
