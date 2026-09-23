@@ -2289,6 +2289,10 @@ static C_STRS: &[&[u8]] = &[
     b"FILE\0", b"PCP\0", b"RTMP\0", b"PIPE\0", b".ram\0", b".m3u\0",
     // uptest
     b"Untried\0", b"Success\0", b"Error\0", b"invalid URL\0", b"unsupported protocol\0", b"URL already exists\0",
+    // servhs
+    b"text/html\0", b"text/css\0", b"image/jpeg\0", b"image/gif\0", b"image/png\0",
+    b"application/javascript; charset=utf-8\0", b"image/vnd.microsoft.icon\0",
+    b"HTTP/1.0 411 Length required\0", b"HTTP/1.0 400 Bad Request\0", b"HTTP/1.0 413 Request Entity Too Large\0",
 ];
 
 fn c_static(s: &'static [u8]) -> *const std::ffi::c_char {
@@ -3040,6 +3044,23 @@ mod tests_7b {
             c_static(chaninfo::protocol_str(p));
         }
     }
+
+    #[test]
+    fn servhs_strings_are_static() {
+        for v in [&b"application/ogg"[..], b"application/x-ogg", b"audio/mpeg", b"audio/x-mpeg", b"application/binary",
+                  b"application/x-peercast-pcp", b"audio/x-scpls", b"audio/mpegurl", b"audio/x-mpegurl", b"audio/m3u",
+                  b"text/plain"] {
+            c_static(servhs::icy_content_type(v).unwrap());
+        }
+        for f in [&b".htm"[..], b".css", b".jpg", b".gif", b".png", b".js", b".ico"] {
+            c_static(servhs::mime_type_for(f).unwrap());
+        }
+        for s in [&b""[..], b"-1", b"0", b"99999999"] {
+            if let Err((line, _)) = servhs::jrpc_body_length(s, 1 << 20) {
+                c_static(line.as_bytes());
+            }
+        }
+    }
 }
 
 // ---- jrpc (core/common/jrpc.cpp の JrpcApi) ----
@@ -3682,4 +3703,369 @@ pub unsafe extern "C" fn pcrs_jrpc_invoke(
         *what = into_buf(w);
     }
     r
+}
+
+// ---- servhs (core/common/servhs.cpp の要求の解釈と判断) ----
+
+use crate::servhs;
+
+/// `ptr` を `n` バイト読む。
+///
+/// # Safety
+/// `input` と同じ。
+unsafe fn bytes<'a>(ptr: *const u8, n: usize) -> &'a [u8] {
+    // SAFETY: 関数の Safety 節
+    unsafe { input(ptr, n) }
+}
+
+/// # Safety
+/// `out` は書けること。
+unsafe fn put(out: *mut PcrsBuf, v: Vec<u8>) {
+    // SAFETY: 関数の Safety 節
+    unsafe { *out = into_buf(v) };
+}
+
+/// `handshakeHTTP` の振り分け (`servhs::RequestKind` の番号)
+///
+/// # Safety
+/// `line` は `n` バイト、`password` は `pn` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_request_kind(line: *const u8, n: usize, password: *const u8, pn: usize) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe { servhs::request_kind(bytes(line, n), bytes(password, pn)) as i32 }
+}
+
+// `handshakeIncoming` の `stristr(buf, HTTP_PROTO1)`
+bytes_to_bool!(pcrs_servhs_is_http, servhs::is_http);
+
+// `ServMgr::isValidHtmlPath`
+bytes_to_bool!(pcrs_servhs_is_valid_html_path, servhs::is_valid_html_path);
+
+// `isDecimal`
+bytes_to_bool!(pcrs_servhs_is_decimal, servhs::is_decimal);
+
+/// `handshakeGET` の振り分け (`servhs::GetKind` の番号)。C++ 版が NUL を書く位置があれば `*has_cut` を
+/// true にして、`fn` からの位置 (-1 もある) を `*cut` に書く。
+///
+/// # Safety
+/// `path` は `n` バイト読め、`has_cut` と `cut` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_get_route(path: *const u8, n: usize, has_cut: *mut bool, cut: *mut isize) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let (kind, c) = servhs::get_route(bytes(path, n));
+        *has_cut = c.is_some();
+        *cut = c.unwrap_or(0);
+        kind as i32
+    }
+}
+
+/// `/admin.cgi` の引数。`pass=` と `song=` があれば true で、値を書く (`mount=` と `url=` はあれば
+/// `*has_*` を true にする)。false のときも出力は常に書く (`pcrs_buf_free` で返す)。
+///
+/// # Safety
+/// `fn_` は `n` バイト読め、出力はすべて書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_admin_cgi(
+    fn_: *const u8,
+    n: usize,
+    song: *mut PcrsBuf,
+    has_mount: *mut bool,
+    mount: *mut PcrsBuf,
+    has_url: *mut bool,
+    url: *mut PcrsBuf,
+) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let a = servhs::admin_cgi(bytes(fn_, n));
+        let ok = a.is_some();
+        let a = a.unwrap_or(servhs::AdminCgi { song: Vec::new(), mount: None, url: None });
+        *has_mount = a.mount.is_some();
+        *has_url = a.url.is_some();
+        put(song, a.song);
+        put(mount, a.mount.unwrap_or_default());
+        put(url, a.url.unwrap_or_default());
+        ok
+    }
+}
+
+/// `handshakePOST` の振り分け (`servhs::PostKind` の番号)。行が 3 つに分かれなければ -1。
+/// `*args` は常に書く。
+///
+/// # Safety
+/// `line` は `n` バイト読め、`args` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_post_route(line: *const u8, n: usize, args: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        match servhs::post_route(bytes(line, n)) {
+            Some((kind, a)) => {
+                put(args, a);
+                kind as i32
+            }
+            None => {
+                put(args, Vec::new());
+                -1
+            }
+        }
+    }
+}
+
+/// `handshakeGIV` のチャンネル ID
+///
+/// # Safety
+/// `line` は `n` バイト読め、`id` は 16 バイト書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_giv_id(line: *const u8, n: usize, id: *mut u8) {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let v = servhs::giv_id(bytes(line, n));
+        std::ptr::copy_nonoverlapping(v.as_ptr(), id, 16);
+    }
+}
+
+/// `handshakeSOURCE`。ICY の行ならパスワードがあるので true。出力は常に書く。
+///
+/// # Safety
+/// `line` は `n` バイト読め、`password` と `mount` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_source(line: *const u8, n: usize, password: *mut PcrsBuf, mount: *mut PcrsBuf) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let s = servhs::source(bytes(line, n));
+        let has = s.password.is_some();
+        put(password, s.password.unwrap_or_default());
+        put(mount, s.mount);
+        has
+    }
+}
+
+/// `Servent::hasValidAuthToken`
+///
+/// # Safety
+/// `s` は `n` バイト、`broadcast_id` は 16 バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_valid_auth_token(s: *const u8, n: usize, broadcast_id: *const u8) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let mut bcid = [0u8; 16];
+        std::ptr::copy_nonoverlapping(broadcast_id, bcid.as_mut_ptr(), 16);
+        servhs::valid_auth_token(bytes(s, n), &bcid)
+    }
+}
+
+/// `handshakeAuth` の Cookie ヘッダー。0 見つからない、1 見つかった (`*id` に値)、2 `=` のない組が
+/// あった。`*id` は常に書く。
+///
+/// # Safety
+/// `header` は `n` バイト読め、`id` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_cookie_id(header: *const u8, n: usize, port: u16, id: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        match servhs::cookie_id(bytes(header, n), port) {
+            servhs::CookieParse::NotFound => {
+                put(id, Vec::new());
+                0
+            }
+            servhs::CookieParse::Found(v) => {
+                put(id, v);
+                1
+            }
+            servhs::CookieParse::Invalid => {
+                put(id, Vec::new());
+                2
+            }
+        }
+    }
+}
+
+/// `nextCGIarg` を最後まで繰り返したもの。名前と値を交互に並べる。
+///
+/// # Safety
+/// `cmd` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_cgi_args(cmd: *const u8, n: usize) -> PcrsVec {
+    // SAFETY: 関数の Safety 節
+    let args = servhs::cgi_args(unsafe { bytes(cmd, n) });
+    into_vec(args.into_iter().flat_map(|(k, v)| [k, v]).collect())
+}
+
+/// `CMD_apply` の引数を読み、行うことを順に `op` で知らせる (`servhs::ApplyKey` の番号、数、文字列)。
+///
+/// # Safety
+/// `cmd` は `n` バイト読めること。`op` は例外を投げないこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_apply_ops(
+    cmd: *const u8,
+    n: usize,
+    ctx: *mut c_void,
+    op: unsafe extern "C" fn(ctx: *mut c_void, key: i32, value: i32, s: *const u8, len: usize),
+) {
+    // SAFETY: 関数の Safety 節
+    for o in servhs::apply_ops(unsafe { bytes(cmd, n) }) {
+        // SAFETY: 関数の Safety 節
+        unsafe { op(ctx, o.key as i32, o.int, o.str.as_ptr(), o.str.len()) };
+    }
+}
+
+/// `CMD_redirect` の飛び先。`url=` がなければ false (`*out` は空)。
+///
+/// # Safety
+/// `cmd` は `n` バイト読め、`out` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_redirect_url(cmd: *const u8, n: usize, out: *mut PcrsBuf) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let r = servhs::redirect_url(bytes(cmd, n));
+        let ok = r.is_some();
+        put(out, r.unwrap_or_default());
+        ok
+    }
+}
+
+/// `CMD_chooseLanguage` の Referer の書き換え。見つからなければ false (`*out` は空)。
+///
+/// # Safety
+/// `referer` と `path` はそれぞれの長さ読め、`out` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_rewrite_referer(
+    referer: *const u8,
+    n: usize,
+    path: *const u8,
+    pn: usize,
+    out: *mut PcrsBuf,
+) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let r = servhs::rewrite_referer(bytes(referer, n), bytes(path, pn));
+        let ok = r.is_some();
+        put(out, r.unwrap_or_default());
+        ok
+    }
+}
+
+/// `readICYHeader` のヘッダーの行が何か (`servhs::IcyHeader` の番号)
+///
+/// # Safety
+/// `line` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_icy_header(line: *const u8, n: usize) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe { servhs::icy_header(bytes(line, n)) as i32 }
+}
+
+/// `readICYHeader` の content-type の種類 ("OGG" などか、"PCP")。当てはまらなければ NULL。
+///
+/// # Safety
+/// `value` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_icy_content_type(value: *const u8, n: usize) -> *const std::ffi::c_char {
+    // SAFETY: 関数の Safety 節
+    match servhs::icy_content_type(unsafe { bytes(value, n) }) {
+        Some(t) => c_static(t),
+        None => std::ptr::null(),
+    }
+}
+
+/// `Servent::fileNameToMimeType`。当てはまらなければ NULL。
+///
+/// # Safety
+/// `name` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_mime_type(name: *const u8, n: usize) -> *const std::ffi::c_char {
+    // SAFETY: 関数の Safety 節
+    match servhs::mime_type_for(unsafe { bytes(name, n) }) {
+        Some(t) => c_static(t),
+        None => std::ptr::null(),
+    }
+}
+
+/// `handshakeLocalFile` のページの種類 (`servhs::LocalPage` の番号) と、`?` の後ろの `id`。
+///
+/// # Safety
+/// `fn_` は `n` バイト読め、`split_ok` と `id` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_local_file(fn_: *const u8, n: usize, split_ok: *mut bool, id: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let f = servhs::local_file(bytes(fn_, n));
+        *split_ok = f.split_ok;
+        put(id, f.id);
+        f.page as i32
+    }
+}
+
+/// `handshakeLocalFile` の `String fileName = documentRoot; fileName.append(fn)`
+///
+/// # Safety
+/// `root` と `fn_` はそれぞれの長さ読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_local_file_name(root: *const u8, rn: usize, fn_: *const u8, n: usize) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    into_buf(servhs::local_file_name(unsafe { bytes(root, rn) }, unsafe { bytes(fn_, n) }))
+}
+
+/// `invokeCGIScript` の SERVER_NAME。Host ヘッダーが `名前:ポート` の形でなければ false。
+///
+/// # Safety
+/// `host` は `n` バイト読め、`out` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_cgi_server_name(host: *const u8, n: usize, out: *mut PcrsBuf) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let r = servhs::cgi_server_name(bytes(host, n));
+        let ok = r.is_some();
+        put(out, r.unwrap_or_default());
+        ok
+    }
+}
+
+/// CGI スクリプトの出力のヘッダーの行。形が合わなければ false。出力は常に書く。
+///
+/// # Safety
+/// `line` は `n` バイト読め、`name` と `value` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_cgi_header_line(line: *const u8, n: usize, name: *mut PcrsBuf, value: *mut PcrsBuf) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        match servhs::cgi_header_line(bytes(line, n)) {
+            Some((k, v)) => {
+                put(name, k);
+                put(value, v);
+                true
+            }
+            None => {
+                put(name, Vec::new());
+                put(value, Vec::new());
+                false
+            }
+        }
+    }
+}
+
+/// `handshakeJRPC` の本体の長さ。だめなら負の数 (-411、-400、-413) で、`*status_line` に返す状態の行。
+///
+/// # Safety
+/// `s` は `n` バイト読め、`status_line` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servhs_jrpc_body_length(
+    s: *const u8,
+    n: usize,
+    max: i32,
+    status_line: *mut *const std::ffi::c_char,
+) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        match servhs::jrpc_body_length(bytes(s, n), max) {
+            Ok(len) => {
+                *status_line = std::ptr::null();
+                len
+            }
+            Err((line, code)) => {
+                *status_line = c_static(line.as_bytes());
+                -code
+            }
+        }
+    }
 }

@@ -36,11 +36,18 @@
 #include "portcheck.h"
 #include "json.hpp"
 #include "cgi.h"
+#ifdef WITH_RUST_CORE
+#include "peercast_rs.h"
+#endif
 
 // -----------------------------------
 // -----------------------------------
 bool ServMgr::isValidHtmlPath(const std::string& path)
 {
+#ifdef WITH_RUST_CORE
+    // 判断は Rust (peercast-rs の src/servhs.rs)
+    return pcrs_servhs_is_valid_html_path(reinterpret_cast<const uint8_t*>(path.data()), path.size());
+#else
     static const std::string prefix = "html/";
 
     if (path.compare(0, prefix.size(), prefix) != 0)
@@ -58,6 +65,7 @@ bool ServMgr::isValidHtmlPath(const std::string& path)
             return false;
     }
     return true;
+#endif
 }
 
 ServMgr::ServMgr()

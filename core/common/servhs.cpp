@@ -48,7 +48,26 @@ using namespace std;
 
 static bool isDecimal(const std::string& str);
 
+#ifdef WITH_RUST_CORE
+// 要求の解釈と判断 (パスの振り分け、CGI の引数、Cookie ヘッダーなど) は Rust (peercast-rs の
+// src/servhs.rs)。ソケットの読み書きと、サーバーやチャンネルの状態を触ることはここに残る。
+#include "rustbridge.h"
+
+static const uint8_t* u8(const char* s) { return reinterpret_cast<const uint8_t*>(s); }
+
+// nextCGIarg を最後まで繰り返したもの (名前と値)
+static std::vector<std::pair<std::string, std::string>> cgiArgs(const char* cmd)
+{
+    auto v = rustbridge::takeVec(pcrs_servhs_cgi_args(u8(cmd), strlen(cmd)));
+    std::vector<std::pair<std::string, std::string>> res;
+    for (size_t i = 0; i + 1 < v.size(); i += 2)
+        res.push_back({ v[i], v[i + 1] });
+    return res;
+}
+#endif
+
 // -----------------------------------
+#ifndef WITH_RUST_CORE
 static void termArgs(char *str)
 {
     if (str)
@@ -58,6 +77,7 @@ static void termArgs(char *str)
             if (str[i]=='&') str[i] = 0;
     }
 }
+#endif
 
 // -----------------------------------
 const char *nextCGIarg(const char *cp, char *cmd, char *arg)
@@ -116,6 +136,14 @@ int getCGIargINT(char *a)
 // -----------------------------------
 void Servent::handshakeJRPC(HTTP &http)
 {
+#ifdef WITH_RUST_CORE
+    string lenstr = http.headers.get("Content-Length");
+    const char* statusLine = nullptr;
+    int content_length = pcrs_servhs_jrpc_body_length(u8(lenstr.c_str()), strlen(lenstr.c_str()),
+                                                      HTTP::MAX_REQUEST_BODY, &statusLine);
+    if (content_length < 0)
+        throw HTTPException(statusLine, -content_length);
+#else
     int content_length = -1;
 
     string lenstr = http.headers.get("Content-Length");
@@ -131,6 +159,7 @@ void Servent::handshakeJRPC(HTTP &http)
     // content_length + 1 のオーバーフローや、巨大なメモリ確保を防ぐ。
     if (content_length > HTTP::MAX_REQUEST_BODY)
         throw HTTPException("HTTP/1.0 413 Request Entity Too Large", 413);
+#endif
 
     unique_ptr<char[]> body(new char[content_length + 1]);
     try {
@@ -157,6 +186,9 @@ void Servent::handshakeJRPC(HTTP &http)
 // -----------------------------------
 bool Servent::hasValidAuthToken(const std::string& requestFilename)
 {
+#ifdef WITH_RUST_CORE
+    return pcrs_servhs_valid_auth_token(u8(requestFilename.data()), requestFilename.size(), chanMgr->broadcastID.id);
+#else
     auto vec = str::split(requestFilename, "?");
 
     if (vec.size() != 2)
@@ -174,6 +206,7 @@ bool Servent::hasValidAuthToken(const std::string& requestFilename)
     }
 
     return false;
+#endif
 }
 
 // -----------------------------------
@@ -206,12 +239,22 @@ void Servent::invokeCGIScript(HTTP &http, const char* fn)
     // Host ヘッダーは利用者が自由に設定できるので、全体が host:port の形の
     // ときだけ SERVER_NAME に使う (部分一致だと "a b c:80" なども通ってしまう)。
     // SERVER_PORT は Host ではなく、実際に待ち受けているポートにする。
+#ifdef WITH_RUST_CORE
+    std::string hostHeader = req.headers.get("Host");
+    rustbridge::RustBuf serverName;
+    if (pcrs_servhs_cgi_server_name(u8(hostHeader.data()), hostHeader.size(), serverName.out()))
+    {
+        env.set("SERVER_NAME", serverName.str());
+        env.set("SERVER_PORT", std::to_string(servMgr->serverHost.port));
+    }else
+#else
     if (!Regexp("^[A-Za-z0-9\\-_.]+:\\d+$").exec(req.headers.get("Host")).empty())
     {
         auto v = str::split(req.headers.get("Host"), ":");
         env.set("SERVER_NAME", v[0]);
         env.set("SERVER_PORT", std::to_string(servMgr->serverHost.port));
     }else
+#endif
     {
         LOG_ERROR("Host header missing");
         env.set("SERVER_NAME", servMgr->serverHost.str(false));
@@ -244,17 +287,30 @@ void Servent::invokeCGIScript(HTTP &http, const char* fn)
     HTTPHeaders headers;
     int statusCode = 200;
     try {
+#ifndef WITH_RUST_CORE
         Regexp headerPattern("^([A-Za-z\\-]+):\\s*(.*)$");
+#endif
         std::string line;
         while ((line = stream.readLine(8192)) != "")
         {
             LOG_DEBUG("Line: %s", line.c_str());
+#ifdef WITH_RUST_CORE
+            // ヘッダーの行 (^([A-Za-z\-]+):\s*(.*)$) の解釈は Rust
+            rustbridge::RustBuf name, value;
+            if (!pcrs_servhs_cgi_header_line(u8(line.data()), line.size(), name.out(), value.out()))
+            {
+                LOG_ERROR("Invalid header: \"%s\"", line.c_str());
+                continue;
+            }
+            std::vector<std::string> caps = { line, name.str(), value.str() };
+#else
             auto caps = headerPattern.exec(line);
             if (caps.size() == 0)
             {
                 LOG_ERROR("Invalid header: \"%s\"", line.c_str());
                 continue;
             }
+#endif
             if (str::capitalize(caps[1]) == "Status")
                 statusCode = atoi(caps[2].c_str());
             else
@@ -291,11 +347,22 @@ void Servent::handshakeGET(HTTP &http)
 {
     char *fn = http.cmdLine + 4;
 
+#ifdef WITH_RUST_CORE
+    // パスの振り分けは Rust。C++ 版と同じく、パスの後ろの " HTTP/1." の手前に NUL を書く。
+    bool hasCut = false;
+    ptrdiff_t cut = 0;
+    const int route = pcrs_servhs_get_route(u8(fn), strlen(fn), &hasCut, &cut);
+    if (hasCut)
+        fn[cut] = 0;
+#define GET_ROUTE(kind, cond) (route == (kind))
+#else
     char *pt = strstr(fn, HTTP_PROTO1);
     if (pt)
         pt[-1] = 0;
+#define GET_ROUTE(kind, cond) (cond)
+#endif
 
-    if (strncmp(fn, "/admin?", 7) == 0)
+    if (GET_ROUTE(PCRS_GET_ADMIN, strncmp(fn, "/admin?", 7) == 0))
     {
         // フォーム投稿用エンドポイント
 
@@ -304,7 +371,7 @@ void Servent::handshakeGET(HTTP &http)
 
         LOG_DEBUG("Admin client");
         handshakeCMD(http, fn+7);
-    }else if (strncmp(fn, "/admin/?", 8) == 0)
+    }else if (GET_ROUTE(PCRS_GET_ADMIN_SLASH, strncmp(fn, "/admin/?", 8) == 0))
     {
         // 上に同じ
 
@@ -313,7 +380,7 @@ void Servent::handshakeGET(HTTP &http)
 
         LOG_DEBUG("Admin client");
         handshakeCMD(http, fn+8);
-    }else if (strcmp(fn, "/html/index.html") == 0)
+    }else if (GET_ROUTE(PCRS_GET_HTML_INDEX, strcmp(fn, "/html/index.html") == 0))
     {
         // PeerCastStation が "/" を "/html/index.html" に 301 Moved
         // でリダイレクトするので、ブラウザによっては無期限にキャッシュされる。
@@ -323,7 +390,7 @@ void Servent::handshakeGET(HTTP &http)
         http.writeLine(HTTP_SC_FOUND);
         http.writeLineF("Location: /");
         http.writeLine("");
-    }else if (strncmp(fn, "/html/", 6) == 0)
+    }else if (GET_ROUTE(PCRS_GET_HTML, strncmp(fn, "/html/", 6) == 0))
     {
         // HTML UI
 
@@ -334,13 +401,48 @@ void Servent::handshakeGET(HTTP &http)
 
         if (handshakeAuth(http, fn))
             handshakeLocalFile(dirName, http);
-    }else if (strncmp(fn, "/admin.cgi", 10) == 0)
+    }else if (GET_ROUTE(PCRS_GET_ADMIN_CGI, strncmp(fn, "/admin.cgi", 10) == 0))
     {
         // ShoutCast トラック情報更新用エンドポイント
 
         if (!isAllowed(ALLOW_BROADCAST))
             throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
 
+#ifdef WITH_RUST_CORE
+        // 引数 (pass=、song=、mount=、url=) の解釈は Rust。C++ 版と同じく、パスワードの中身は確かめない。
+        rustbridge::RustBuf song, mount, url;
+        bool hasMount = false, hasUrl = false;
+        if (pcrs_servhs_admin_cgi(u8(fn), strlen(fn), song.out(), &hasMount, mount.out(), &hasUrl, url.out()))
+        {
+            const std::string songArg = song.str(), mountArg = mount.str(), urlArg = url.str();
+            auto c = chanMgr->channel;
+            while (c)
+            {
+                if ((c->status == Channel::S_BROADCASTING) &&
+                    (c->info.contentType == ChanInfo::T_MP3) )
+                {
+                    // if we have a mount point then check for it, otherwise update all channels.
+
+                    bool match=true;
+
+                    if (hasMount)
+                        match = strcmp(c->mount, mountArg.c_str()) == 0;
+
+                    if (match)
+                    {
+                        ChanInfo newInfo = c->info;
+                        newInfo.track.title = cgi::unescape(songArg).c_str();
+
+                        if (hasUrl && !urlArg.empty())
+                            newInfo.track.contact.set(urlArg.c_str(), String::T_ESC);
+                        LOG_INFO("Channel Shoutcast update: %s", songArg.c_str());
+                        c->updateInfo(newInfo);
+                    }
+                }
+                c = c->next;
+            }
+        }
+#else
         const char *pwdArg = getCGIarg(fn, "pass=");
         const char *songArg = getCGIarg(fn, "song=");
         const char *mountArg = getCGIarg(fn, "mount=");
@@ -380,7 +482,8 @@ void Servent::handshakeGET(HTTP &http)
                 c = c->next;
             }
         }
-    }else if (strncmp(fn, "/pls/", 5) == 0)
+#endif
+    }else if (GET_ROUTE(PCRS_GET_PLS, strncmp(fn, "/pls/", 5) == 0))
     {
         // プレイリスト
 
@@ -399,7 +502,7 @@ void Servent::handshakeGET(HTTP &http)
             http.readHeaders();
             throw HTTPException(HTTP_SC_NOTFOUND, 404);
         }
-    }else if (strncmp(fn, "/stream/", 8) == 0)
+    }else if (GET_ROUTE(PCRS_GET_STREAM, strncmp(fn, "/stream/", 8) == 0))
     {
         // ストリーム
 
@@ -408,14 +511,14 @@ void Servent::handshakeGET(HTTP &http)
                 throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
 
         triggerChannel(fn+8, ChanInfo::SP_HTTP, isPrivate() || hasValidAuthToken(fn+8));
-    }else if (strncmp(fn, "/channel/", 9) == 0)
+    }else if (GET_ROUTE(PCRS_GET_CHANNEL, strncmp(fn, "/channel/", 9) == 0))
     {
         if (!sock->host.isLocalhost())
             if (!isAllowed(ALLOW_NETWORK) || !isFiltered(ServFilter::F_NETWORK))
                 throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
 
         triggerChannel(fn+9, ChanInfo::SP_PCP, false);
-    }else if (strcmp(fn, "/api/1") == 0)
+    }else if (GET_ROUTE(PCRS_GET_API1, strcmp(fn, "/api/1") == 0))
     {
         // JSON RPC バージョン情報取得用
 
@@ -430,8 +533,8 @@ void Servent::handshakeGET(HTTP &http)
         http.writeLineF("%s %zu", HTTP_HS_LENGTH, response.size());
         http.writeLine("");
         http.writeString(response.c_str());
-    }else if (strcmp(fn, "/public")== 0 ||
-              strncmp(fn, "/public/", strlen("/public/"))==0)
+    }else if (GET_ROUTE(PCRS_GET_PUBLIC, strcmp(fn, "/public")== 0 ||
+                                         strncmp(fn, "/public/", strlen("/public/"))==0))
     {
         // 公開ディレクトリ
 
@@ -451,7 +554,7 @@ void Servent::handshakeGET(HTTP &http)
             LOG_ERROR("Error: %s", e.msg);
             throw HTTPException(HTTP_SC_SERVERERROR, 500);
         }
-    }else if (str::is_prefix_of("/assets/", fn))
+    }else if (GET_ROUTE(PCRS_GET_ASSETS, str::is_prefix_of("/assets/", fn)))
     {
         // html と public の共有アセット。
 
@@ -465,14 +568,15 @@ void Servent::handshakeGET(HTTP &http)
             LOG_ERROR("Error: %s", e.msg);
             throw HTTPException(HTTP_SC_SERVERERROR, 500);
         }
-    }else if (str::is_prefix_of("/cgi-bin/", fn))
+    }else if (GET_ROUTE(PCRS_GET_CGI_BIN, str::is_prefix_of("/cgi-bin/", fn)) ||
+              GET_ROUTE(PCRS_GET_CGI_BIN_FLV, false))
     {
         // CGI スクリプトの実行
 
         if (!isAllowed(ALLOW_HTML))
             throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
 
-        if (str::has_prefix(fn, "/cgi-bin/flv.cgi"))
+        if (GET_ROUTE(PCRS_GET_CGI_BIN_FLV, str::has_prefix(fn, "/cgi-bin/flv.cgi")))
         {
             if (!isPrivate() || !isFiltered(ServFilter::F_DIRECT))
                 throw HTTPException(HTTP_SC_FORBIDDEN, 403);
@@ -485,7 +589,7 @@ void Servent::handshakeGET(HTTP &http)
         {
             invokeCGIScript(http, fn);
         }
-    }else if (str::is_prefix_of("/cmd?", fn))
+    }else if (GET_ROUTE(PCRS_GET_CMD, str::is_prefix_of("/cmd?", fn)))
     {
         if (!isAllowed(ALLOW_HTML))
             throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
@@ -584,6 +688,7 @@ void Servent::handshakeGET(HTTP &http)
         http.writeLineF("Location: /%s/index.html", servMgr->htmlPath);
         http.writeLine("");
     }
+#undef GET_ROUTE
 }
 
 // -----------------------------------
@@ -591,6 +696,15 @@ void Servent::handshakeGET(HTTP &http)
 #include <limits>
 void Servent::handshakePOST(HTTP &http)
 {
+#ifdef WITH_RUST_CORE
+    // 要求の行の解釈は Rust
+    rustbridge::RustBuf argsBuf;
+    const int route = pcrs_servhs_post_route(u8(http.cmdLine), strlen(http.cmdLine), argsBuf.out());
+    if (route < 0)
+        throw HTTPException(HTTP_SC_BADREQUEST, 400);
+    std::string args = argsBuf.str();
+#define POST_ROUTE(kind, cond) (route == (kind))
+#else
     auto vec = str::split(http.cmdLine, " ");
     if (vec.size() != 3)
         throw HTTPException(HTTP_SC_BADREQUEST, 400);
@@ -602,8 +716,10 @@ void Servent::handshakePOST(HTTP &http)
         args = vec2[1];
 
     std::string path = vec2[0];
+#define POST_ROUTE(kind, cond) (cond)
+#endif
 
-    if (path == "/api/1")
+    if (POST_ROUTE(PCRS_POST_API1, path == "/api/1"))
     {
         // JSON API
 
@@ -612,7 +728,7 @@ void Servent::handshakePOST(HTTP &http)
 
         if (handshakeAuth(http, args.c_str(), true))
             handshakeJRPC(http);
-    }else if (path == "/")
+    }else if (POST_ROUTE(PCRS_POST_PUSH, path == "/"))
     {
         // HTTP Push
 
@@ -623,7 +739,7 @@ void Servent::handshakePOST(HTTP &http)
             throw HTTPException(HTTP_SC_FORBIDDEN, 403);
 
         handshakeHTTPPush(args);
-    }else if (path == "/admin")
+    }else if (POST_ROUTE(PCRS_POST_ADMIN, path == "/admin"))
     {
         if (!isAllowed(ALLOW_HTML))
             throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
@@ -692,6 +808,7 @@ void Servent::handshakePOST(HTTP &http)
         http.readHeaders();
         throw HTTPException(HTTP_SC_BADREQUEST, 400);
     }
+#undef POST_ROUTE
 }
 
 // -----------------------------------
@@ -705,8 +822,12 @@ void Servent::handshakeGIV(const char *requestLine)
     GnuID id;
 
     auto *idstr = strstr(requestLine, "/");
+#ifdef WITH_RUST_CORE
+    pcrs_servhs_giv_id(u8(requestLine), strlen(requestLine), id.id);
+#else
     if (idstr)
         id.fromStr(idstr+1);
+#endif
 
     char ipstr[64];
     strcpy(ipstr, sock->host.str().c_str());
@@ -740,6 +861,23 @@ void Servent::handshakeSOURCE(char * in, bool isHTTP)
     if (!isAllowed(ALLOW_BROADCAST))
         throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
 
+#ifdef WITH_RUST_CORE
+    // 行の解釈は Rust。C++ 版は、ICE/1.0 でない行に / がないと行の前のメモリを読み書きしていた。
+    rustbridge::RustBuf password, mountBuf;
+    const bool icy = pcrs_servhs_source(u8(in), strlen(in), password.out(), mountBuf.out());
+    const std::string mount = mountBuf.str();
+    if (!icy)
+    {
+        LOG_DEBUG("ICE 1.0 client to %s", mount.c_str());
+    }else
+    {
+        loginPassword.set(password.str().c_str());
+
+        LOG_DEBUG("ICY client: %s %s", loginPassword.cstr(), mount.c_str());
+    }
+
+    loginMount.set(mount.c_str());
+#else
     char *mount = nullptr;
 
     char *ps;
@@ -763,6 +901,7 @@ void Servent::handshakeSOURCE(char * in, bool isHTTP)
 
     if (mount)
         loginMount.set(mount);
+#endif
 
     handshakeICY(Channel::SRC_ICECAST, isHTTP);
     sock = nullptr;    // socket is taken over by channel, so don`t close it
@@ -773,18 +912,27 @@ void Servent::handshakeHTTP(HTTP &http, bool isHTTP)
 {
     LOG_DEBUG("%s \"%s\"", sock->host.ip.str().c_str(), http.cmdLine);
 
-    if (http.isRequest("GET /"))
+#ifdef WITH_RUST_CORE
+    // 要求の行の種類は Rust
+    const int kind = pcrs_servhs_request_kind(u8(http.cmdLine), strlen(http.cmdLine),
+                                              u8(servMgr->password), strlen(servMgr->password));
+#define REQUEST_KIND(k, cond) (kind == (k))
+#else
+#define REQUEST_KIND(k, cond) (cond)
+#endif
+
+    if (REQUEST_KIND(PCRS_REQ_GET, http.isRequest("GET /")))
     {
         handshakeGET(http);
-    }else if (http.isRequest("POST /"))
+    }else if (REQUEST_KIND(PCRS_REQ_POST, http.isRequest("POST /")))
     {
         handshakePOST(http);
-    }else if (http.isRequest("GIV"))
+    }else if (REQUEST_KIND(PCRS_REQ_GIV, http.isRequest("GIV")))
     {
         // Push リレー
 
         handshakeGIV(http.cmdLine);
-    }else if (http.isRequest(PCX_PCP_CONNECT)) // "pcp"
+    }else if (REQUEST_KIND(PCRS_REQ_PCP, http.isRequest(PCX_PCP_CONNECT))) // "pcp"
     {
         // CIN
 
@@ -792,12 +940,12 @@ void Servent::handshakeHTTP(HTTP &http, bool isHTTP)
             throw HTTPException(HTTP_SC_UNAVAILABLE, 503);
 
         processIncomingPCP(true);
-    }else if (http.isRequest("SOURCE"))
+    }else if (REQUEST_KIND(PCRS_REQ_SOURCE, http.isRequest("SOURCE")))
     {
         // Icecast 放送
 
         handshakeSOURCE(http.cmdLine, isHTTP);
-    }else if (servMgr->password[0] != '\0' && http.isRequest(servMgr->password))
+    }else if (REQUEST_KIND(PCRS_REQ_SHOUTCAST, servMgr->password[0] != '\0' && http.isRequest(servMgr->password)))
     {
         // ShoutCast broadcast
 
@@ -819,6 +967,7 @@ void Servent::handshakeHTTP(HTTP &http, bool isHTTP)
 
         throw HTTPException(HTTP_SC_BADREQUEST, 400);
     }
+#undef REQUEST_KIND
 }
 
 // -----------------------------------
@@ -844,7 +993,11 @@ void Servent::handshakeIncoming()
         throw HTTPException(HTTP_SC_URITOOLONG, 414);
     }
 
+#ifdef WITH_RUST_CORE
+    bool isHTTP = pcrs_servhs_is_http(u8(buf), strlen(buf));
+#else
     bool isHTTP = (stristr(buf, HTTP_PROTO1) != nullptr);
+#endif
 
     if (isHTTP)
         LOG_TRACE("HTTP from %s '%s'", sock->host.str().c_str(), buf);
@@ -1026,6 +1179,18 @@ bool Servent::handshakeAuth(HTTP &http, const char *args, bool rejectCrossOrigin
         {
             auto arg = http.headers.get("Cookie");
             LOG_TRACE("Got cookie: %s", arg.c_str());
+#ifdef WITH_RUST_CORE
+            // <port>_id の値を探すのは Rust
+            rustbridge::RustBuf id;
+            const int found = pcrs_servhs_cookie_id(u8(arg.data()), arg.size(), servMgr->serverHost.port, id.out());
+            if (found == 2) {
+                LOG_ERROR("Invalid Cookie header: expected '='");
+            } else if (found == 1) {
+                Cookie gotCookie;
+                gotCookie.set(id.str().c_str(), sock->host.ip);
+                cookie = gotCookie;
+            }
+#else
             const std::string idKey = str::STR(servMgr->serverHost.port, "_id");
             auto assignments = str::split(arg, "; ");
 
@@ -1041,6 +1206,7 @@ bool Servent::handshakeAuth(HTTP &http, const char *args, bool rejectCrossOrigin
                     break;
                 }
             }
+#endif
 
             if (servMgr->cookieList.contains(cookie)){
                 LOG_TRACE("Cookie ID found");
@@ -1132,6 +1298,19 @@ void Servent::CMD_redirect(const char* cmd, HTTP& http, String& jumpStr)
     Sys::strcpy_truncate(buf, sizeof(buf), cmd);
 
     HTML html("", *sock);
+#ifdef WITH_RUST_CORE
+    // url= の取り出しと、%XX の解釈、http:// を足すことは Rust
+    rustbridge::RustBuf urlBuf;
+    if (pcrs_servhs_redirect_url(u8(buf), strlen(buf), urlBuf.out()))
+    {
+        http.writeLine(HTTP_SC_OK);
+        http.writeLineF("%s %s", HTTP_HS_SERVER, PCX_AGENT);
+        http.writeLineF("%s %s", HTTP_HS_CONTENT, "text/html");
+        http.writeLine("");
+
+        const std::string url = urlBuf.str();
+        html.setRefreshURL(url.c_str());
+#else
     const char *j = getCGIarg(buf, "url=");
 
     if (j)
@@ -1150,6 +1329,7 @@ void Servent::CMD_redirect(const char* cmd, HTTP& http, String& jumpStr)
             url.prepend("http://");
 
         html.setRefreshURL(url.cstr());
+#endif
         html.startHTML();
             html.addHead();
             html.startBody();
@@ -1213,6 +1393,18 @@ void Servent::CMD_chooseLanguage(const char* cmd, HTTP& http, String& jumpStr)
                 http.send(HTTPResponse::badRequest());
                 return;
             }
+#ifdef WITH_RUST_CORE
+            // Referer の最初の html/[^/]+ を置き換えるのは Rust
+            rustbridge::RustBuf newReferer;
+            if (pcrs_servhs_rewrite_referer(u8(referer.data()), referer.size(),
+                                            u8(newHtmlPath.data()), newHtmlPath.size(), newReferer.out()))
+            {
+                referer = newReferer.str();
+                LOG_DEBUG("new referer: %s", referer.c_str());
+            }else{
+                LOG_WARN("CMD_chooseLanguage: Failed to rewrite referer: %s", referer.c_str());
+            }
+#else
             auto vec = Regexp("html/[^/]+").exec(referer);
             if (vec.size())
             {
@@ -1225,6 +1417,7 @@ void Servent::CMD_chooseLanguage(const char* cmd, HTTP& http, String& jumpStr)
             }else{
                 LOG_WARN("CMD_chooseLanguage: Failed to rewrite referer: %s", referer.c_str());
             }
+#endif
 
             Sys::strcpy_truncate(servMgr->htmlPath, sizeof(servMgr->htmlPath), newHtmlPath.c_str());
 
@@ -1261,6 +1454,104 @@ void Servent::CMD_apply(const char* cmd, HTTP& http, String& jumpStr)
     int allowServer1 = 0;
     int newPort = servMgr->serverHost.port;
 
+#ifdef WITH_RUST_CORE
+    // 引数を読み、名前ごとに何をするか (値の変換を含む) を決めるのは Rust。ここでは順に当てはめる。
+    struct ApplyOp { int key; int value; std::string str; };
+    std::vector<ApplyOp> ops;
+    bool opsFailed = false;
+    struct Ctx { std::vector<ApplyOp>* ops; bool* failed; } ctx = { &ops, &opsFailed };
+    pcrs_servhs_apply_ops(u8(cmd), strlen(cmd), &ctx,
+                          [](void* c, int key, int32_t value, const uint8_t* s, size_t len) {
+                              auto ctx = static_cast<Ctx*>(c);
+                              try {
+                                  ctx->ops->push_back({ key, value, std::string(reinterpret_cast<const char*>(s), len) });
+                              } catch (...) {
+                                  *ctx->failed = true;
+                              }
+                          });
+    if (opsFailed)
+        throw std::bad_alloc();
+
+    for (auto& op : ops)
+    {
+        const char* arg = op.str.c_str();
+        switch (op.key)
+        {
+        // server
+        case PCRS_APPLY_SERVER_NAME: servMgr->serverName = op.str; break;
+        case PCRS_APPLY_SERVER_ACTIVE: servMgr->autoServe = op.value; break;
+        case PCRS_APPLY_PORT: newPort = op.value; break;
+        case PCRS_APPLY_ICY_META: chanMgr->icyMetaInterval = op.value; break;
+        case PCRS_APPLY_PASS_NEW: Sys::strcpy_truncate(servMgr->password, sizeof(servMgr->password), arg); break;
+        case PCRS_APPLY_ROOT: servMgr->isRoot = op.value; break;
+        case PCRS_APPLY_BR_ROOT: brRoot = op.value; break;
+        case PCRS_APPLY_GET_UPD: getUpd = op.value; break;
+        case PCRS_APPLY_HU_INT: chanMgr->setUpdateInterval(op.value); break;
+        case PCRS_APPLY_FORCE_IP: servMgr->forceIP = arg; break;
+        case PCRS_APPLY_HTML_PATH:
+            if (op.value)
+                Sys::strcpy_truncate(servMgr->htmlPath, sizeof(servMgr->htmlPath), arg);
+            else
+                LOG_WARN("Ignoring invalid htmlPath");
+            break;
+        case PCRS_APPLY_DJ_MSG: chanMgr->setBroadcastMsg(arg); break;
+        case PCRS_APPLY_PC_MSG: servMgr->rootMsg = arg; break;
+
+        // connections
+        case PCRS_APPLY_MAX_CIN: servMgr->maxControl = op.value; break;
+        case PCRS_APPLY_MAX_SIN: servMgr->maxServIn = op.value; break;
+        case PCRS_APPLY_MAX_UP: servMgr->maxBitrateOut = op.value; break;
+        case PCRS_APPLY_MAX_RELAYS: servMgr->setMaxRelays(op.value); break;
+        case PCRS_APPLY_MAX_DIRECT: servMgr->maxDirect = op.value; break;
+        case PCRS_APPLY_MAX_RELAY_PC: chanMgr->maxRelaysPerChannel = op.value; break;
+        case PCRS_APPLY_FILT_IP:        // ip must be first
+            currFilter = &servMgr->filters[servMgr->numFilters];
+            currFilter->init();
+            currFilter->setPattern(arg);
+            if (currFilter->isSet() && (servMgr->numFilters < (ServMgr::MAX_FILTERS-1)))
+            {
+                servMgr->numFilters++;
+                servMgr->filters[servMgr->numFilters].init();   // clear new entry
+            }
+            break;
+        case PCRS_APPLY_FILT_BAN: currFilter->flags |= ServFilter::F_BAN; break;
+        case PCRS_APPLY_FILT_PRIVATE: currFilter->flags |= ServFilter::F_PRIVATE; break;
+        case PCRS_APPLY_FILT_NETWORK: currFilter->flags |= ServFilter::F_NETWORK; break;
+        case PCRS_APPLY_FILT_DIRECT: currFilter->flags |= ServFilter::F_DIRECT; break;
+        case PCRS_APPLY_CHANNEL_FEED_URL: servMgr->channelDirectory->addFeed(arg); break;
+
+        // client
+        case PCRS_APPLY_CLIENT_ACTIVE: servMgr->autoConnect = op.value; break;
+        case PCRS_APPLY_YP:
+            if (op.str != servMgr->rootHost.cstr())
+            {
+                LOG_INFO("Root host changed from '%s' to '%s'", servMgr->rootHost.cstr(), arg);
+                servMgr->rootHost = arg;
+                servMgr->rootMsg = "";
+            }
+            break;
+        case PCRS_APPLY_DEAD_HIT_AGE: chanMgr->deadHitAge = op.value; break;
+        case PCRS_APPLY_REFRESH: servMgr->refreshHTML = op.value; break;
+        case PCRS_APPLY_CHAT: servMgr->chat = op.value; break;
+        case PCRS_APPLY_RANDOMIZE_CHID: servMgr->flags.get("randomizeBroadcastingChannelID") = op.value; break;
+        case PCRS_APPLY_PUBLIC_DIRECTORY: servMgr->publicDirectoryEnabled = true; break;
+        case PCRS_APPLY_AUTH:
+            servMgr->authType = (op.value == 1) ? ServMgr::AUTH_COOKIE : ServMgr::AUTH_HTTPBASIC;
+            break;
+        case PCRS_APPLY_EXPIRE: servMgr->cookieList.neverExpire = op.value; break;
+        case PCRS_APPLY_LOG_LEVEL: servMgr->logLevel(op.value); break;
+        case PCRS_APPLY_ALLOW_HTML: allowServer1 |= op.value ? (ALLOW_HTML) : 0; break;
+        case PCRS_APPLY_ALLOW_NETWORK: allowServer1 |= op.value ? (ALLOW_NETWORK) : 0; break;
+        case PCRS_APPLY_ALLOW_BROADCAST: allowServer1 |= op.value ? (ALLOW_BROADCAST) : 0; break;
+        case PCRS_APPLY_ALLOW_DIRECT: allowServer1 |= op.value ? (ALLOW_DIRECT) : 0; break;
+        case PCRS_APPLY_TRANSCODING: servMgr->transcodingEnabled = op.value; break;
+        case PCRS_APPLY_PRESET: servMgr->preset = arg; break;
+        case PCRS_APPLY_AUDIO_CODEC: servMgr->audioCodec = arg; break;
+        case PCRS_APPLY_PREFERRED_THEME: servMgr->preferredTheme = arg; break;
+        case PCRS_APPLY_ACCENT_COLOR: servMgr->accentColor = arg; break;
+        }
+    }
+#else
     char arg[MAX_CGI_LEN];
     char curr[MAX_CGI_LEN];
     const char *cp = cmd;
@@ -1415,6 +1706,7 @@ void Servent::CMD_apply(const char* cmd, HTTP& http, String& jumpStr)
         else if (strcmp(curr, "accentColor") == 0)
             servMgr->accentColor = arg;
     }
+#endif
 
     servMgr->allowServer1 = allowServer1;
 
@@ -1560,12 +1852,18 @@ void Servent::CMD_chanfeedlog(const char* cmd, HTTP& http, String& jumpStr)
 
 void Servent::CMD_clear(const char* cmd, HTTP& http, String& jumpStr)
 {
+#ifdef WITH_RUST_CORE
+    for (auto& kv : cgiArgs(cmd))
+    {
+        const char* curr = kv.first.c_str();
+#else
     char arg[MAX_CGI_LEN];
     char curr[MAX_CGI_LEN];
 
     const char *cp = cmd;
     while ((cp = nextCGIarg(cp, curr, arg)) != nullptr)
     {
+#endif
         if (strcmp(curr, "hostcache") == 0)
             servMgr->clearHostCache(ServHost::T_SERVENT);
         else if (strcmp(curr, "hitlists") == 0)
@@ -1590,16 +1888,24 @@ void Servent::CMD_shutdown(const char* cmd, HTTP& http, String& jumpStr)
 
 void Servent::CMD_stop(const char* cmd, HTTP& http, String& jumpStr)
 {
+    GnuID id;
+#ifdef WITH_RUST_CORE
+    for (auto& kv : cgiArgs(cmd))
+    {
+        if (kv.first == "id")
+            id.fromStr(kv.second.c_str());
+    }
+#else
     char arg[MAX_CGI_LEN];
     char curr[MAX_CGI_LEN];
 
-    GnuID id;
     const char *cp = cmd;
     while ((cp = nextCGIarg(cp, curr, arg)) != nullptr)
     {
         if (strcmp(curr, "id") == 0)
             id.fromStr(arg);
     }
+#endif
 
     auto c = chanMgr->findChannelByID(id);
     if (c)
@@ -1669,16 +1975,24 @@ void Servent::CMD_bump(const char* cmd, HTTP& http, String& jumpStr)
 
 void Servent::CMD_keep(const char* cmd, HTTP& http, String& jumpStr)
 {
+    GnuID id;
+#ifdef WITH_RUST_CORE
+    for (auto& kv : cgiArgs(cmd))
+    {
+        if (kv.first == "id")
+            id.fromStr(kv.second.c_str());
+    }
+#else
     char arg[MAX_CGI_LEN];
     char curr[MAX_CGI_LEN];
 
-    GnuID id;
     const char *cp = cmd;
     while ((cp = nextCGIarg(cp, curr, arg)) != nullptr)
     {
         if (strcmp(curr, "id") == 0)
             id.fromStr(arg);
     }
+#endif
 
     auto c = chanMgr->findChannelByID(id);
     if (c)
@@ -1989,8 +2303,12 @@ void Servent::CMD_add_speedtest(const char* cmd, HTTP& http, String& jumpStr)
 
 static bool isDecimal(const std::string& str)
 {
+#ifdef WITH_RUST_CORE
+    return pcrs_servhs_is_decimal(u8(str.data()), str.size());
+#else
     static const Regexp decimal("^(0|[1-9][0-9]*)$");
     return decimal.matches(str);
+#endif
 }
 
 void Servent::CMD_delete_speedtest(const char* cmd, HTTP& http, String& jumpStr)
@@ -2295,6 +2613,61 @@ void Servent::readICYHeader(HTTP &http, ChanInfo &info, char *pwd, size_t plen)
     char *arg = http.getArgStr();
     if (!arg) return;
 
+#ifdef WITH_RUST_CORE
+    // どのヘッダーか (行のどこかに名前が含まれるか) と content-type の種類は Rust
+    switch (pcrs_servhs_icy_header(reinterpret_cast<const uint8_t*>(http.cmdLine), strlen(http.cmdLine)))
+    {
+    case PCRS_ICY_NAME:
+        info.name.set(arg, String::T_ASCII);
+        info.name.convertTo(String::T_UNICODE);
+        break;
+    case PCRS_ICY_URL:
+        info.url.set(arg, String::T_ASCII);
+        break;
+    case PCRS_ICY_BITRATE:
+        info.bitrate = atoi(arg);
+        break;
+    case PCRS_ICY_GENRE:
+        info.genre.set(arg, String::T_ASCII);
+        info.genre.convertTo(String::T_UNICODE);
+        break;
+    case PCRS_ICY_DESC:
+        info.desc.set(arg, String::T_ASCII);
+        info.desc.convertTo(String::T_UNICODE);
+        break;
+    case PCRS_ICY_AUTHORIZATION:
+        if (pwd)
+            http.getAuthUserPass(nullptr, pwd, 0, plen);
+        break;
+    case PCRS_ICY_CHANNEL_ID:
+        info.id.fromStr(arg);
+        break;
+    case PCRS_ICY_PASSWORD:
+        if (pwd)
+            if (strlen(arg) < 64)
+                strcpy(pwd, arg);
+        break;
+    case PCRS_ICY_CONTENT_TYPE:
+    {
+        const char* t = pcrs_servhs_icy_content_type(reinterpret_cast<const uint8_t*>(arg), strlen(arg));
+        if (!t)
+            break;
+        if (strcmp(t, "PCP") == 0)
+            info.srcProtocol = ChanInfo::SP_PCP;
+        else if (strcmp(t, "OGG") == 0)
+            info.contentType = ChanInfo::T_OGG;
+        else if (strcmp(t, "MP3") == 0)
+            info.contentType = ChanInfo::T_MP3;
+        else if (strcmp(t, "RAW") == 0)
+            info.contentType = ChanInfo::T_RAW;
+        else
+            info.contentType = ChanInfo::T_PLS;
+        break;
+    }
+    default:
+        break;
+    }
+#else
     if (http.isHeader("x-audiocast-name") || http.isHeader("icy-name") || http.isHeader("ice-name"))
     {
         info.name.set(arg, String::T_ASCII);
@@ -2354,6 +2727,7 @@ void Servent::readICYHeader(HTTP &http, ChanInfo &info, char *pwd, size_t plen)
         else if (stristr(arg, MIME_TEXT))
             info.contentType = ChanInfo::T_PLS;
     }
+#endif
 }
 
 // -----------------------------------
@@ -2504,6 +2878,9 @@ void Servent::handshakeICY(Channel::SRC_TYPE type, bool isHTTP)
 // -----------------------------------
 const char* Servent::fileNameToMimeType(const String& fileName)
 {
+#ifdef WITH_RUST_CORE
+    return pcrs_servhs_mime_type(reinterpret_cast<const uint8_t*>(fileName.c_str()), strlen(fileName.c_str()));
+#else
     if (fileName.contains(".htm"))
         return MIME_HTML;
     else if (fileName.contains(".css"))
@@ -2520,6 +2897,7 @@ const char* Servent::fileNameToMimeType(const String& fileName)
         return MIME_ICO;
     else
         return nullptr;
+#endif
 }
 
 // -----------------------------------
@@ -2554,8 +2932,14 @@ void Servent::handshakeLocalFile(const char *fn, HTTP& http)
         throw HTTPException(HTTP_SC_SERVERERROR, 500);
     }
 
+#ifdef WITH_RUST_CORE
+    // documentRoot のあとにパスを足す (255 バイトに収まらなければ足さない) のは Rust
+    String fileName = rustbridge::RustBuf(pcrs_servhs_local_file_name(u8(documentRoot.c_str()), strlen(documentRoot.c_str()),
+                                                                     u8(fn), strlen(fn))).str().c_str();
+#else
     String fileName = documentRoot.c_str();
     fileName.append(fn);
+#endif
 
     LOG_TRACE("Writing HTML file: %s", sys->fromFilenameEncoding(fileName.cstr()).c_str());
 
@@ -2573,6 +2957,60 @@ void Servent::handshakeLocalFile(const char *fn, HTTP& http)
         HTTPRequestScope reqScope(req);
         std::vector<Template::Scope*> scopes = { &reqScope, &locals };
 
+#ifdef WITH_RUST_CORE
+        // ページの種類と、? の後ろの id は Rust
+        bool splitOk = false;
+        rustbridge::RustBuf idBuf;
+        const int page = pcrs_servhs_local_file(u8(fn), strlen(fn), &splitOk, idBuf.out());
+        const std::string idStr = idBuf.str();
+        if (page == PCRS_PAGE_PLAY)
+        {
+            // 視聴ページだった場合はあらかじめチャンネルのリレーを開
+            // 始しておく。
+
+            if (!splitOk)
+                throw HTTPException(HTTP_SC_BADREQUEST, 400);
+
+            String id = idStr.c_str();
+
+            if (id.isEmpty())
+                throw HTTPException(HTTP_SC_BADREQUEST, 400);
+
+            ChanInfo info;
+            if (!servMgr->getChannel(id.cstr(), info, true))
+                throw HTTPException(HTTP_SC_NOTFOUND, 404);
+
+            auto ch = chanMgr->findChannelByID(GnuID(id.c_str()));
+            if (!ch)
+                throw HTTPException(HTTP_SC_NOTFOUND, 404);
+
+            locals.vars["channel"] = ch->getState();
+        }else if (page == PCRS_PAGE_RELAY_INFO)
+        {
+            if (!splitOk)
+                throw HTTPException(HTTP_SC_BADREQUEST, 400);
+
+            String id = idStr.c_str();
+
+            if (id.isEmpty())
+                throw HTTPException(HTTP_SC_BADREQUEST, 400);
+
+            auto ch = chanMgr->findChannelByID(GnuID(id.c_str()));
+            locals.vars["channel"] = ch ? ch->getState() : nullptr;
+        }else if (page == PCRS_PAGE_CONNECTIONS)
+        {
+            if (splitOk)
+            {
+                String id = idStr.c_str();
+
+                if (!id.isEmpty())
+                {
+                    auto ch = chanMgr->findChannelByID(GnuID(id.c_str()));
+                    locals.vars["channel"] = ch ? ch->getState() : nullptr;
+                }
+            }
+        }
+#else
         if (str::contains(fn, "/play.html"))
         {
             // 視聴ページだった場合はあらかじめチャンネルのリレーを開
@@ -2623,6 +3061,7 @@ void Servent::handshakeLocalFile(const char *fn, HTTP& http)
                 }
             }
         }
+#endif
 
         char *args = strstr(fileName.cstr(), "?");
         if (args)

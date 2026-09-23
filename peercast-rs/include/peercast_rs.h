@@ -760,6 +760,72 @@ typedef struct pcrs_json_builder {
 int pcrs_jrpc_invoke(const uint8_t *method, size_t method_len, const uint8_t *args, size_t args_len,
                      const pcrs_jrpc_host *host, const pcrs_json_builder *builder, int32_t *code, pcrs_buf *what);
 
+/* ---- servhs (core/common/servhs.cpp の要求の解釈と判断) ---- */
+/* 文字列は C の文字列 (NUL の手前まで) を渡す。pcrs_buf の出力は常に書く (pcrs_buf_free で返す) */
+enum {  /* pcrs_servhs_request_kind */
+    PCRS_REQ_GET = 0, PCRS_REQ_POST = 1, PCRS_REQ_GIV = 2, PCRS_REQ_PCP = 3, PCRS_REQ_SOURCE = 4,
+    PCRS_REQ_SHOUTCAST = 5, PCRS_REQ_BAD = 6
+};
+int pcrs_servhs_request_kind(const uint8_t *line, size_t n, const uint8_t *password, size_t pn);
+bool pcrs_servhs_is_http(const uint8_t *line, size_t n);          /* stristr(line, "HTTP/1.") */
+bool pcrs_servhs_is_valid_html_path(const uint8_t *s, size_t n);  /* ServMgr::isValidHtmlPath */
+bool pcrs_servhs_is_decimal(const uint8_t *s, size_t n);          /* ^(0|[1-9][0-9]*)$ */
+
+enum {  /* pcrs_servhs_get_route */
+    PCRS_GET_ADMIN = 0, PCRS_GET_ADMIN_SLASH = 1, PCRS_GET_HTML_INDEX = 2, PCRS_GET_HTML = 3,
+    PCRS_GET_ADMIN_CGI = 4, PCRS_GET_PLS = 5, PCRS_GET_STREAM = 6, PCRS_GET_CHANNEL = 7, PCRS_GET_API1 = 8,
+    PCRS_GET_PUBLIC = 9, PCRS_GET_ASSETS = 10, PCRS_GET_CGI_BIN_FLV = 11, PCRS_GET_CGI_BIN = 12,
+    PCRS_GET_CMD = 13, PCRS_GET_OTHER = 14
+};
+/* handshakeGET のパス (cmdLine + 4)。" HTTP/1." の手前で切る位置 (fn からの位置。-1 もある) があれば
+   *has_cut を true にして *cut に書く */
+int pcrs_servhs_get_route(const uint8_t *path, size_t n, bool *has_cut, ptrdiff_t *cut);
+/* /admin.cgi。pass= と song= があれば true。mount= と url= はあれば *has_* を true にする */
+bool pcrs_servhs_admin_cgi(const uint8_t *fn, size_t n, pcrs_buf *song, bool *has_mount, pcrs_buf *mount,
+                           bool *has_url, pcrs_buf *url);
+enum { PCRS_POST_API1 = 0, PCRS_POST_PUSH = 1, PCRS_POST_ADMIN = 2, PCRS_POST_OTHER = 3 };
+/* handshakePOST。行が空白で 3 つに分かれなければ -1。*args は ? の後ろ */
+int pcrs_servhs_post_route(const uint8_t *line, size_t n, pcrs_buf *args);
+void pcrs_servhs_giv_id(const uint8_t *line, size_t n, uint8_t *id);   /* 16 バイト */
+/* handshakeSOURCE。ICY の行ならパスワードがあるので true (ICE/1.0 なら false) */
+bool pcrs_servhs_source(const uint8_t *line, size_t n, pcrs_buf *password, pcrs_buf *mount);
+bool pcrs_servhs_valid_auth_token(const uint8_t *s, size_t n, const uint8_t *broadcast_id);
+/* Cookie ヘッダーの <port>_id。0 見つからない、1 見つかった、2 = のない組があった */
+int pcrs_servhs_cookie_id(const uint8_t *header, size_t n, uint16_t port, pcrs_buf *id);
+/* nextCGIarg を最後まで繰り返したもの (名前と値を交互に並べる) */
+pcrs_vec pcrs_servhs_cgi_args(const uint8_t *cmd, size_t n);
+enum {  /* pcrs_servhs_apply_ops の key (src/servhs.rs の ApplyKey) */
+    PCRS_APPLY_SERVER_NAME = 0, PCRS_APPLY_SERVER_ACTIVE, PCRS_APPLY_PORT, PCRS_APPLY_ICY_META, PCRS_APPLY_PASS_NEW,
+    PCRS_APPLY_ROOT, PCRS_APPLY_BR_ROOT, PCRS_APPLY_GET_UPD, PCRS_APPLY_HU_INT, PCRS_APPLY_FORCE_IP,
+    PCRS_APPLY_HTML_PATH, PCRS_APPLY_DJ_MSG, PCRS_APPLY_PC_MSG, PCRS_APPLY_MAX_CIN, PCRS_APPLY_MAX_SIN,
+    PCRS_APPLY_MAX_UP, PCRS_APPLY_MAX_RELAYS, PCRS_APPLY_MAX_DIRECT, PCRS_APPLY_MAX_RELAY_PC, PCRS_APPLY_FILT_IP,
+    PCRS_APPLY_FILT_BAN, PCRS_APPLY_FILT_PRIVATE, PCRS_APPLY_FILT_NETWORK, PCRS_APPLY_FILT_DIRECT,
+    PCRS_APPLY_CHANNEL_FEED_URL, PCRS_APPLY_CLIENT_ACTIVE, PCRS_APPLY_YP, PCRS_APPLY_DEAD_HIT_AGE, PCRS_APPLY_REFRESH,
+    PCRS_APPLY_CHAT, PCRS_APPLY_RANDOMIZE_CHID, PCRS_APPLY_PUBLIC_DIRECTORY, PCRS_APPLY_AUTH, PCRS_APPLY_EXPIRE,
+    PCRS_APPLY_LOG_LEVEL, PCRS_APPLY_ALLOW_HTML, PCRS_APPLY_ALLOW_NETWORK, PCRS_APPLY_ALLOW_BROADCAST,
+    PCRS_APPLY_ALLOW_DIRECT, PCRS_APPLY_TRANSCODING, PCRS_APPLY_PRESET, PCRS_APPLY_AUDIO_CODEC,
+    PCRS_APPLY_PREFERRED_THEME, PCRS_APPLY_ACCENT_COLOR
+};
+/* CMD_apply の引数を読み、行うことを順に op で知らせる。op は例外を投げないこと */
+void pcrs_servhs_apply_ops(const uint8_t *cmd, size_t n, void *ctx,
+                           void (*op)(void *ctx, int key, int32_t value, const uint8_t *s, size_t len));
+bool pcrs_servhs_redirect_url(const uint8_t *cmd, size_t n, pcrs_buf *out);    /* CMD_redirect */
+bool pcrs_servhs_rewrite_referer(const uint8_t *referer, size_t n, const uint8_t *path, size_t pn, pcrs_buf *out);
+enum {  /* pcrs_servhs_icy_header */
+    PCRS_ICY_NAME = 0, PCRS_ICY_URL, PCRS_ICY_BITRATE, PCRS_ICY_GENRE, PCRS_ICY_DESC, PCRS_ICY_AUTHORIZATION,
+    PCRS_ICY_CHANNEL_ID, PCRS_ICY_PASSWORD, PCRS_ICY_CONTENT_TYPE, PCRS_ICY_OTHER
+};
+int pcrs_servhs_icy_header(const uint8_t *line, size_t n);
+const char *pcrs_servhs_icy_content_type(const uint8_t *value, size_t n);  /* "OGG" など、"PCP"、NULL */
+const char *pcrs_servhs_mime_type(const uint8_t *name, size_t n);          /* fileNameToMimeType */
+enum { PCRS_PAGE_PLAY = 0, PCRS_PAGE_RELAY_INFO = 1, PCRS_PAGE_CONNECTIONS = 2, PCRS_PAGE_PLAIN = 3 };
+int pcrs_servhs_local_file(const uint8_t *fn, size_t n, bool *split_ok, pcrs_buf *id);
+pcrs_buf pcrs_servhs_local_file_name(const uint8_t *root, size_t rn, const uint8_t *fn, size_t n);
+bool pcrs_servhs_cgi_server_name(const uint8_t *host, size_t n, pcrs_buf *out);
+bool pcrs_servhs_cgi_header_line(const uint8_t *line, size_t n, pcrs_buf *name, pcrs_buf *value);
+/* handshakeJRPC の本体の長さ。だめなら負の数 (-411、-400、-413) で、*status_line に状態の行 */
+int32_t pcrs_servhs_jrpc_body_length(const uint8_t *s, size_t n, int32_t max, const char **status_line);
+
 #ifdef __cplusplus
 }
 #endif

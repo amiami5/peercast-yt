@@ -600,6 +600,51 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * `getYellowPages` の `uri` は `String::format` で作るので、254 バイトで切れる (文字の途中でも)。
 * 例外の文言 (`what()`) は C の文字列なので、メソッド名などに NUL があるとそこで切れる。
 
+## 段階8b で追加したもの (HTTP の要求の解釈と判断)
+
+`src/servhs.rs` に、HTTP の要求の処理 (`core/common/servhs.cpp` の `Servent::handshake*`) のうち、
+入力の解釈と判断を移した。
+
+| 関数 | 内容 |
+|---|---|
+| `request_kind`、`is_http` | `handshakeHTTP` の要求の行の種類 (GET、POST、GIV、pcp、SOURCE、ShoutCast のパスワード) |
+| `get_route`、`admin_cgi` | `handshakeGET` のパスの振り分け (` HTTP/1.` の手前で切る位置も)、`/admin.cgi` の引数 |
+| `post_route` | `handshakePOST` の要求の行 |
+| `giv_id`、`source` | `handshakeGIV` のチャンネル ID、`handshakeSOURCE` のパスワードとマウント |
+| `valid_auth_token`、`cookie_id` | `hasValidAuthToken`、`handshakeAuth` の Cookie ヘッダー |
+| `cgi_args`、`apply_ops` | `nextCGIarg`、`CMD_apply` の引数 (名前ごとに何をするかと値の変換) |
+| `redirect_url`、`rewrite_referer`、`is_decimal`、`is_valid_html_path` | `CMD_redirect`、`CMD_chooseLanguage`、`isDecimal`、`ServMgr::isValidHtmlPath` |
+| `icy_header`、`icy_content_type` | `readICYHeader` |
+| `mime_type_for`、`local_file`、`local_file_name` | `fileNameToMimeType`、`handshakeLocalFile` のページの種類と `id` |
+| `cgi_server_name`、`cgi_header_line` | `invokeCGIScript` の Host ヘッダーと、スクリプトの出力のヘッダー |
+| `jrpc_body_length` | `handshakeJRPC` の Content-Length |
+
+* ソケットの読み書き、サーバーやチャンネルの状態を触ること、ファイルやスクリプトは C++ のまま。
+  `servhs.cpp` は、判断のところだけ `WITH_RUST_CORE` で Rust を呼ぶ。`cmdLine` のバッファを書き換える
+  こと (パスの後ろに NUL を書くなど) も C++ 版と同じにしてある。
+* `cgi::Query` の Rust 版 (`servhs::Query`) を作った。C++ の `cgi::Query` は、ほかのコードが使うので残る。
+* `atoi` は glibc と同じく `long` (64 ビット) で読んでから `int` にする (32 ビットの CPU の C++ 版は
+  桁あふれが `long` の端の値になり、結果が違っていた)。
+
+### C++ 版との違い
+
+* **`SOURCE` の行の読み方**: ICE/1.0 でない行に `/` がないと、C++ 版は行の先頭より前のメモリを NUL が
+  見つかるまで後ろ向きに読み、そこに `/` があれば 1 つ前に NUL を書いていた (範囲外の読み書き)。
+  Rust 版は行の先頭で止め、マウントを空にする。行が 7 文字より短いとき、C++ 版はパスワードとして行の
+  後ろの古い中身を読んでいたが、Rust 版は空にする。
+
+### C++ 版と同じにしたもの (直していない)
+
+* `/admin.cgi` (ShoutCast の曲名の更新) は、`pass=` があるかだけを見て、パスワードの中身を確かめない。
+* `handshakeAuth` に渡す引数は `cmdLine` の中を指していて、`readHeaders` で書き換えられる。このため
+  `/html/`、`/cmd?`、`/cgi-bin/` の `?pass=` は、実際には最後のヘッダーの行の残りから読まれ、ほぼ効かない
+  (HTTP の読み書きを移す段階 9 で扱う。docs/cpp-known-issues.md)。
+* `readICYHeader` は、ヘッダーの行のどこかに名前が含まれるかを見る (値に `icy-name` とあっても名前に
+  なる)。content-type の `audio/x-mpegurl` は、先に `audio/x-mpeg` に当たって MP3 になる。
+* `nextCGIarg` は名前を `=` まで読む (`&` では止まらない)。名前か値が 511 バイトを超えると切れる。
+* `String` に入れるものは、C++ 版と同じく NUL と 255 バイトで切れる (`String::append` は、収まらなければ
+  何も足さない)。
+
 ## 差分テスト
 
 ```sh
@@ -628,7 +673,12 @@ make
 ./diff_hostgraph_uptest         # HostGraph と帯域測定の yp4g.xml の読み取りなど (約70万件)
 ./diff_channel                   # Channel と ChanMgr の移した部分: 乱数のチャンネルへの操作 (約40万件)
 ./diff_jrpc                      # JSON-RPC: 乱数の状態への要求とその変異 10万件、メソッドを直接呼ぶもの 2.5万件
+./diff_servhs                    # HTTP の要求の解釈と判断: 乱数の入力 (約220万件)
 ```
+
+`diff_servhs` の C++ 版は、外から呼べるもの (`nextCGIarg`、`Servent::hasValidAuthToken` など) は
+コア一式の関数、`Servent` のメソッドの途中にあるものは servhs.cpp の元のコードを写したもの。
+`cgi::unescape` は段階 1 の既知の違いがあるので、写したものでは Rust 版を使う。
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした
 C++ のコア一式 (`cxxcore.a`、`make` が自動で作る) にリンクします。

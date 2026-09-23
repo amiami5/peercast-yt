@@ -41,6 +41,13 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   ので、配信元の URL などに不正な UTF-8 があると `type_error` が飛び、index.txt を返さずに接続が切れる
   (`GeneralException` でないので捕まえられない)。
 
+* `Servent::handshakeGET` などが `handshakeAuth` に渡す引数は `http.cmdLine` の中を指していて、
+  `handshakeAuth` の中の `readHeaders` で書き換えられる。このため `/html/`、`/cmd?`、`/cgi-bin/` の
+  `?pass=` は、最後のヘッダーの行の残りから読まれ、ほぼ効かない (段階 9)。
+* `/admin.cgi` (ShoutCast の曲名の更新) は、`pass=` があるかだけを見て、パスワードの中身を確かめない。
+* `CMD_stop_servent` などの `std::stoi` は、`isDecimal` を通った大きすぎる数で `std::out_of_range` を
+  投げ、捕まえられずにスレッドの一番上まで飛ぶ (応答を返さずに接続が切れる)。
+
 * `Channel::getBufferString` は、受信の速さが 0 のとき 0.0 / 0.0 を `%.2f` で書くので、x86 では
   `-nan`、ARM では `nan` になる。Rust 版は CPU によらず `-nan` にした (段階 7d)。
 
@@ -59,6 +66,8 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
 * 段階 7d: `Channel::checkReadDelay` は `info.bitrate * 1024` を int で計算するので、ビットレートが
   大きいと桁あふれ (未定義の動作) し、2^22 の倍数では 0 で割って落ちる。Rust 版は割る数が 0 なら
   待たない。
+* 段階 8b: `handshakeSOURCE` は、ICE/1.0 でない `SOURCE` の行に `/` がないと、行の先頭より前の
+  メモリを読み、`/` の値のバイトがあればその 1 つ前に NUL を書く (範囲外の読み書き)。
 * 段階 8a: JSON-RPC の要求に `1e400` のような `double` に収まらない数があると、nlohmann の
   `out_of_range` を捕まえず (`parse_error` だけを捕まえている)、応答を返さずに接続を切る。Rust 版は
   Parse error を返す。

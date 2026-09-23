@@ -21,7 +21,7 @@ $(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs $(RUST)/src
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp diff_pcp_hs diff_chanpacket diff_chandir diff_chanhit diff_hostgraph_uptest diff_channel diff_jrpc *.o cxxcore.a
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp diff_pcp_hs diff_chanpacket diff_chandir diff_chanhit diff_hostgraph_uptest diff_channel diff_jrpc diff_servhs *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -124,3 +124,6 @@ JRPC_WRAP = $(LOG_WRAP) \
 
 diff_jrpc: diff_jrpc.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustjrpc.h $(CORE)/rustbridge.h $(CORE)/rustchan.h
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(JRPC_WRAP) $(CXXCORE_LIBS)
+
+diff_servhs: diff_servhs.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustbridge.h
+	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LOG_WRAP) $(CXXCORE_LIBS)
