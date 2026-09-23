@@ -94,6 +94,17 @@ void pcrs_gnuid_encode(uint8_t *id /* 16 bytes, in/out */, const uint8_t *ip /* 
 uint16_t pcrs_jis_sjis_to_unicode(uint16_t sjis);
 uint16_t pcrs_jis_euc_to_unicode(uint16_t euc);
 
+/* String (core/common/_string.cpp)。出力は data[MAX_LEN] に書く内容 (MAX_LEN - 1 バイト以下)。 */
+pcrs_buf pcrs_string_ascii_to_esc(const uint8_t *s, size_t n, bool safe);
+pcrs_buf pcrs_string_ascii_to_meta(const uint8_t *s, size_t n, bool safe);
+pcrs_buf pcrs_string_unknown_to_unicode(const uint8_t *s, size_t n, bool safe);
+pcrs_buf pcrs_string_esc_to_ascii(const uint8_t *s, size_t n);
+pcrs_buf pcrs_string_base64_to_ascii(const uint8_t *s, size_t n);
+pcrs_buf pcrs_string_from_string(const uint8_t *s, size_t n);
+pcrs_buf pcrs_string_unquote(const uint8_t *s, size_t n);
+pcrs_buf pcrs_string_from_stopwatch(uint32_t t);
+int      pcrs_base64_word_to_chars(const uint8_t *word /* 4 bytes */, uint8_t *out /* 3 bytes */);
+
 #ifdef __cplusplus
 }
 #endif

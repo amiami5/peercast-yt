@@ -2,3 +2,5 @@ diff
 *.o
 diff_jis
 diff_md5_gnuid
+diff_strutil
+diff_string

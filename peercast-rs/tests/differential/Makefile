@@ -5,7 +5,9 @@
 
 CORE = ../../../core/common
 RUST = ../..
-CXXFLAGS = -O1 -g -std=c++11 -D_UNIX -I$(CORE) -I../../../core/unix -I$(RUST)/include -Wall -Wno-unused-function
+# -fsigned-char: C++ 版には char の符号で結果が変わる箇所がある。Rust 版は CPU によらず
+# 符号付きとして扱うので、比較の基準も CPU によらず符号付きにそろえる (ARM でも同じ結果になる)。
+CXXFLAGS = -O1 -g -std=c++11 -fsigned-char -D_UNIX -I$(CORE) -I../../../core/unix -I$(RUST)/include -Wall -Wno-unused-function
 
 diff: diff.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -26,4 +28,7 @@ diff_md5_gnuid: diff_md5_gnuid.cpp md5.o gnuid.o regexp.o common.o str.o cgi.o $
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
 
 diff_jis: diff_jis.cpp jis.o $(RUST)/target/release/libpeercast_rs.a
+	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
+
+diff_string: diff_string.cpp _string.o jis.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl

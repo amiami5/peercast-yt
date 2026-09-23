@@ -67,4 +67,18 @@ Rust 側の設計 (バイト列を受け取る形にするか、コールバッ�
 |---|---|
 | 0 | 完了 |
 | 1 | 完了 (peercast-rs: cgi/str の一部関数、C ABI 境界、Makefile 統合)。差分テストは長さ 0〜3 バイトの入力を全網羅 (1,677 万通り) して確認 |
-| 1 以降 | 未着手 |
+| 2 | 完了 (str の残り、jis、md5、gnuid の純粋な部分、`String` の変換関数)。`String` クラス自体と `setFromTime`、`GnuID::generate` など状態や OS に依存する部分は C++ に残る。差分テストは String だけで約 980 万件、違いなし |
+| 3 以降 | 未着手 |
+
+### 確認環境についての注記
+
+* gtest は Ubuntu 26.04 (g++ 15、googletest 1.12.1) で 738/740 件成功。失敗する 2 件
+  (`ServentFixture.handshakeStream_returnResponse_channelReady_direct`、`ServMgrFixture.writeVariable`)
+  は移行前から失敗している。`IniFixture.parse` は、g++ 15 で既定になった
+  `_GLIBCXX_ASSERTIONS` が `ini.cpp` の `trim` の範囲外アクセス (空文字列で `str[-1]`) を検出して
+  止まるので、除外して走らせている (移行前からある C++ 版のバグ)。
+* `bvt/` は 00〜03 が成功。`02-html` は UI から消えた `bcid.html` を見ているので、その 1 件を
+  除いて確認している。`04-helo` は移行前から失敗している。
+* Rust のコードは CPU に依存しない書き方にする (ARM でも同じ結果になる)。C++ 版の結果が
+  `char` の符号 (x86 は符号付き、ARM の Linux は符号なし) で変わっていた箇所は、Rust 版では
+  どちらかに決めて `peercast-rs/README.md` に書く。

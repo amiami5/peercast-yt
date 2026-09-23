@@ -107,6 +107,39 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
   区切りが実質空でも無限ループにはならない (空要素を `limit - 1` 個積んでから残り全体を返す。
   これは Rust 版でも C++ 版と同じ動き)。
 
+## 段階2 で追加したもの (`String`)
+
+`core/common/_string.cpp` の `String` クラス (256 バイト固定長の文字列) のうち、入力を解釈する
+変換関数を `src/pcstring.rs` に移植した。
+
+| 関数 | 内容 |
+|---|---|
+| `ASCII2ESC`, `ESC2ASCII` | `%XX` (`%%XX`) 形式への変換と、その逆 |
+| `ASCII2META` | `;` → `:`、`%` → `%%` |
+| `BASE642ASCII`, `base64WordToChars` | base64 の復号 (`stream.cpp` からも使われる) |
+| `UNKNOWN2UNICODE` | 文字コード不明の文字列を 1 文字ずつ UTF-8 / Shift_JIS / EUC-JP / Latin-1 と推測して UTF-8 にする |
+| `setFromString`, `setUnquote`, `setFromStopwatch` | コマンドライン引数・設定値の取り出し、経過時間の表示 |
+
+`setFromTime` (`localtime_r` を使う) と、単なるバッファ操作 (`set`, `append`, `operator=`,
+`sprintf` など) は C++ のまま残した。`String` はメンバー変数 `data` を直接読み書きする
+コードが全体に散らばっているので、クラスそのものは段階 9 まで C++ に残る。
+
+### C++ 版との違い
+
+* **`ESC2ASCII` が、末尾の不完全な `%` で終端を越えて読む**: `"ab%"` や `"ab%4"` のように
+  `%` の後ろに 2 文字ないと、C++ 版は終端の NUL とその次のバイトを 16 進数字として読み、
+  さらに読み取り位置を 2 つ進めて終端を飛び越え、`data` の後ろのメモリを NUL に出会うまで
+  読み続ける (範囲外読み出し)。Rust 版は入力の後ろを 0 とみなして 1 バイトを出力し、
+  そこで止まる (C++ 版で後ろのメモリが 0 だった場合と同じ結果)。
+* **`UNKNOWN2UNICODE` が、末尾の途中までしかない UTF-8 で終端を越えて読む**: 先頭バイトが
+  示す長さ分を、終端の NUL があっても読み進めていた。Rust 版は入力の終わりで止まる。
+* **`%` の後ろの 16 進数字でないバイトの扱いが CPU で違った**: C++ 版は `char` で計算するので、
+  0x80 以上のバイトが来ると、x86 (符号付き `char`) と ARM の Linux (符号なし `char`) で
+  結果が違っていた。Rust 版は CPU によらず符号付きとして計算する (x86 の C++ 版と同じ)。
+  差分テストは `-fsigned-char` でコンパイルして、どの CPU でも同じ基準で比べる。
+* `BASE642ASCII` は出力の長さを確かめずに `data` に書いていた。`convertTo` 経由では入力が
+  255 バイト以下なので実害はないが、Rust 版は出力を `MAX_LEN - 1` バイトで切り詰める。
+
 ## 差分テスト
 
 ```sh
@@ -118,6 +151,7 @@ make
 ./diff_strutil --random 300000  # 比較件数780万件相当まで増やして実行
 ./diff_md5_gnuid              # md5::hexdigest と GnuID: 乱数20万組 (既定)
 ./diff_jis                     # JISConverter: 65536通り全数 (sjis/euc 各1関数)
+./diff_string                  # String: 長さ0〜2全網羅+長さ3〜4を絞ったバイトで全通り+乱数30万件 (約980万件)
 ```
 
 C++ 版の関数をそのままコンパイルしたもの (`WITH_RUST_CORE` を定義しない `cgi.cpp` / `str.cpp`) と、

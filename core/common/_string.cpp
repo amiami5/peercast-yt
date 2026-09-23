@@ -24,6 +24,8 @@
 #include "stream.h"
 
 // -----------------------------------
+// WITH_RUST_CORE のときは、入力を解釈する変換関数は rustcore.cpp (peercast-rs) の実装を使う。
+#ifndef WITH_RUST_CORE
 #define isSJIS(a, b) (((a >= 0x81 && a <= 0x9f) || (a >= 0xe0 && a <= 0xfc)) && ((b >= 0x40 && b <= 0x7e) || (b >= 0x80 && b <= 0xfc)))
 #define isEUC(a) (a >= 0xa1 && a <= 0xfe)
 #define isASCII(a) (a <= 0x7f)
@@ -49,6 +51,7 @@ static int base64chartoval(char input)
     else
         return -2;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 static const char* daysOfWeek[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", nullptr };
@@ -78,6 +81,7 @@ String& String::setFromTime(unsigned int t)
     return *this;
 }
 
+#ifndef WITH_RUST_CORE
 // -----------------------------------
 String& String::setFromStopwatch(unsigned int t)
 {
@@ -342,6 +346,7 @@ void String::ASCII2META(const char *in, bool safe)
     }
     *op = 0;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 String& String::convertTo(TYPE t)
@@ -404,6 +409,7 @@ String& String::convertTo(TYPE t)
     return *this;
 }
 
+#ifndef WITH_RUST_CORE
 // -----------------------------------
 String& String::setUnquote(const char *p, TYPE t)
 {
@@ -419,6 +425,7 @@ String& String::setUnquote(const char *p, TYPE t)
 
     return *this;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 void String::clear()

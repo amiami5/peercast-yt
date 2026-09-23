@@ -16,6 +16,7 @@
 #include "jis.h" // JISConverter
 #include "host.h" // Host
 #include "md5.h" // md5::hexdigest
+#include "_string.h" // String
 #include "str.h"
 
 namespace
@@ -351,6 +352,85 @@ unsigned short JISConverter::sjisToUnicode(unsigned short sjis)
 unsigned short JISConverter::eucToUnicode(unsigned short euc)
 {
     return pcrs_jis_euc_to_unicode(euc);
+}
+
+#endif // WITH_RUST_CORE
+
+#ifdef WITH_RUST_CORE
+
+namespace
+{
+
+// Rust が返した内容を String::data に書く。Rust 側は MAX_LEN - 1 バイト以下しか返さないが、
+// 念のためここでも切り詰める。途中に NUL が含まれていても、そのまま写す (C++ 版と同じ)。
+void storeTo(char (&data)[String::MAX_LEN], pcrs_buf buf)
+{
+    RustBuf owner(buf);
+    size_t n = buf.len < String::MAX_LEN - 1 ? buf.len : String::MAX_LEN - 1;
+    if (n)
+        memcpy(data, buf.ptr, n);
+    data[n] = '\0';
+}
+
+inline const uint8_t* cbytes(const char* s)
+{
+    return reinterpret_cast<const uint8_t*>(s);
+}
+
+} // namespace
+
+String& String::setFromStopwatch(unsigned int t)
+{
+    storeTo(data, pcrs_string_from_stopwatch(t));
+    type = T_ASCII;
+    return *this;
+}
+
+String& String::setFromString(const char *str, TYPE t)
+{
+    storeTo(data, pcrs_string_from_string(cbytes(str), strlen(str)));
+    type = t;
+    return *this;
+}
+
+String& String::setUnquote(const char *p, TYPE t)
+{
+    storeTo(data, pcrs_string_unquote(cbytes(p), strlen(p)));
+    type = t;
+    return *this;
+}
+
+int String::base64WordToChars(char *out, const char *input)
+{
+    return pcrs_base64_word_to_chars(cbytes(input), reinterpret_cast<uint8_t*>(out));
+}
+
+// 以下の変換関数は、入力として自分自身の data を渡されることがある (convertTo)。
+// Rust の結果を受け取ってから data に書くので、入力と出力が同じでも問題ない。
+
+void String::BASE642ASCII(const char *input)
+{
+    storeTo(data, pcrs_string_base64_to_ascii(cbytes(input), strlen(input)));
+}
+
+void String::UNKNOWN2UNICODE(const char *in, bool safe)
+{
+    storeTo(data, pcrs_string_unknown_to_unicode(cbytes(in), strlen(in), safe));
+}
+
+void String::ASCII2ESC(const char *in, bool safe)
+{
+    storeTo(data, pcrs_string_ascii_to_esc(cbytes(in), strlen(in), safe));
+}
+
+void String::ESC2ASCII(const char *in)
+{
+    storeTo(data, pcrs_string_esc_to_ascii(cbytes(in), strlen(in)));
+}
+
+void String::ASCII2META(const char *in, bool safe)
+{
+    storeTo(data, pcrs_string_ascii_to_meta(cbytes(in), strlen(in), safe));
 }
 
 #endif // WITH_RUST_CORE

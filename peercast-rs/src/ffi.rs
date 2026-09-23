@@ -486,3 +486,50 @@ pub extern "C" fn pcrs_jis_sjis_to_unicode(sjis: u16) -> u16 {
 pub extern "C" fn pcrs_jis_euc_to_unicode(euc: u16) -> u16 {
     jis::euc_to_unicode(euc)
 }
+
+// ---------------------------------------------------------------- String (core/common/_string.cpp)
+
+use crate::pcstring;
+
+macro_rules! bytes_flag_to_buf {
+    ($name:ident, $f:path) => {
+        /// # Safety
+        /// `s` は `n` バイト読めること (`n` が 0 なら NULL でもよい)。
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(s: *const u8, n: usize, flag: bool) -> PcrsBuf {
+            // SAFETY: 関数の Safety 節
+            into_buf($f(unsafe { input(s, n) }, flag))
+        }
+    };
+}
+
+bytes_flag_to_buf!(pcrs_string_ascii_to_esc, pcstring::ascii_to_esc);
+bytes_flag_to_buf!(pcrs_string_ascii_to_meta, pcstring::ascii_to_meta);
+bytes_flag_to_buf!(pcrs_string_unknown_to_unicode, pcstring::unknown_to_unicode);
+bytes_to_buf!(pcrs_string_esc_to_ascii, pcstring::esc_to_ascii);
+bytes_to_buf!(pcrs_string_base64_to_ascii, pcstring::base64_to_ascii);
+bytes_to_buf!(pcrs_string_from_string, pcstring::from_string);
+bytes_to_buf!(pcrs_string_unquote, pcstring::unquote);
+
+#[no_mangle]
+pub extern "C" fn pcrs_string_from_stopwatch(t: u32) -> PcrsBuf {
+    into_buf(pcstring::from_stopwatch(t))
+}
+
+/// base64 の 4 文字を 3 バイトに復号して `out` に書き、書いたバイト数 (3、不正なら 0) を返す。
+///
+/// # Safety
+/// `word` は 4 バイト読めること。`out` は 3 バイト書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_base64_word_to_chars(word: *const u8, out: *mut u8) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let w: [u8; 4] = unsafe { std::slice::from_raw_parts(word, 4) }.try_into().unwrap();
+    match pcstring::base64_word_to_chars(&w) {
+        Some(bytes) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, 3) };
+            3
+        }
+        None => 0,
+    }
+}

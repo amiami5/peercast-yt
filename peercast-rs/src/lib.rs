@@ -16,6 +16,7 @@ pub mod inspect;
 pub mod jis;
 mod jis_table;
 pub mod md5;
+pub mod pcstring;
 pub mod strutil;
 pub mod url;
 pub mod utf8;
