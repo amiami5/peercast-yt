@@ -37,6 +37,45 @@ const ::String ChanInfo::T_WEBM = "WEBM";
 const ::String ChanInfo::T_MP4 = "MP4";
 const ::String ChanInfo::T_PLS = "PLS";
 
+#ifdef WITH_RUST_CORE
+#include "rustbridge.h"
+
+// 種類と MIME タイプの表、検索の一致、update で写す欄の判断、atom の組み立ては Rust 版
+// (peercast-rs の chaninfo.rs)。欄を写すこと (String の代入) はここで行う。
+static pcrs_bytes rsBytes(const char* s)
+{
+    return { reinterpret_cast<const uint8_t*>(s), strlen(s) };
+}
+
+static void rsTrack(pcrs_chan_info& v, const TrackInfo& t)
+{
+    v.track_contact = rsBytes(t.contact.data);
+    v.track_title   = rsBytes(t.title.data);
+    v.track_artist  = rsBytes(t.artist.data);
+    v.track_album   = rsBytes(t.album.data);
+    v.track_genre   = rsBytes(t.genre.data);
+}
+
+static pcrs_chan_info rsInfo(const ChanInfo& i)
+{
+    pcrs_chan_info v = {};
+    v.name         = rsBytes(i.name.data);
+    v.content_type = rsBytes(i.contentType.data);
+    v.mime         = rsBytes(i.MIMEType.data);
+    v.ext          = rsBytes(i.streamExt.data);
+    v.desc         = rsBytes(i.desc.data);
+    v.genre        = rsBytes(i.genre.data);
+    v.url          = rsBytes(i.url.data);
+    v.comment      = rsBytes(i.comment.data);
+    rsTrack(v, i.track);
+    memcpy(v.id, i.id.id, 16);
+    memcpy(v.bcid, i.bcID.id, 16);
+    v.bitrate = i.bitrate;
+    v.status  = i.status;
+    return v;
+}
+#endif
+
 // -----------------------------------
 const char *ChanInfo::getTypeStr()
 {
@@ -44,6 +83,13 @@ const char *ChanInfo::getTypeStr()
 }
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+std::string ChanInfo::getTypeStringLong()
+{
+    pcrs_chan_info v = rsInfo(*this);
+    return rustbridge::RustBuf(pcrs_chaninfo_type_string_long(&v)).str();
+}
+#else
 std::string ChanInfo::getTypeStringLong()
 {
     std::string buf = std::string(getTypeStr()) +
@@ -56,6 +102,7 @@ std::string ChanInfo::getTypeStringLong()
 
     return buf;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 const char *ChanInfo::getTypeExt()
@@ -86,6 +133,12 @@ const char *ChanInfo::getTypeStr(const TYPE& t)
 }
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+const char *ChanInfo::getProtocolStr(PROTOCOL t)
+{
+    return pcrs_chaninfo_protocol_str(t);
+}
+#else
 const char *ChanInfo::getProtocolStr(PROTOCOL t)
 {
     switch (t)
@@ -98,8 +151,15 @@ const char *ChanInfo::getProtocolStr(PROTOCOL t)
         default: return "UNKNOWN";
     }
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+ChanInfo::PROTOCOL ChanInfo::getProtocolFromStr(const char *str)
+{
+    return static_cast<PROTOCOL>(pcrs_chaninfo_protocol_from_str(reinterpret_cast<const uint8_t*>(str), strlen(str)));
+}
+#else
 ChanInfo::PROTOCOL ChanInfo::getProtocolFromStr(const char *str)
 {
     if (Sys::stricmp(str, "HTTP")==0)
@@ -113,8 +173,15 @@ ChanInfo::PROTOCOL ChanInfo::getProtocolFromStr(const char *str)
     else
         return SP_UNKNOWN;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+const char *ChanInfo::getTypeExt(TYPE t)
+{
+    return pcrs_chaninfo_type_ext(reinterpret_cast<const uint8_t*>(t.cstr()), strlen(t.cstr()));
+}
+#else
 const char *ChanInfo::getTypeExt(TYPE t)
 {
     if (t == ChanInfo::T_OGM || t == ChanInfo::T_OGG)
@@ -134,8 +201,15 @@ const char *ChanInfo::getTypeExt(TYPE t)
     else
         return "";
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+const char *ChanInfo::getMIMEType(TYPE t)
+{
+    return pcrs_chaninfo_mime_type(reinterpret_cast<const uint8_t*>(t.cstr()), strlen(t.cstr()));
+}
+#else
 const char *ChanInfo::getMIMEType(TYPE t)
 {
     if (t == ChanInfo::T_OGG)
@@ -159,8 +233,15 @@ const char *ChanInfo::getMIMEType(TYPE t)
     else
         return "application/octet-stream";
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+ChanInfo::TYPE ChanInfo::getTypeFromMIME(const std::string& mediaType)
+{
+    return pcrs_chaninfo_type_from_mime(reinterpret_cast<const uint8_t*>(mediaType.data()), mediaType.size());
+}
+#else
 ChanInfo::TYPE ChanInfo::getTypeFromMIME(const std::string& mediaType)
 {
     if (mediaType == MIME_XOGG)
@@ -182,8 +263,15 @@ ChanInfo::TYPE ChanInfo::getTypeFromMIME(const std::string& mediaType)
     else
         return T_UNKNOWN;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+ChanInfo::TYPE ChanInfo::getTypeFromStr(const char *str)
+{
+    return pcrs_chaninfo_type_from_str(reinterpret_cast<const uint8_t*>(str), strlen(str));
+}
+#else
 ChanInfo::TYPE ChanInfo::getTypeFromStr(const char *str)
 {
     if (Sys::stricmp(str, "MP3")==0)
@@ -209,8 +297,16 @@ ChanInfo::TYPE ChanInfo::getTypeFromStr(const char *str)
     else
         return T_UNKNOWN;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+bool    ChanInfo::matchNameID(ChanInfo &inf)
+{
+    pcrs_chan_info me = rsInfo(*this), q = rsInfo(inf);
+    return pcrs_chaninfo_match(&me, &q, true);
+}
+#else
 bool    ChanInfo::matchNameID(ChanInfo &inf)
 {
     if (inf.id.isSet())
@@ -223,8 +319,16 @@ bool    ChanInfo::matchNameID(ChanInfo &inf)
 
     return false;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+bool    ChanInfo::match(ChanInfo &inf)
+{
+    pcrs_chan_info me = rsInfo(*this), q = rsInfo(inf);
+    return pcrs_chaninfo_match(&me, &q, false);
+}
+#else
 bool    ChanInfo::match(ChanInfo &inf)
 {
     bool matchAny=true;
@@ -272,8 +376,42 @@ bool    ChanInfo::match(ChanInfo &inf)
 
     return matchAny;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+bool ChanInfo::update(const ChanInfo &info)
+{
+    pcrs_chan_info me = rsInfo(*this), in = rsInfo(info);
+    uint32_t copy = 0;
+    int r = pcrs_chaninfo_update(&me, &in, &copy);
+    if (r == 0)
+        return false;
+    if (r == 1)
+    {
+        LOG_ERROR("ChanInfo BC key not valid");
+        return false;
+    }
+    if (r == 3)
+        bcID = info.bcID;
+
+    if (copy & PCRS_CI_BITRATE)       bitrate = info.bitrate;
+    if (copy & PCRS_CI_CONTENT_TYPE)  contentType = info.contentType;
+    if (copy & PCRS_CI_MIME)          MIMEType = info.MIMEType;
+    if (copy & PCRS_CI_EXT)           streamExt = info.streamExt;
+    if (copy & PCRS_CI_DESC)          desc = info.desc;
+    if (copy & PCRS_CI_NAME)          name = info.name;
+    if (copy & PCRS_CI_COMMENT)       comment = info.comment;
+    if (copy & PCRS_CI_GENRE)         genre = info.genre;
+    if (copy & PCRS_CI_URL)           url = info.url;
+    if (copy & PCRS_CI_TRACK_CONTACT) track.contact = info.track.contact;
+    if (copy & PCRS_CI_TRACK_TITLE)   track.title = info.track.title;
+    if (copy & PCRS_CI_TRACK_ARTIST)  track.artist = info.track.artist;
+    if (copy & PCRS_CI_TRACK_ALBUM)   track.album = info.track.album;
+    if (copy & PCRS_CI_TRACK_GENRE)   track.genre = info.track.genre;
+    return copy != 0;
+}
+#else
 bool ChanInfo::update(const ChanInfo &info)
 {
     bool changed = false;
@@ -358,6 +496,7 @@ bool ChanInfo::update(const ChanInfo &info)
 
     return changed;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 void ChanInfo::initNameID(const char *n)
@@ -481,6 +620,15 @@ void ChanInfo::readInfoAtoms(AtomStream &atom, int numc)
 #endif
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+void ChanInfo::writeInfoAtoms(AtomStream &atom)
+{
+    pcrs_chan_info v = rsInfo(*this);
+    rustbridge::RustBuf b(pcrs_chaninfo_write_atoms(&v, false));
+    std::string bytes = b.str();
+    atom.io.write(bytes.data(), bytes.size());
+}
+#else
 void ChanInfo::writeInfoAtoms(AtomStream &atom)
 {
     int natoms = 7;
@@ -501,8 +649,18 @@ void ChanInfo::writeInfoAtoms(AtomStream &atom)
         if (!streamExt.isEmpty())
             atom.writeString(PCP_CHAN_INFO_STREAMEXT, streamExt.cstr());
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+void ChanInfo::writeTrackAtoms(AtomStream &atom)
+{
+    pcrs_chan_info v = rsInfo(*this);
+    rustbridge::RustBuf b(pcrs_chaninfo_write_atoms(&v, true));
+    std::string bytes = b.str();
+    atom.io.write(bytes.data(), bytes.size());
+}
+#else
 void ChanInfo::writeTrackAtoms(AtomStream &atom)
 {
     atom.writeParent(PCP_CHAN_TRACK, 4);
@@ -511,6 +669,7 @@ void ChanInfo::writeTrackAtoms(AtomStream &atom)
         atom.writeString(PCP_CHAN_TRACK_URL, track.contact.cstr());
         atom.writeString(PCP_CHAN_TRACK_ALBUM, track.album.cstr());
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 XML::Node *ChanInfo::createChannelXML()
@@ -613,6 +772,21 @@ void ChanInfo::setContentType(TYPE type)
 }
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+bool TrackInfo::update(const TrackInfo &inf)
+{
+    pcrs_chan_info me = {}, in = {};
+    rsTrack(me, *this);
+    rsTrack(in, inf);
+    uint32_t copy = pcrs_trackinfo_update(&me, &in);
+    if (copy & PCRS_CI_TRACK_CONTACT) contact = inf.contact;
+    if (copy & PCRS_CI_TRACK_TITLE)   title = inf.title;
+    if (copy & PCRS_CI_TRACK_ARTIST)  artist = inf.artist;
+    if (copy & PCRS_CI_TRACK_ALBUM)   album = inf.album;
+    if (copy & PCRS_CI_TRACK_GENRE)   genre = inf.genre;
+    return copy != 0;
+}
+#else
 bool TrackInfo::update(const TrackInfo &inf)
 {
     bool changed = false;
@@ -649,8 +823,15 @@ bool TrackInfo::update(const TrackInfo &inf)
 
     return changed;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+const char* ChanInfo::getPlayListExt()
+{
+    return pcrs_chaninfo_playlist_ext(reinterpret_cast<const uint8_t*>(contentType.cstr()), strlen(contentType.cstr()));
+}
+#else
 const char* ChanInfo::getPlayListExt()
 {
     switch (PlayList::getPlayListType(contentType))
@@ -666,6 +847,7 @@ const char* ChanInfo::getPlayListExt()
         return "";
     }
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 amf0::Value ChanInfo::getState()

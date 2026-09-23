@@ -23,6 +23,79 @@
 #include "servmgr.h"
 #include "version2.h"
 
+#ifdef WITH_RUST_CORE
+#include <memory>
+#include "rustbridge.h"
+
+// host atom の組み立て、版の文字列、色、一覧の数え上げ、次につなぐホストの選び方、追加・削除する
+// ホストの判断は Rust 版 (peercast-rs の chanhit.rs)。連結リストはここにあり、並びどおりの配列に
+// して渡す。
+static pcrs_host rsHost(const Host& h)
+{
+    pcrs_host r;
+    in6_addr a = h.ip.serialize();
+    memcpy(r.ip, a.s6_addr, 16);
+    r.port = h.port;
+    return r;
+}
+
+static pcrs_hit rsHit(const ChanHit& h)
+{
+    pcrs_hit v = {};
+    v.host = rsHost(h.host);
+    v.rhost[0] = rsHost(h.rhost[0]);
+    v.rhost[1] = rsHost(h.rhost[1]);
+    v.uphost = rsHost(h.uphost);
+    v.num_listeners = h.numListeners;
+    v.num_relays = h.numRelays;
+    v.num_hops = h.numHops;
+    v.time = h.time;
+    v.up_time = h.upTime;
+    v.last_contact = h.lastContact;
+    v.version = h.version;
+    v.oldest_pos = h.oldestPos;
+    v.newest_pos = h.newestPos;
+    v.uphost_hops = h.uphostHops;
+    v.version_vp = h.versionVP;
+    v.version_ex_number = h.versionExNumber;
+    memcpy(v.session_id, h.sessionID.id, 16);
+    memcpy(v.version_ex_prefix, h.versionExPrefix, 2);
+    v.firewalled = h.firewalled;
+    v.tracker = h.tracker;
+    v.recv = h.recv;
+    v.dead = h.dead;
+    v.direct = h.direct;
+    v.relay = h.relay;
+    v.cin = h.cin;
+    return v;
+}
+
+// 連結リストを並びどおりの配列にしたもの
+struct HitArray
+{
+    std::vector<std::shared_ptr<ChanHit>> nodes;
+    std::vector<pcrs_hit> views;
+    std::unique_ptr<bool[]> flags;
+
+    explicit HitArray(const std::shared_ptr<ChanHit>& head)
+    {
+        for (auto c = head; c; c = c->next)
+        {
+            nodes.push_back(c);
+            views.push_back(rsHit(*c));
+        }
+        flags.reset(new bool[nodes.size() + 1]());
+    }
+    size_t size() const { return nodes.size(); }
+};
+
+static uint32_t countHits(const std::shared_ptr<ChanHit>& head, int op)
+{
+    HitArray a(head);
+    return pcrs_hits_count(a.views.data(), a.size(), op);
+}
+#endif
+
 // -----------------------------------
 ChanHitList::ChanHitList()
     : used(false)
@@ -144,6 +217,7 @@ void ChanHit::initLocal(
 }
 
 // -----------------------------------
+#ifndef WITH_RUST_CORE
 static int flags1(ChanHit* hit)
 {
     int fl1 = 0;
@@ -155,8 +229,18 @@ static int flags1(ChanHit* hit)
     if (hit->firewalled) fl1 |= PCP_HOST_FLAGS1_PUSH;
     return fl1;
 }
+#endif
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+void ChanHit::writeAtoms(AtomStream &atom, const GnuID &chanID)
+{
+    pcrs_hit v = rsHit(*this);
+    rustbridge::RustBuf b(pcrs_hit_write_atoms(&v, chanID.id));
+    std::string bytes = b.str();
+    atom.io.write(bytes.data(), bytes.size());
+}
+#else
 void ChanHit::writeAtoms(AtomStream &atom, const GnuID &chanID)
 {
     bool addChan = chanID.isSet();
@@ -193,6 +277,7 @@ void ChanHit::writeAtoms(AtomStream &atom, const GnuID &chanID)
             atom.writeInt(PCP_HOST_UPHOST_HOPS, uphostHops);
         }
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 amf0::Value    ChanHit::getState()
@@ -214,6 +299,13 @@ amf0::Value    ChanHit::getState()
 }
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+std::string ChanHit::versionString()
+{
+    pcrs_hit v = rsHit(*this);
+    return rustbridge::RustBuf(pcrs_hit_version_string(&v)).str();
+}
+#else
 std::string ChanHit::versionString()
 {
     using namespace std;
@@ -226,6 +318,7 @@ std::string ChanHit::versionString()
     else
         return string() + versionExPrefix[0] + versionExPrefix[1] + to_string(versionExNumber);
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 // 選択されたホストの情報を簡潔に文字列化する。
@@ -240,6 +333,13 @@ std::string ChanHit::str(bool withPort)
 
 // -----------------------------------
 // ノードの色。
+#ifdef WITH_RUST_CORE
+ChanHit::Color ChanHit::getColor()
+{
+    pcrs_hit v = rsHit(*this);
+    return static_cast<Color>(pcrs_hit_color(&v));
+}
+#else
 ChanHit::Color ChanHit::getColor()
 {
     if (host.port == 0)
@@ -259,16 +359,31 @@ ChanHit::Color ChanHit::getColor()
         return Color::green;
     }
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 // GIVメソッドに対応している。
+#ifdef WITH_RUST_CORE
+bool ChanHit::canGiv()
+{
+    pcrs_hit v = rsHit(*this);
+    return pcrs_hit_can_giv(&v);
+}
+#else
 bool ChanHit::canGiv()
 {
     // PeerCastStation以外。
     return std::string(versionExPrefix, versionExPrefix + 2) != "ST";
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::getTotalListeners()
+{
+    return (int) countHits(hit, PCRS_HITS_TOTAL_LISTENERS);
+}
+#else
 int ChanHitList::getTotalListeners()
 {
     int cnt = 0;
@@ -281,8 +396,15 @@ int ChanHitList::getTotalListeners()
     }
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::getTotalRelays()
+{
+    return (int) countHits(hit, PCRS_HITS_TOTAL_RELAYS);
+}
+#else
 int ChanHitList::getTotalRelays()
 {
     int cnt = 0;
@@ -295,8 +417,15 @@ int ChanHitList::getTotalRelays()
     }
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::getTotalFirewalled()
+{
+    return (int) countHits(hit, PCRS_HITS_TOTAL_FIREWALLED);
+}
+#else
 int ChanHitList::getTotalFirewalled()
 {
     int cnt = 0;
@@ -310,6 +439,7 @@ int ChanHitList::getTotalFirewalled()
     }
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 int ChanHitList::contactTrackers(bool connected, int numl, int nums, int uptm)
@@ -343,6 +473,45 @@ std::shared_ptr<ChanHit> ChanHitList::deleteHit(std::shared_ptr<ChanHit> ch)
 }
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+std::shared_ptr<ChanHit> ChanHitList::addHit(ChanHit &h)
+{
+    LOG_DEBUG("Add hit: %s/%s", h.rhost[0].str().c_str(), h.rhost[1].str().c_str());
+
+    HitArray a(hit);
+    pcrs_hit v = rsHit(h);
+    int r = pcrs_hits_add(a.views.data(), a.size(), &v, servMgr->sessionID.id, a.flags.get());
+
+    // dont add our own hits
+    if (r == -2)
+        return nullptr;
+
+    lastHitTime = sys->getTime();
+    h.time = lastHitTime;
+
+    if (r >= 0)
+    {
+        auto ch = a.nodes[r];
+        auto next = ch->next;
+        *ch = h;
+        ch->next = next;
+        return ch;
+    }
+
+    // clear hits with same session ID (IP may have changed)
+    for (size_t i = 0; i < a.size(); i++)
+        if (a.flags[i])
+            deleteHit(a.nodes[i]);
+
+    // else add new hit
+    auto ch = std::make_shared<ChanHit>();
+    *ch = h;
+    ch->chanID = info.id;
+    ch->next = hit;
+    hit = ch;
+    return ch;
+}
+#else
 std::shared_ptr<ChanHit> ChanHitList::addHit(ChanHit &h)
 {
     LOG_DEBUG("Add hit: %s/%s", h.rhost[0].str().c_str(), h.rhost[1].str().c_str());
@@ -401,9 +570,21 @@ std::shared_ptr<ChanHit> ChanHitList::addHit(ChanHit &h)
 
     return nullptr;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 // 古いヒットを削除し、リストに残ったヒットの数を返す。
+#ifdef WITH_RUST_CORE
+int ChanHitList::clearDeadHits(unsigned int timeout, bool clearTrackers)
+{
+    HitArray a(hit);
+    int cnt = pcrs_hits_clear_dead(a.views.data(), a.size(), timeout, clearTrackers, sys->getTime(), a.flags.get());
+    for (size_t i = 0; i < a.size(); i++)
+        if (a.flags[i])
+            deleteHit(a.nodes[i]);
+    return cnt;
+}
+#else
 int ChanHitList::clearDeadHits(unsigned int timeout, bool clearTrackers)
 {
     int cnt = 0;
@@ -427,8 +608,22 @@ int ChanHitList::clearDeadHits(unsigned int timeout, bool clearTrackers)
     }
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+void    ChanHitList::deadHit(ChanHit &h)
+{
+    LOG_DEBUG("Dead hit: %s/%s", h.rhost[0].str().c_str(), h.rhost[1].str().c_str());
+
+    HitArray a(hit);
+    pcrs_hit v = rsHit(h);
+    pcrs_hits_same_hosts(a.views.data(), a.size(), &v, a.flags.get());
+    for (size_t i = 0; i < a.size(); i++)
+        if (a.flags[i])
+            a.nodes[i]->dead = true;
+}
+#else
 void    ChanHitList::deadHit(ChanHit &h)
 {
     LOG_DEBUG("Dead hit: %s/%s", h.rhost[0].str().c_str(), h.rhost[1].str().c_str());
@@ -444,8 +639,22 @@ void    ChanHitList::deadHit(ChanHit &h)
         ch = ch->next;
     }
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+void    ChanHitList::delHit(ChanHit &h)
+{
+    LOG_DEBUG("Del hit: %s/%s", h.rhost[0].str().c_str(), h.rhost[1].str().c_str());
+
+    HitArray a(hit);
+    pcrs_hit v = rsHit(h);
+    pcrs_hits_same_hosts(a.views.data(), a.size(), &v, a.flags.get());
+    for (size_t i = 0; i < a.size(); i++)
+        if (a.flags[i])
+            deleteHit(a.nodes[i]);
+}
+#else
 void    ChanHitList::delHit(ChanHit &h)
 {
     LOG_DEBUG("Del hit: %s/%s", h.rhost[0].str().c_str(), h.rhost[1].str().c_str());
@@ -462,8 +671,15 @@ void    ChanHitList::delHit(ChanHit &h)
         ch = ch->next;
     }
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::numHits()
+{
+    return (int) countHits(hit, PCRS_HITS_NUM_HITS);
+}
+#else
 int ChanHitList::numHits()
 {
     int cnt = 0;
@@ -477,8 +693,15 @@ int ChanHitList::numHits()
 
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::numListeners()
+{
+    return (int) countHits(hit, PCRS_HITS_NUM_LISTENERS);
+}
+#else
 int ChanHitList::numListeners()
 {
     int cnt = 0;
@@ -492,8 +715,15 @@ int ChanHitList::numListeners()
 
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::numRelays()
+{
+    return (int) countHits(hit, PCRS_HITS_NUM_RELAYS);
+}
+#else
 int ChanHitList::numRelays()
 {
     int cnt = 0;
@@ -507,8 +737,15 @@ int ChanHitList::numRelays()
 
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::numTrackers()
+{
+    return (int) countHits(hit, PCRS_HITS_NUM_TRACKERS);
+}
+#else
 int ChanHitList::numTrackers()
 {
     int cnt = 0;
@@ -521,8 +758,15 @@ int ChanHitList::numTrackers()
     }
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::numFirewalled()
+{
+    return (int) countHits(hit, PCRS_HITS_NUM_FIREWALLED);
+}
+#else
 int ChanHitList::numFirewalled()
 {
     int cnt = 0;
@@ -535,8 +779,15 @@ int ChanHitList::numFirewalled()
     }
     return cnt;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::closestHit()
+{
+    return (int) countHits(hit, PCRS_HITS_CLOSEST);
+}
+#else
 int ChanHitList::closestHit()
 {
     unsigned int hop = 10000;
@@ -551,8 +802,15 @@ int ChanHitList::closestHit()
 
     return hop;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::furthestHit()
+{
+    return (int) countHits(hit, PCRS_HITS_FURTHEST);
+}
+#else
 int ChanHitList::furthestHit()
 {
     unsigned int hop = 0;
@@ -567,8 +825,15 @@ int ChanHitList::furthestHit()
 
     return hop;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+unsigned int    ChanHitList::newestHit()
+{
+    return (unsigned int) countHits(hit, PCRS_HITS_NEWEST);
+}
+#else
 unsigned int    ChanHitList::newestHit()
 {
     unsigned int time = 0;
@@ -583,6 +848,7 @@ unsigned int    ChanHitList::newestHit()
 
     return time;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 void ChanHitList::forEachHit(std::function<void(ChanHit*)> block)
@@ -605,6 +871,36 @@ void ChanHitList::forEachHit(std::function<void(ChanHit*)> block)
 }
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+int ChanHitList::pickHits(ChanHitSearch &chs)
+{
+    HitArray a(hit);
+    pcrs_hit_search s = {};
+    s.match_host = rsHost(chs.matchHost);
+    s.wait_delay = chs.waitDelay;
+    s.use_firewalled = chs.useFirewalled;
+    s.trackers_only = chs.trackersOnly;
+    s.use_busy_relays = chs.useBusyRelays;
+    s.use_busy_controls = chs.useBusyControls;
+    memcpy(s.exclude_id, chs.excludeID.id, 16);
+    s.num_results = chs.numResults;
+
+    unsigned int ctime = sys->getTime();
+    bool lan = false;
+    int i = pcrs_hits_pick(a.views.data(), a.size(), &s, ctime, &lan);
+    if (i < 0)
+        return 0;
+
+    // 選んだときの値を写してから、最後に連絡した時刻を更新する (C++ 版と同じ順)
+    auto bestP = a.nodes[i];
+    ChanHit best = *bestP;
+    best.host = best.rhost[lan ? 1 : 0];
+    if (chs.waitDelay)
+        bestP->lastContact = ctime;
+    chs.best[chs.numResults++] = best;
+    return 1;
+}
+#else
 int ChanHitList::pickHits(ChanHitSearch &chs)
 {
     ChanHit best;
@@ -677,6 +973,7 @@ int ChanHitList::pickHits(ChanHitSearch &chs)
 
     return 0;
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 void ChanHitSearch::init()

@@ -9,6 +9,8 @@
 
 pub mod amf0;
 pub mod chandir;
+pub mod chanhit;
+pub mod chaninfo;
 pub mod chanpacket;
 pub mod cgi;
 pub mod commands;

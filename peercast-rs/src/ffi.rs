@@ -2274,3 +2274,467 @@ bytes_to_buf!(
 pub extern "C" fn pcrs_chandir_format_time(diff: u32) -> PcrsBuf {
     into_buf(chandir::format_time(diff))
 }
+
+// ---- chaninfo (core/common/chaninfo.cpp の ChanInfo と TrackInfo の一部) ----
+
+use crate::chaninfo;
+use crate::pcp::write::AtomBuf;
+
+/// 表の関数が返す文字列の、NUL で終わる形 (C++ 版の `const char*` の返り値と同じく静的な文字列)
+static C_STRS: &[&[u8]] = &[
+    b"UNKNOWN\0", b"RAW\0", b"MP3\0", b"OGG\0", b"OGM\0", b"MOV\0", b"MPG\0", b"FLV\0", b"MKV\0", b"WEBM\0",
+    b"MP4\0", b"PLS\0", b".ogg\0", b".mp3\0", b".mov\0", b".flv\0", b".mkv\0", b".webm\0", b".mp4\0", b"\0",
+    b"audio/mpeg\0", b"application/x-ogg\0", b"video/quicktime\0", b"video/mpeg\0", b"video/x-flv\0",
+    b"video/x-matroska\0", b"video/webm\0", b"video/mp4\0", b"application/octet-stream\0", b"HTTP\0",
+    b"FILE\0", b"PCP\0", b"RTMP\0", b"PIPE\0", b".ram\0", b".m3u\0",
+];
+
+fn c_static(s: &'static [u8]) -> *const std::ffi::c_char {
+    C_STRS
+        .iter()
+        .find(|c| &c[..c.len() - 1] == s)
+        .map(|c| c.as_ptr() as *const std::ffi::c_char)
+        .expect("C_STRS に載っていない文字列")
+}
+
+macro_rules! bytes_to_cstatic {
+    ($name:ident, $f:path) => {
+        /// # Safety
+        /// `s` は `n` バイト読めること (`n` が 0 なら NULL でもよい)。
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(s: *const u8, n: usize) -> *const std::ffi::c_char {
+            // SAFETY: 関数の Safety 節
+            c_static($f(unsafe { input(s, n) }))
+        }
+    };
+}
+
+bytes_to_cstatic!(pcrs_chaninfo_type_ext, chaninfo::type_ext);
+bytes_to_cstatic!(pcrs_chaninfo_mime_type, chaninfo::mime_type);
+bytes_to_cstatic!(pcrs_chaninfo_type_from_mime, chaninfo::type_from_mime);
+bytes_to_cstatic!(pcrs_chaninfo_type_from_str, chaninfo::type_from_str);
+bytes_to_cstatic!(pcrs_chaninfo_playlist_ext, chaninfo::playlist_ext);
+
+#[no_mangle]
+pub extern "C" fn pcrs_chaninfo_protocol_str(p: i32) -> *const std::ffi::c_char {
+    c_static(chaninfo::protocol_str(p))
+}
+
+/// # Safety
+/// `s` は `n` バイト読めること (`n` が 0 なら NULL でもよい)。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chaninfo_protocol_from_str(s: *const u8, n: usize) -> i32 {
+    // SAFETY: 関数の Safety 節
+    chaninfo::protocol_from_str(unsafe { input(s, n) })
+}
+
+/// `ChanInfo` (C の `pcrs_chan_info`)
+#[repr(C)]
+pub struct CChanInfo {
+    pub name: CBytes,
+    pub content_type: CBytes,
+    pub mime: CBytes,
+    pub ext: CBytes,
+    pub desc: CBytes,
+    pub genre: CBytes,
+    pub url: CBytes,
+    pub comment: CBytes,
+    pub track_contact: CBytes,
+    pub track_title: CBytes,
+    pub track_artist: CBytes,
+    pub track_album: CBytes,
+    pub track_genre: CBytes,
+    pub id: [u8; 16],
+    pub bcid: [u8; 16],
+    pub bitrate: i32,
+    pub status: i32,
+}
+
+/// # Safety
+/// `c` は有効な `pcrs_chan_info` を指し、その中のバイト列は読めること。
+unsafe fn info_of<'a>(c: *const CChanInfo) -> chaninfo::Info<'a> {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let c = &*c;
+        let b = |x: &CBytes| input(x.ptr, x.len);
+        chaninfo::Info {
+            name: b(&c.name),
+            id: c.id,
+            bcid: c.bcid,
+            bitrate: c.bitrate,
+            content_type: b(&c.content_type),
+            mime: b(&c.mime),
+            ext: b(&c.ext),
+            status: c.status,
+            desc: b(&c.desc),
+            genre: b(&c.genre),
+            url: b(&c.url),
+            comment: b(&c.comment),
+            track: chaninfo::Track {
+                contact: b(&c.track_contact),
+                title: b(&c.track_title),
+                artist: b(&c.track_artist),
+                album: b(&c.track_album),
+                genre: b(&c.track_genre),
+            },
+        }
+    }
+}
+
+/// `getTypeStringLong`
+///
+/// # Safety
+/// `info` は `info_of` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chaninfo_type_string_long(info: *const CChanInfo) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    let i = unsafe { info_of(info) };
+    into_buf(chaninfo::type_string_long(i.content_type, i.mime, i.ext))
+}
+
+/// `match(ChanInfo&)` (`name_id_only` なら `matchNameID`)
+///
+/// # Safety
+/// `me` と `q` は `info_of` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chaninfo_match(me: *const CChanInfo, q: *const CChanInfo, name_id_only: bool) -> bool {
+    // SAFETY: 関数の Safety 節
+    let (me, q) = unsafe { (info_of(me), info_of(q)) };
+    if name_id_only {
+        chaninfo::match_name_id(&me, &q)
+    } else {
+        chaninfo::match_info(&me, &q)
+    }
+}
+
+/// `ChanInfo::update`。0 使わない、1 配信者の鍵が違う、2 `copy` の欄を写す、3 さらに配信者の鍵も写す。
+///
+/// # Safety
+/// `me` と `info` は `info_of` と同じ。`copy` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chaninfo_update(me: *const CChanInfo, info: *const CChanInfo, copy: *mut u32) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (me, info) = unsafe { (info_of(me), info_of(info)) };
+    match chaninfo::update(&me, &info) {
+        chaninfo::Update::Ignore => 0,
+        chaninfo::Update::BadKey => 1,
+        chaninfo::Update::Apply { set_bcid, copy: c } => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *copy = c };
+            if set_bcid {
+                3
+            } else {
+                2
+            }
+        }
+    }
+}
+
+/// `TrackInfo::update` で写す欄 (`me` と `info` の track の欄だけ使う)
+///
+/// # Safety
+/// `me` と `info` は `info_of` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_trackinfo_update(me: *const CChanInfo, info: *const CChanInfo) -> u32 {
+    // SAFETY: 関数の Safety 節
+    let (me, info) = unsafe { (info_of(me), info_of(info)) };
+    chaninfo::track_update(&me.track, &info.track)
+}
+
+/// `writeInfoAtoms` (`track` が false) と `writeTrackAtoms` (true)
+///
+/// # Safety
+/// `info` は `info_of` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chaninfo_write_atoms(info: *const CChanInfo, track: bool) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    let i = unsafe { info_of(info) };
+    let mut b = AtomBuf::default();
+    if track {
+        chaninfo::write_track_atoms(&mut b, &i.track);
+    } else {
+        chaninfo::write_info_atoms(&mut b, &i);
+    }
+    into_buf(b.0)
+}
+
+// ---- chanhit (core/common/chanhit.cpp の ChanHit と ChanHitList の一部) ----
+
+use crate::chanhit;
+
+/// `Host` (C の `pcrs_host`)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CHost {
+    pub ip: [u8; 16],
+    pub port: u16,
+}
+
+impl From<CHost> for chanhit::Host {
+    fn from(h: CHost) -> Self {
+        chanhit::Host { ip: h.ip, port: h.port }
+    }
+}
+
+/// `ChanHit` (C の `pcrs_hit`)
+#[repr(C)]
+pub struct CHit {
+    pub host: CHost,
+    pub rhost: [CHost; 2],
+    pub uphost: CHost,
+    pub num_listeners: u32,
+    pub num_relays: u32,
+    pub num_hops: u32,
+    pub time: u32,
+    pub up_time: u32,
+    pub last_contact: u32,
+    pub version: u32,
+    pub oldest_pos: u32,
+    pub newest_pos: u32,
+    pub uphost_hops: u32,
+    pub version_vp: u32,
+    pub version_ex_number: u32,
+    pub session_id: [u8; 16],
+    pub version_ex_prefix: [u8; 2],
+    pub firewalled: bool,
+    pub tracker: bool,
+    pub recv: bool,
+    pub dead: bool,
+    pub direct: bool,
+    pub relay: bool,
+    pub cin: bool,
+}
+
+impl From<&CHit> for chanhit::Hit {
+    fn from(c: &CHit) -> Self {
+        chanhit::Hit {
+            host: c.host.into(),
+            rhost: [c.rhost[0].into(), c.rhost[1].into()],
+            num_listeners: c.num_listeners,
+            num_relays: c.num_relays,
+            num_hops: c.num_hops,
+            time: c.time,
+            up_time: c.up_time,
+            last_contact: c.last_contact,
+            session_id: c.session_id,
+            version: c.version,
+            oldest_pos: c.oldest_pos,
+            newest_pos: c.newest_pos,
+            firewalled: c.firewalled,
+            tracker: c.tracker,
+            recv: c.recv,
+            dead: c.dead,
+            direct: c.direct,
+            relay: c.relay,
+            cin: c.cin,
+            uphost: c.uphost.into(),
+            uphost_hops: c.uphost_hops,
+            version_vp: c.version_vp,
+            version_ex_prefix: c.version_ex_prefix,
+            version_ex_number: c.version_ex_number,
+        }
+    }
+}
+
+/// # Safety
+/// `h` は有効な `pcrs_hit` を指すこと。
+unsafe fn hit_of(h: *const CHit) -> chanhit::Hit {
+    // SAFETY: 関数の Safety 節
+    unsafe { (&*h).into() }
+}
+
+/// # Safety
+/// `hits` は `n` 個読めること (`n` が 0 なら NULL でもよい)。
+unsafe fn hits_of(hits: *const CHit, n: usize) -> Vec<chanhit::Hit> {
+    if n == 0 || hits.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: 関数の Safety 節
+    unsafe { std::slice::from_raw_parts(hits, n) }.iter().map(Into::into).collect()
+}
+
+/// # Safety
+/// `out` は `n` 個書けること (`n` が 0 なら NULL でもよい)。
+unsafe fn flags_of<'a>(out: *mut bool, n: usize) -> &'a mut [bool] {
+    if n == 0 || out.is_null() {
+        &mut []
+    } else {
+        // SAFETY: 関数の Safety 節
+        unsafe { std::slice::from_raw_parts_mut(out, n) }
+    }
+}
+
+/// `ChanHit::writeAtoms`
+///
+/// # Safety
+/// `h` は有効な `pcrs_hit`、`chan_id` は 16 バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hit_write_atoms(h: *const CHit, chan_id: *const u8) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    let (h, id) = unsafe { (hit_of(h), *(chan_id as *const [u8; 16])) };
+    let mut b = AtomBuf::default();
+    chanhit::write_atoms(&mut b, &h, &id);
+    into_buf(b.0)
+}
+
+/// `versionString`
+///
+/// # Safety
+/// `h` は有効な `pcrs_hit` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hit_version_string(h: *const CHit) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    into_buf(chanhit::version_string(&unsafe { hit_of(h) }))
+}
+
+/// `getColor` (0 red、1 purple、2 blue、3 green)
+///
+/// # Safety
+/// `h` は有効な `pcrs_hit` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hit_color(h: *const CHit) -> i32 {
+    // SAFETY: 関数の Safety 節
+    chanhit::color(&unsafe { hit_of(h) })
+}
+
+/// `canGiv`
+///
+/// # Safety
+/// `h` は有効な `pcrs_hit` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hit_can_giv(h: *const CHit) -> bool {
+    // SAFETY: 関数の Safety 節
+    chanhit::can_giv(&unsafe { hit_of(h) })
+}
+
+/// 一覧の数え上げ (`op` は `PCRS_HITS_*`)。返り値は C++ 版の返り値のビット列。
+///
+/// # Safety
+/// `hits` は `n` 個読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hits_count(hits: *const CHit, n: usize, op: i32) -> u32 {
+    use chanhit::Count::*;
+    let op = match op {
+        0 => NumHits,
+        1 => NumListeners,
+        2 => NumRelays,
+        3 => NumTrackers,
+        4 => NumFirewalled,
+        5 => ClosestHit,
+        6 => FurthestHit,
+        7 => NewestHit,
+        8 => TotalListeners,
+        9 => TotalRelays,
+        10 => TotalFirewalled,
+        _ => return 0,
+    };
+    // SAFETY: 関数の Safety 節
+    chanhit::count(&unsafe { hits_of(hits, n) }, op)
+}
+
+/// `ChanHitSearch` (C の `pcrs_hit_search`)
+#[repr(C)]
+pub struct CHitSearch {
+    pub match_host: CHost,
+    pub wait_delay: u32,
+    pub use_firewalled: bool,
+    pub trackers_only: bool,
+    pub use_busy_relays: bool,
+    pub use_busy_controls: bool,
+    pub exclude_id: [u8; 16],
+    pub num_results: i32,
+}
+
+/// `pickHits`。選んだホストの番号 (なければ -1) を返し、LAN 側のアドレスを使うなら `*lan` を true に。
+///
+/// # Safety
+/// `hits` は `n` 個読めること。`s` は有効な `pcrs_hit_search`、`lan` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hits_pick(hits: *const CHit, n: usize, s: *const CHitSearch, ctime: u32, lan: *mut bool) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (hits, s) = unsafe { (hits_of(hits, n), &*s) };
+    let search = chanhit::Search {
+        match_host: s.match_host.into(),
+        wait_delay: s.wait_delay,
+        use_firewalled: s.use_firewalled,
+        trackers_only: s.trackers_only,
+        use_busy_relays: s.use_busy_relays,
+        use_busy_controls: s.use_busy_controls,
+        exclude_id: s.exclude_id,
+        num_results: s.num_results,
+    };
+    match chanhit::pick(&hits, &search, ctime) {
+        Some(p) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *lan = p.lan };
+            p.index as i32
+        }
+        None => -1,
+    }
+}
+
+/// `clearDeadHits`。消すホストの `del` を true にし、残るホストの数を返す。
+///
+/// # Safety
+/// `hits` は `n` 個読め、`del` は `n` 個書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hits_clear_dead(
+    hits: *const CHit,
+    n: usize,
+    timeout: u32,
+    clear_trackers: bool,
+    ctime: u32,
+    del: *mut bool,
+) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe { chanhit::clear_dead(&hits_of(hits, n), timeout, clear_trackers, ctime, flags_of(del, n)) }
+}
+
+/// `deadHit` と `delHit` の対象 (`out` を true に)
+///
+/// # Safety
+/// `hits` は `n` 個読め、`out` は `n` 個書け、`h` は有効な `pcrs_hit` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hits_same_hosts(hits: *const CHit, n: usize, h: *const CHit, out: *mut bool) {
+    // SAFETY: 関数の Safety 節
+    unsafe { chanhit::same_hosts(&hits_of(hits, n), &hit_of(h), flags_of(out, n)) }
+}
+
+/// `addHit`。-2 自分のホスト、-1 `del` のホストを消して先頭に加える、0 以上ならその番号を書き換える。
+///
+/// # Safety
+/// `hits` は `n` 個読め、`del` は `n` 個書け、`h` は有効な `pcrs_hit`、`my_sid` は 16 バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hits_add(hits: *const CHit, n: usize, h: *const CHit, my_sid: *const u8, del: *mut bool) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let sid = *(my_sid as *const [u8; 16]);
+        match chanhit::add(&hits_of(hits, n), &hit_of(h), &sid, flags_of(del, n)) {
+            chanhit::Add::Own => -2,
+            chanhit::Add::New => -1,
+            chanhit::Add::Replace(i) => i as i32,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_7b {
+    use super::*;
+
+    #[test]
+    fn table_strings_are_static() {
+        for t in [&b"MP3"[..], b"OGG", b"OGM", b"RAW", b"MOV", b"MPG", b"FLV", b"MKV", b"WEBM", b"MP4", b"PLS", b"x", b""] {
+            c_static(chaninfo::type_ext(t));
+            c_static(chaninfo::mime_type(t));
+            c_static(chaninfo::type_from_str(t));
+            c_static(chaninfo::playlist_ext(t));
+        }
+        for m in [&b"application/x-ogg"[..], b"audio/mpeg", b"video/quicktime", b"video/mpeg", b"video/x-flv",
+                  b"video/x-matroska", b"video/webm", b"x"] {
+            c_static(chaninfo::type_from_mime(m));
+        }
+        for p in -1..7 {
+            c_static(chaninfo::protocol_str(p));
+        }
+    }
+}

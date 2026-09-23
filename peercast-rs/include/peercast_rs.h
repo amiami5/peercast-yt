@@ -513,6 +513,80 @@ pcrs_buf pcrs_chandir_side_url(const uint8_t *feed, size_t fn_, const uint8_t *n
 pcrs_buf pcrs_chandir_directory_url(const uint8_t *s, size_t n);
 pcrs_buf pcrs_chandir_format_time(uint32_t diff);
 
+/* チャンネルの情報 (core/common/chaninfo.cpp の ChanInfo と TrackInfo)。文字列は String の中身
+ * (NUL の手前まで使う)。表の関数は、C++ 版と同じく静的な文字列を返す */
+const char *pcrs_chaninfo_type_ext(const uint8_t *s, size_t n);
+const char *pcrs_chaninfo_mime_type(const uint8_t *s, size_t n);
+const char *pcrs_chaninfo_type_from_mime(const uint8_t *s, size_t n);
+const char *pcrs_chaninfo_type_from_str(const uint8_t *s, size_t n);
+const char *pcrs_chaninfo_playlist_ext(const uint8_t *s, size_t n);
+const char *pcrs_chaninfo_protocol_str(int p);
+int pcrs_chaninfo_protocol_from_str(const uint8_t *s, size_t n);
+typedef struct pcrs_chan_info {
+    pcrs_bytes name, content_type, mime, ext, desc, genre, url, comment;
+    pcrs_bytes track_contact, track_title, track_artist, track_album, track_genre;
+    uint8_t id[16], bcid[16];
+    int32_t bitrate, status;
+} pcrs_chan_info;
+/* ChanInfo::update で写す欄 (ビット) */
+enum {
+    PCRS_CI_BITRATE = 1 << 0, PCRS_CI_CONTENT_TYPE = 1 << 1, PCRS_CI_MIME = 1 << 2, PCRS_CI_EXT = 1 << 3,
+    PCRS_CI_DESC = 1 << 4, PCRS_CI_NAME = 1 << 5, PCRS_CI_COMMENT = 1 << 6, PCRS_CI_GENRE = 1 << 7,
+    PCRS_CI_URL = 1 << 8, PCRS_CI_TRACK_CONTACT = 1 << 9, PCRS_CI_TRACK_TITLE = 1 << 10,
+    PCRS_CI_TRACK_ARTIST = 1 << 11, PCRS_CI_TRACK_ALBUM = 1 << 12, PCRS_CI_TRACK_GENRE = 1 << 13
+};
+pcrs_buf pcrs_chaninfo_type_string_long(const pcrs_chan_info *info);
+/* match(ChanInfo&)。name_id_only なら matchNameID */
+bool pcrs_chaninfo_match(const pcrs_chan_info *me, const pcrs_chan_info *q, bool name_id_only);
+/* ChanInfo::update。0 使わない、1 配信者の鍵が違う、2 *copy の欄を写す、3 さらに配信者の鍵も写す */
+int pcrs_chaninfo_update(const pcrs_chan_info *me, const pcrs_chan_info *info, uint32_t *copy);
+/* TrackInfo::update で写す欄 (track_* だけ使う) */
+uint32_t pcrs_trackinfo_update(const pcrs_chan_info *me, const pcrs_chan_info *info);
+/* writeInfoAtoms (track が false) と writeTrackAtoms (true) のバイト列 */
+pcrs_buf pcrs_chaninfo_write_atoms(const pcrs_chan_info *info, bool track);
+
+/* チャンネルを中継しているホスト (core/common/chanhit.cpp の ChanHit と ChanHitList)。一覧は
+ * 連結リストの並びどおりの配列で渡す */
+typedef struct pcrs_host {
+    uint8_t ip[16];                /* IP::serialize() */
+    uint16_t port;
+} pcrs_host;
+typedef struct pcrs_hit {
+    pcrs_host host, rhost[2], uphost;
+    uint32_t num_listeners, num_relays, num_hops, time, up_time, last_contact, version, oldest_pos,
+             newest_pos, uphost_hops, version_vp, version_ex_number;
+    uint8_t session_id[16];
+    uint8_t version_ex_prefix[2];
+    bool firewalled, tracker, recv, dead, direct, relay, cin;
+} pcrs_hit;
+typedef struct pcrs_hit_search {
+    pcrs_host match_host;
+    uint32_t wait_delay;
+    bool use_firewalled, trackers_only, use_busy_relays, use_busy_controls;
+    uint8_t exclude_id[16];
+    int32_t num_results;
+} pcrs_hit_search;
+/* pcrs_hits_count の op */
+enum {
+    PCRS_HITS_NUM_HITS = 0, PCRS_HITS_NUM_LISTENERS = 1, PCRS_HITS_NUM_RELAYS = 2, PCRS_HITS_NUM_TRACKERS = 3,
+    PCRS_HITS_NUM_FIREWALLED = 4, PCRS_HITS_CLOSEST = 5, PCRS_HITS_FURTHEST = 6, PCRS_HITS_NEWEST = 7,
+    PCRS_HITS_TOTAL_LISTENERS = 8, PCRS_HITS_TOTAL_RELAYS = 9, PCRS_HITS_TOTAL_FIREWALLED = 10
+};
+pcrs_buf pcrs_hit_write_atoms(const pcrs_hit *h, const uint8_t *chan_id);
+pcrs_buf pcrs_hit_version_string(const pcrs_hit *h);
+int pcrs_hit_color(const pcrs_hit *h);          /* 0 red、1 purple、2 blue、3 green */
+bool pcrs_hit_can_giv(const pcrs_hit *h);
+/* 返り値は C++ 版の返り値 (int か unsigned int) のビット列 */
+uint32_t pcrs_hits_count(const pcrs_hit *hits, size_t n, int op);
+/* pickHits。選んだ番号 (なければ -1)。LAN 側のアドレスを使うなら *lan を true に */
+int pcrs_hits_pick(const pcrs_hit *hits, size_t n, const pcrs_hit_search *s, uint32_t ctime, bool *lan);
+/* clearDeadHits。消すものの del を true にし、残る数を返す */
+int pcrs_hits_clear_dead(const pcrs_hit *hits, size_t n, uint32_t timeout, bool clear_trackers, uint32_t ctime, bool *del);
+/* deadHit と delHit の対象 */
+void pcrs_hits_same_hosts(const pcrs_hit *hits, size_t n, const pcrs_hit *h, bool *out);
+/* addHit。-2 自分のホスト、-1 del のものを消して先頭に加える、0 以上ならその番号を書き換える */
+int pcrs_hits_add(const pcrs_hit *hits, size_t n, const pcrs_hit *h, const uint8_t *my_sid, bool *del);
+
 #ifdef __cplusplus
 }
 #endif

@@ -462,6 +462,37 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
 欄の差分テストで見つけたので、C++ 版と同じにした。`diff_md5_gnuid` に 2 文字の組み合わせを全部
 試す比較を足した。
 
+## 段階7b で追加したもの (チャンネルの情報と、中継しているホストの一覧)
+
+`src/chaninfo.rs` に `ChanInfo` と `TrackInfo` (`core/common/chaninfo.cpp`)、`src/chanhit.rs` に
+`ChanHit` と `ChanHitList` (`core/common/chanhit.cpp`) の、状態を持たない部分を移した。
+
+* atom を書く側: `writeInfoAtoms`、`writeTrackAtoms`、`ChanHit::writeAtoms`。Rust がバイト列に
+  組み立て (`src/pcp/write.rs` の `AtomBuf`)、C++ はそれを一度に `Stream` に書く。
+* `ChanInfo`: 種類・MIME タイプ・プロトコルの表、`getTypeStringLong`、`getPlayListExt`、検索の
+  一致 (`match`、`matchNameID`)、`update` と `TrackInfo::update` で写す欄の判断。欄を写すこと
+  (`String` の代入は文字コードの種類も写す) は C++ 側。
+* `ChanHit`: 版の文字列、色、`canGiv`。
+* `ChanHitList`: 数え上げ (`numHits` など)、次につなぐホストの選び方 (`pickHits`)、
+  `clearDeadHits` / `deadHit` / `delHit` / `addHit` でどのホストをどうするかの判断。連結リスト
+  (`hit`) はほかのコード (チャンネル、配信、JSON-RPC) が直接たどっているので C++ に残し、並び
+  どおりの配列にして渡す。リストの付け替えは C++ 側。
+* `createChannelXML` などの XML と `getState` は、中身を組み立てるだけなので段階 8 で扱う。
+
+### C++ 版との違い
+
+* atom をまとめて 1 回で書くので、書き先に途中までしか書けなかったとき、書けていた量が違う
+  ことがある。書き先はソケットか 16KB のパケットで、書く量 (文字列は 1 つ 256 バイトまで) は
+  パケットに収まるので、書き終えたときの中身は同じ。
+
+### C++ 版と同じにしたもの (直していない)
+
+* `getTypeFromMIME` は OGM と MP4 にならない (OGM の行は OGG と同じ MIME タイプを見ていて、MP4 の
+  行がない)。
+* `pickHits` は、除外するセッション ID を指定しない (0 の) とき、セッション ID が 0 のホストを
+  選ばない。
+* `ChanHit::init` は `direct` を true にしたあと 0 にしている (結果は false)。
+
 ## 差分テスト
 
 ```sh
@@ -486,6 +517,7 @@ make
 ./diff_pcp_hs                  # PCP のハンドシェイクの helo / oleh と readVersion (20万件)
 ./diff_chanpacket               # ChanPacketBuffer: 操作の列 2 万本 (約290万回の比較)
 ./diff_chandir                  # index.txt の解釈と一覧の URL・時間の文字列 (約120万件)
+./diff_chanhit                  # ChanInfo と ChanHit / ChanHitList: 乱数の一覧への操作 (約265万件)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした

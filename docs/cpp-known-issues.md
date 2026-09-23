@@ -23,6 +23,12 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
 * `bvt/04-helo.rb` は、返した oleh のエージェント名の形の確認で、移行前から失敗している。
   `bvt/02-html.rb` は UI から消えた `bcid.html` を見ている。
 
+* `ChanInfo::getTypeFromMIME` は OGM と MP4 にならない (OGM の行は OGG と同じ `MIME_XOGG` を見て
+  いて、MP4 の行がない)。Rust 版も同じにした (段階 7b)。
+* `ChanHitList::pickHits` は、除外するセッション ID が 0 のとき、セッション ID が 0 のホストを
+  選ばない。Rust 版も同じにした (段階 7b)。
+* `ChanHit::init` は `direct` を true にしたあと 0 にしている。
+
 ## Rust 版で直したもの (C++ 版には残っている)
 
 段階ごとの詳しい説明は `peercast-rs/README.md`。主なもの:

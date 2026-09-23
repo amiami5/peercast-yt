@@ -8,6 +8,7 @@
 
 pub mod atom;
 pub mod handshake;
+pub mod write;
 #[cfg(test)]
 mod tests;
 

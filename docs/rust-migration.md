@@ -74,7 +74,7 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 | 4 | 完了。相談の結果、NSV と Windows Media 系 (WMA/WMV、ASF、MMS、WMHTTP、ASX) のサポートを削除し、残る FLV、MKV/WebM、OGG、MP3、MP4 の解析器を Rust 化した (`peercast-rs/src/media`)。チャンネルとのやりとりは `pcrs_media_host` のコールバックで行う。差分テストは各形式 10 万件で、説明のつかない違いなし |
 | 5 | 完了。5a (テンプレートエンジンの式とディレクティブ)、5b (Accept-Language の解釈、コンソールの引数の解釈)。差分テストは UI の実際のテンプレートとその変異などで 20 万件、5b は約 80 万件で、説明のつかない違いなし。テンプレートのスコープ (変数) と正規表現、`html.cpp`、`commands.cpp` の各コマンドの本体、`public.cpp` の HTTP の処理は、入力を解釈せず `servMgr` や `chanMgr` を呼ぶだけなので、段階 7〜9 で扱う |
 | 6 | 完了。6a (受け取ったパケットの処理: `procAtom` 以下と `ChanInfo::readInfoAtoms` / `readTrackAtoms`)、6b (ハンドシェイクで受け取る `helo` / `oleh` と `readVersion`)、6c (`ChanPacketBuffer`)。チャンネルやサーバーの状態は `pcrs_pcp_host` のコールバックで触り、返事を書くことと読んだ値を使った処理は C++ に残る。差分テストは 6a が 10 万件、6b が 20 万件、6c が約 290 万回の比較で、説明のつかない違いなし。atom を書く側 (`AtomStream` の write 系、`writeInfoAtoms` など) と `PCPStream` のソケットの読み書きは、それを使うチャンネルや接続の処理と一緒に段階 7〜9 で扱う |
-| 7 | 進行中。7a (イエローページの index.txt の解釈、`chatUrl` / `statsUrl` など)。差分テストは約 120 万件で、説明のつかない違いなし。その差分テストで、段階 1c の `GnuID::fromStr` が `strtoul` の空白と符号の読み方を再現していなかったことがわかり、Rust 版を直した |
+| 7 | 進行中。7a (イエローページの index.txt の解釈、`chatUrl` / `statsUrl` など)、7b (`ChanInfo` と `TrackInfo`、`ChanHit` と `ChanHitList` の状態を持たない部分。atom を書く側の `writeInfoAtoms` / `writeTrackAtoms` / `ChanHit::writeAtoms` を含む)。差分テストは 7a が約 120 万件、7b が約 265 万件で、説明のつかない違いなし。7a の差分テストで、段階 1c の `GnuID::fromStr` が `strtoul` の空白と符号の読み方を再現していなかったことがわかり、Rust 版を直した |
 | 8 以降 | 未着手 |
 
 ### 確認環境についての注記
