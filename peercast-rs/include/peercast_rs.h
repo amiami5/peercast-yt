@@ -428,6 +428,36 @@ typedef struct pcrs_pcp_host {
 int pcrs_pcp_proc_packet(const pcrs_pcp_host *host, uint8_t *buf, size_t len, pcrs_pcp_state *st,
                          int32_t *result, pcrs_buf *err);
 
+/* PCP のハンドシェイクで受け取る helo / oleh (servent.cpp の handshakeIncomingPCP、
+ * handshakeOutgoingPCP、pingHost) と PCPStream::readVersion。Stream から pcrs_reader で読む。
+ * 返事を書くことと、読んだ値を使った処理は C++ に残る */
+enum { PCRS_PCP_KIND_HELO = 0, PCRS_PCP_KIND_OLEH = 1, PCRS_PCP_KIND_PING = 2 };
+/* pcrs_pcp_hello の set のビット */
+enum {
+    PCRS_PCP_HELLO_VERSION = 1, PCRS_PCP_HELLO_DISABLE = 2, PCRS_PCP_HELLO_SESSION_ID = 4,
+    PCRS_PCP_HELLO_BCID = 8, PCRS_PCP_HELLO_OSTYPE = 16, PCRS_PCP_HELLO_PORT = 32, PCRS_PCP_HELLO_PING = 64
+};
+typedef struct pcrs_pcp_hello {
+    bool header_ok;             /* 最初の atom の見出しを読み、ID が期待したもの (helo か oleh) だった */
+    bool is_unexpected;         /* 最初の atom の ID が違った (unexpected にその ID) */
+    uint8_t unexpected[4];
+    bool has_agent;             /* agent.set(arg) の値 (NUL の手前まで、agent_len バイト) */
+    uint8_t agent[64];
+    size_t agent_len;
+    uint32_t set;               /* PCRS_PCP_HELLO_* */
+    int32_t version, disable, os_type, port, ping;  /* port と ping は readShort の値 */
+    uint8_t session_id[16];     /* rid (ping では sid) に書いたもの。ping では、呼ぶ前に sid の値を入れておく */
+    uint8_t bcid[16];
+    pcrs_pcp_ip remote_ip;      /* oleh の rip。kind が 0 ならなし */
+} pcrs_pcp_hello;
+/* 0 成功、1 読み出しの中断 (C++ の例外)、2 StreamException (*err にメッセージ。pcrs_buf_free で返す)。
+ * どの場合も、それまでに読んだ値を *out に書く (*out は呼ぶ側が 0 で埋めておく。ping の session_id は上記)。
+ * log は読み飛ばした atom のログ ("PCP handshake skip: ...") */
+int pcrs_pcp_read_hello(const pcrs_reader *r, int kind, const uint8_t *my_sid16, void *log_ctx,
+                        void (*log)(void *ctx, const uint8_t *msg, size_t len), pcrs_pcp_hello *out, pcrs_buf *err);
+/* PCPStream::readVersion。返り値は pcrs_pcp_read_hello と同じで、成功なら版を *ver に書く */
+int pcrs_pcp_read_version(const pcrs_reader *r, int32_t *ver, pcrs_buf *err);
+
 #ifdef __cplusplus
 }
 #endif

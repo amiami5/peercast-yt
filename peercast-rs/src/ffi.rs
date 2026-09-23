@@ -1829,3 +1829,135 @@ pub unsafe extern "C" fn pcrs_pcp_proc_packet(
         }
     }
 }
+
+// ---------------------------------------------------------------- PCP のハンドシェイク (src/pcp/handshake.rs)
+
+use crate::pcp::handshake::{self, Hello, Kind as HelloKind, StreamIo};
+
+/// 読んだ helo / oleh (C の `pcrs_pcp_hello`)。`set` のビットが立っている値だけ入っている。
+#[repr(C)]
+pub struct CPcpHello {
+    /// 最初の atom が期待した ID (helo か oleh) だった
+    pub header_ok: bool,
+    /// 最初の atom の ID が違った (`unexpected` にその ID)
+    pub is_unexpected: bool,
+    pub unexpected: [u8; 4],
+    pub has_agent: bool,
+    pub agent: [u8; 64],
+    pub agent_len: usize,
+    pub set: u32,
+    pub version: i32,
+    pub disable: i32,
+    pub os_type: i32,
+    pub port: i32,
+    pub ping: i32,
+    pub session_id: [u8; 16],
+    pub bcid: [u8; 16],
+    pub remote_ip: CPcpIp,
+}
+
+fn c_hello(h: &Hello, out: &mut CPcpHello) {
+    out.header_ok = h.header_ok;
+    if let Some(id) = h.unexpected {
+        out.is_unexpected = true;
+        out.unexpected = id;
+    }
+    if let Some(a) = &h.agent {
+        out.has_agent = true;
+        out.agent[..a.len()].copy_from_slice(a);
+        out.agent_len = a.len();
+    }
+    let mut set = 0u32;
+    let mut take = |bit: u32, v: Option<i32>, dst: &mut i32| {
+        if let Some(x) = v {
+            set |= bit;
+            *dst = x;
+        }
+    };
+    take(1, h.version, &mut out.version);
+    take(2, h.disable, &mut out.disable);
+    take(16, h.os_type, &mut out.os_type);
+    take(32, h.port, &mut out.port);
+    take(64, h.ping, &mut out.ping);
+    if let Some(s) = h.session_id {
+        set |= 4;
+        out.session_id = s;
+    }
+    if let Some(b) = h.bcid {
+        set |= 8;
+        out.bcid = b;
+    }
+    out.remote_ip = c_ip(h.remote_ip);
+    out.set = set;
+}
+
+/// ハンドシェイクで受け取る helo / oleh を `r` から読む (`kind` は 0 helo、1 oleh、2 ping の oleh)。
+/// 返り値は 0 成功、1 読み出しの中断 (C++ の例外)、2 `StreamException` (メッセージを `*err` に書く)。
+/// どの場合も、それまでに読んだ値を `*out` に書く。`log` は読み飛ばした atom のログ。
+///
+/// # Safety
+/// `r` は有効な `CReader`、`my_sid` は 16 バイト読め、`out` と `err` は書き込めること。
+/// `log` は `log_ctx` とともに呼べること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_pcp_read_hello(
+    r: *const CReader,
+    kind: i32,
+    my_sid: *const u8,
+    log_ctx: *mut c_void,
+    log: unsafe extern "C" fn(ctx: *mut c_void, msg: *const u8, len: usize),
+    out: *mut CPcpHello,
+    err: *mut PcrsBuf,
+) -> i32 {
+    let kind = match kind {
+        0 => HelloKind::Helo,
+        1 => HelloKind::Oleh,
+        _ => HelloKind::Ping,
+    };
+    // SAFETY: 関数の Safety 節
+    let (sid, out) = unsafe {
+        let mut sid = [0u8; 16];
+        sid.copy_from_slice(input(my_sid, 16));
+        (sid, &mut *out)
+    };
+    // SAFETY: 同上
+    let mut atom = pcp::AtomStream::new(StreamIo { r: unsafe { reader(r) } });
+    let mut h = Hello { ping_sid_init: out.session_id, ..Default::default() };
+    let mut logf = |m: &[u8]| {
+        // SAFETY: 関数の Safety 節
+        unsafe { log(log_ctx, m.as_ptr(), m.len()) }
+    };
+    let res = handshake::read_hello(&mut atom, kind, &sid, &mut logf, &mut h);
+    c_hello(&h, out);
+    match res {
+        Ok(()) => 0,
+        Err(pcp::Error::Abort) => 1,
+        Err(pcp::Error::Stream(msg)) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *err = into_buf(msg.as_bytes().to_vec()) };
+            2
+        }
+    }
+}
+
+/// `PCPStream::readVersion`。返り値は `pcrs_pcp_read_hello` と同じで、成功なら版を `*ver` に書く。
+///
+/// # Safety
+/// `r` は有効な `CReader`、`ver` と `err` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_pcp_read_version(r: *const CReader, ver: *mut i32, err: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let mut io = StreamIo { r: unsafe { reader(r) } };
+    match handshake::read_version(&mut io) {
+        Ok(v) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *ver = v };
+            0
+        }
+        Err(pcp::Error::Abort) => 1,
+        Err(pcp::Error::Stream(msg)) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *err = into_buf(msg.as_bytes().to_vec()) };
+            2
+        }
+    }
+}

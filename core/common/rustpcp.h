@@ -28,6 +28,16 @@
 namespace rustbridge
 {
 
+// atom のアドレス (readAddress の値)
+inline IP pcpIP(const pcrs_pcp_ip& a)
+{
+    if (a.kind == 4)
+        return IP(a.v4);
+    in6_addr addr;
+    memcpy(addr.s6_addr, a.v6, 16);
+    return IP(addr);
+}
+
 // 1 回の procAtom の間、PCPStream を Rust に貸す。コールバックの中で起きた例外は保存しておき、
 // Rust から戻ったあとで投げ直す。
 class PcpHost
@@ -123,14 +133,7 @@ private:
         return id;
     }
 
-    static IP ip(const pcrs_pcp_ip& a)
-    {
-        if (a.kind == 4)
-            return IP(a.v4);
-        in6_addr addr;
-        memcpy(addr.s6_addr, a.v6, 16);
-        return IP(addr);
-    }
+    static IP ip(const pcrs_pcp_ip& a) { return pcpIP(a); }
 
     // AtomStream::readString で String に書いたとき (残りは前の中身のまま)
     static void readString(::String& s, const uint8_t* data, size_t len)
@@ -463,6 +466,157 @@ private:
     std::shared_ptr<ChanHitList> m_chl;
     ChanInfo m_newInfo;
 };
+
+// ハンドシェイクで受け取った helo / oleh (peercast-rs の src/pcp/handshake.rs)
+struct PcpHello : pcrs_pcp_hello
+{
+    PcpHello() { memset(static_cast<pcrs_pcp_hello*>(this), 0, sizeof(pcrs_pcp_hello)); }
+
+    bool has(uint32_t bit) const { return (set & bit) != 0; }
+    std::string agentStr() const { return std::string(reinterpret_cast<const char*>(agent), agent_len); }
+    void sessionID(GnuID& id) const { memcpy(id.id, session_id, 16); }
+    ID4 unexpectedID() const
+    {
+        ID4 id;
+        memcpy(id.getData(), unexpected, 4);
+        return id;
+    }
+};
+
+// readHello のエラー。呼んだ側が読んだ値を使ってから raise() で投げる。
+struct PcpHelloError
+{
+    std::exception_ptr ex;      // 読み出しの例外 (投げられた例外そのもの)
+    bool stream = false;        // Rust の StreamException
+    std::string msg;
+
+    // GeneralException はコピーすると msg が古い msgbuf を指すので、StreamException はここで作って投げる
+    void raise() const
+    {
+        if (ex)
+            std::rethrow_exception(ex);
+        if (stream)
+            throw StreamException(msg);
+    }
+};
+
+// in から helo / oleh を読む (kind は PCRS_PCP_KIND_*)。C++ 版ではエラーの前に読んだ値が呼んだ側の
+// 変数に入っているので、エラーは投げずに返し、呼んだ側が値を使ってから投げる。
+inline PcpHelloError readHello(Stream& in, int kind, PcpHello& h)
+{
+    PcpHelloError e;
+    StreamReader reader(in);
+    RustBuf err;
+    auto log = [](void*, const uint8_t* msg, size_t len) {
+        LOG_DEBUG("%s", std::string(reinterpret_cast<const char*>(msg), len).c_str());
+    };
+    int r = pcrs_pcp_read_hello(reader.get(), kind, servMgr->sessionID.id, nullptr, log, &h, err.out());
+    if (r == 1)
+    {
+        try
+        {
+            reader.rethrowIfAborted();
+        }catch (...)
+        {
+            e.ex = std::current_exception();
+        }
+    }
+    if (r == 2)
+    {
+        e.stream = true;
+        e.msg = err.str();
+    }
+    return e;
+}
+
+// PCPStream::readVersion の、長さと版を読むところ。版を返す。
+inline int readPcpVersion(Stream& in)
+{
+    StreamReader reader(in);
+    int32_t ver = 0;
+    RustBuf err;
+    int r = pcrs_pcp_read_version(reader.get(), &ver, err.out());
+    if (r == 1)
+        reader.rethrowIfAborted();
+    if (r == 2)
+        throw StreamException(err.str());
+    return ver;
+}
+
+// Servent::handshakeIncomingPCP の、相手の helo を読むところ。読んだ値は C++ 版と同じ変数に入れる
+// (エラーのときも、それまでに読んだ値を入れてから投げる)。
+inline void readIncomingHelo(AtomStream& atom, Host& rhost, GnuID& rid, String& agent, int& version, int& pingPort)
+{
+    PcpHello h;
+    PcpHelloError ex = readHello(atom.io, PCRS_PCP_KIND_HELO, h);
+    if (h.is_unexpected)
+    {
+        LOG_DEBUG("PCP incoming reply: %s", h.unexpectedID().getString().str());
+        atom.writeInt(PCP_QUIT, PCP_ERROR_QUIT+PCP_ERROR_BADRESPONSE);
+        throw StreamException("Got unexpected PCP response");
+    }
+    if (h.header_ok)
+    {
+        rhost.port = 0;
+        if (h.has_agent)
+            agent.set(h.agentStr().c_str());
+        if (h.has(PCRS_PCP_HELLO_VERSION))
+            version = h.version;
+        if (h.has(PCRS_PCP_HELLO_SESSION_ID))
+            h.sessionID(rid);
+        if (h.has(PCRS_PCP_HELLO_PORT))
+            rhost.port = h.port;
+        if (h.has(PCRS_PCP_HELLO_PING))
+            pingPort = h.ping;
+    }
+    ex.raise();
+}
+
+// Servent::handshakeOutgoingPCP の、相手の oleh を読むところ
+inline void readOutgoingOleh(AtomStream& atom, GnuID& rid, String& agent, Host& thisHost, int& version, int& disable)
+{
+    PcpHello h;
+    PcpHelloError ex = readHello(atom.io, PCRS_PCP_KIND_OLEH, h);
+    if (h.is_unexpected)
+    {
+        LOG_DEBUG("PCP outgoing reply: %s", h.unexpectedID().getString().str());
+        atom.writeInt(PCP_QUIT, PCP_ERROR_QUIT + PCP_ERROR_BADRESPONSE);
+        throw StreamException("Got unexpected PCP response");
+    }
+    if (h.header_ok)
+    {
+        rid.clear();
+        if (h.has_agent)
+            agent.set(h.agentStr().c_str());
+        if (h.remote_ip.kind)
+            thisHost.ip = pcpIP(h.remote_ip);
+        if (h.has(PCRS_PCP_HELLO_PORT))
+            thisHost.port = h.port;
+        if (h.has(PCRS_PCP_HELLO_VERSION))
+            version = h.version;
+        if (h.has(PCRS_PCP_HELLO_DISABLE))
+            disable = h.disable;
+        if (h.has(PCRS_PCP_HELLO_SESSION_ID))
+            h.sessionID(rid);
+    }
+    ex.raise();
+}
+
+// Servent::pingHost の、相手の oleh を読むところ
+inline void readPingOleh(AtomStream& atom, GnuID& sid)
+{
+    PcpHello h;
+    memcpy(h.session_id, sid.id, 16);
+    PcpHelloError ex = readHello(atom.io, PCRS_PCP_KIND_PING, h);
+    if (h.has(PCRS_PCP_HELLO_SESSION_ID))
+        h.sessionID(sid);
+    ex.raise();
+    if (h.is_unexpected)
+    {
+        LOG_DEBUG("Ping response: %s", h.unexpectedID().getString().str());
+        throw StreamException("Bad ping response");
+    }
+}
 
 } // namespace rustbridge
 

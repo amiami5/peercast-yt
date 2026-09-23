@@ -21,7 +21,7 @@ $(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs $(RUST)/src
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp *.o cxxcore.a
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp diff_pcp_hs *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -87,3 +87,9 @@ PCP_WRAP = -Wl,--wrap=_Z9LOG_TRACEPKcz -Wl,--wrap=_Z9LOG_DEBUGPKcz -Wl,--wrap=_Z
 
 diff_pcp: diff_pcp.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustpcp.h $(CORE)/rustbridge.h
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(PCP_WRAP) $(CXXCORE_LIBS)
+
+LOG_WRAP = -Wl,--wrap=_Z9LOG_TRACEPKcz -Wl,--wrap=_Z9LOG_DEBUGPKcz -Wl,--wrap=_Z8LOG_INFOPKcz \
+           -Wl,--wrap=_Z8LOG_WARNPKcz -Wl,--wrap=_Z9LOG_ERRORPKcz
+
+diff_pcp_hs: diff_pcp_hs.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustpcp.h $(CORE)/rustbridge.h
+	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LOG_WRAP) $(CXXCORE_LIBS)

@@ -7,10 +7,14 @@
 //! コールバックで読み書きする。コールバックは C++ 版と同じ順序で呼ぶ。
 
 pub mod atom;
+pub mod handshake;
 #[cfg(test)]
 mod tests;
 
-pub use atom::{AtomStream, Id4, Ip, MemStream};
+pub use atom::{AtomIo, AtomStream, Id4, Ip, MemStream};
+
+/// パケットのバッファの上の AtomStream
+type MemAtom<'a> = AtomStream<MemStream<'a>>;
 use atom::{id4, id_str};
 
 /// 処理の中断
@@ -275,7 +279,7 @@ struct Pcp<'h, 's> {
 
 /// C++ の `String` のバッファに `readString` で書いたときの文字列 (NUL の手前まで)。まだ書いて
 /// いない部分は、C++ 版では初期化されていない値だった。Rust 版は 0 とみなす。
-fn c_string(bytes: &[u8], max: usize) -> Vec<u8> {
+pub(crate) fn c_string(bytes: &[u8], max: usize) -> Vec<u8> {
     let bytes = &bytes[..bytes.len().min(max - 1)];
     let n = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     bytes[..n].to_vec()
@@ -299,7 +303,7 @@ impl Pcp<'_, '_> {
         self.log(Level::Debug, &[b"PCP skip: ", id_str(id), msg.as_bytes()]);
     }
 
-    fn proc_atom(&mut self, atom: &mut AtomStream, id: Id4, numc: i32, dlen: i32, depth: i32) -> Result<i32> {
+    fn proc_atom(&mut self, atom: &mut MemAtom, id: Id4, numc: i32, dlen: i32, depth: i32) -> Result<i32> {
         if depth > MAX_PROC_DEPTH {
             return Err(Error::Stream("PCP: atom nesting too deep"));
         }
@@ -349,7 +353,7 @@ impl Pcp<'_, '_> {
         Ok(r)
     }
 
-    fn read_push_atoms(&mut self, atom: &mut AtomStream, numc: i32) -> Result<()> {
+    fn read_push_atoms(&mut self, atom: &mut MemAtom, numc: i32) -> Result<()> {
         let mut ip = None;
         let mut port = None;
         let mut chan_id = [0u8; 16];
@@ -377,7 +381,7 @@ impl Pcp<'_, '_> {
         Ok(())
     }
 
-    fn read_root_atoms(&mut self, atom: &mut AtomStream, numc: i32) -> Result<()> {
+    fn read_root_atoms(&mut self, atom: &mut MemAtom, numc: i32) -> Result<()> {
         let mut url: Vec<u8> = Vec::new();
         for _ in 0..numc {
             let stuck = atom.io.stuck();
@@ -426,7 +430,7 @@ impl Pcp<'_, '_> {
         Ok(())
     }
 
-    fn read_pkt_atoms(&mut self, atom: &mut AtomStream, numc: i32) -> Result<()> {
+    fn read_pkt_atoms(&mut self, atom: &mut MemAtom, numc: i32) -> Result<()> {
         let mut pack = Packet::default();
         for _ in 0..numc {
             let stuck = atom.io.stuck();
@@ -468,7 +472,7 @@ impl Pcp<'_, '_> {
         Ok(())
     }
 
-    fn read_host_atoms(&mut self, atom: &mut AtomStream, numc: i32) -> Result<()> {
+    fn read_host_atoms(&mut self, atom: &mut MemAtom, numc: i32) -> Result<()> {
         let mut hit = Hit { chan_id: self.state.bcs.chan_id, ..Default::default() };
         let mut ip_num = 0usize;
         for _ in 0..numc {
@@ -527,13 +531,13 @@ impl Pcp<'_, '_> {
     }
 
     /// `ChanInfo::readInfoAtoms` / `readTrackAtoms` の文字列
-    fn info_string(&mut self, atom: &mut AtomStream, field: InfoField, d: i32) -> Result<()> {
+    fn info_string(&mut self, atom: &mut MemAtom, field: InfoField, d: i32) -> Result<()> {
         let bytes = atom.read_string(STRING_MAX, d)?;
         self.host.chan_info_string(field, &bytes)?;
         Ok(())
     }
 
-    fn read_info_atoms(&mut self, atom: &mut AtomStream, numc: i32) -> Result<()> {
+    fn read_info_atoms(&mut self, atom: &mut MemAtom, numc: i32) -> Result<()> {
         for _ in 0..numc {
             let stuck = atom.io.stuck();
             let (id, c, d) = atom.read()?;
@@ -571,7 +575,7 @@ impl Pcp<'_, '_> {
         Ok(())
     }
 
-    fn read_track_atoms(&mut self, atom: &mut AtomStream, numc: i32) -> Result<()> {
+    fn read_track_atoms(&mut self, atom: &mut MemAtom, numc: i32) -> Result<()> {
         for _ in 0..numc {
             let stuck = atom.io.stuck();
             let (id, c, d) = atom.read()?;
@@ -598,7 +602,7 @@ impl Pcp<'_, '_> {
         Ok(())
     }
 
-    fn read_chan_atoms(&mut self, atom: &mut AtomStream, numc: i32) -> Result<()> {
+    fn read_chan_atoms(&mut self, atom: &mut MemAtom, numc: i32) -> Result<()> {
         let chan_id = self.state.bcs.chan_id;
         self.host.chan_begin(&chan_id)?;
         for _ in 0..numc {
@@ -629,7 +633,7 @@ impl Pcp<'_, '_> {
         Ok(())
     }
 
-    fn read_broadcast_atoms(&mut self, atom: &mut AtomStream, numc: i32, depth: i32) -> Result<i32> {
+    fn read_broadcast_atoms(&mut self, atom: &mut MemAtom, numc: i32, depth: i32) -> Result<i32> {
         let mut ttl = 1i32;
         let mut ver = 0i32;
         let mut ver_ex_prefix = [b'*', b'*'];

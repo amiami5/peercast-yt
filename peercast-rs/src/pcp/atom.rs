@@ -1,5 +1,6 @@
-//! PCP の atom の読み書き (core/common/atom.h の `AtomStream`) を、C++ の `MemoryStream` の上で
-//! 使ったときと同じ振る舞いで実装する。
+//! PCP の atom の読み書き (core/common/atom.h の `AtomStream`)。下の `Stream` の読み書きは
+//! `AtomIo` で抽象化し、C++ の `MemoryStream` と同じ振る舞いの `MemStream` と、C++ の `Stream`
+//! (ソケットなど) をコールバックで読む `StreamIo` がある。
 //!
 //! atom は「ID (4 バイト) + 長さ (int、最上位ビットが立っていれば子の数)」の見出しと、中身か子の
 //! atom からなる。整数はリトルエンディアン (C++ 版の `CHECK_ENDIAN`)。
@@ -25,6 +26,60 @@ pub fn id_str(id: &Id4) -> &[u8] {
     &id[..n]
 }
 
+/// `AtomStream` の下の `Stream` (`read(void*, int)`、`write`、`skip`)。
+pub trait AtomIo {
+    /// `Stream::read(void*, int)`。読めなかった分は 0 で埋める (C++ の `MemoryStream` は 0 で埋め、
+    /// ソケットは全部読むか例外を投げる)。
+    fn read(&mut self, l: i64) -> Result<Vec<u8>, Error>;
+    fn write(&mut self, p: &[u8]) -> Result<(), Error>;
+
+    /// `Stream::skip`: 4096 バイトずつ読んで捨てる
+    fn skip(&mut self, len: i64) -> Result<(), Error> {
+        if len < 0 {
+            return Err(Error::Stream("Stream::skip: negative length"));
+        }
+        let mut len = len;
+        while len != 0 {
+            let rlen = CHUNK.min(len);
+            self.read(rlen)?;
+            len -= rlen;
+        }
+        Ok(())
+    }
+
+    /// 読み出しがもう 1 つも成功しない状態か (以後の読み出しはどれも 0 を返し、何も変わらない)。
+    /// わからなければ false。
+    fn stuck(&self) -> bool {
+        false
+    }
+
+    fn read_i32(&mut self) -> Result<i32, Error> {
+        let b = self.read(4)?;
+        Ok(i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn read_i16(&mut self) -> Result<i16, Error> {
+        let b = self.read(2)?;
+        Ok(i16::from_le_bytes([b[0], b[1]]))
+    }
+
+    fn read_id4(&mut self) -> Result<Id4, Error> {
+        let b = self.read(4)?;
+        Ok([b[0], b[1], b[2], b[3]])
+    }
+
+    /// atom の見出しを読む。返り値は (ID、子の数、中身の長さ)。
+    fn read_header(&mut self) -> Result<(Id4, i32, i32), Error> {
+        let id = self.read_id4()?;
+        let v = self.read_i32()? as u32;
+        if v & 0x8000_0000 != 0 {
+            Ok((id, (v & 0x7fff_ffff) as i32, 0))
+        } else {
+            Ok((id, 0, v as i32))
+        }
+    }
+}
+
 /// C++ の `MemoryStream` (固定長のバッファ) と `Stream` の基本の読み書き。
 ///
 /// * 読み出しがバッファの終わりを越えるときは、読み出し先を 0 で埋め、位置は進めない (例外なし)。
@@ -35,7 +90,7 @@ pub struct MemStream<'a> {
     pub pos: usize,
 }
 
-const CHUNK: i64 = 4096;
+pub(crate) const CHUNK: i64 = 4096;
 
 impl<'a> MemStream<'a> {
     pub fn new(buf: &'a mut [u8]) -> Self {
@@ -55,8 +110,23 @@ impl<'a> MemStream<'a> {
         &self.buf[..n]
     }
 
+    /// `Stream::writeTo`: `len` バイトを 4096 バイトずつ読んで (読めなければ 0 で埋めて) `out` に書く。
+    pub fn write_to(&mut self, out: &mut MemStream, len: i64) -> Result<(), Error> {
+        let mut len = len;
+        while len != 0 {
+            // C++ 版は len が負だと rlen も負になり、read が例外を投げる
+            let rlen = if CHUNK > len { len } else { CHUNK };
+            let tmp = self.read(rlen)?;
+            out.write(&tmp)?;
+            len -= rlen;
+        }
+        Ok(())
+    }
+}
+
+impl AtomIo for MemStream<'_> {
     /// `MemoryStream::read`。読めなければ 0 で埋めたものを返す。
-    pub fn read(&mut self, l: i64) -> Result<Vec<u8>, Error> {
+    fn read(&mut self, l: i64) -> Result<Vec<u8>, Error> {
         if l < 0 {
             return Err(Error::Stream("MemoryStream::read: negative length"));
         }
@@ -70,13 +140,12 @@ impl<'a> MemStream<'a> {
         }
     }
 
-    /// 読み出しがもう 1 つも成功しない状態か (ID の 4 バイトすら読めない)。この状態では、以後の
-    /// 読み出しはどれも 0 を返し、位置も変わらない。
-    pub fn stuck(&self) -> bool {
+    /// ID の 4 バイトすら読めない状態。以後の読み出しはどれも 0 を返し、位置も変わらない。
+    fn stuck(&self) -> bool {
         self.pos + 4 > self.buf.len()
     }
 
-    pub fn write(&mut self, p: &[u8]) -> Result<(), Error> {
+    fn write(&mut self, p: &[u8]) -> Result<(), Error> {
         if self.pos + p.len() > self.buf.len() {
             return Err(Error::Stream("Stream - premature end of write()"));
         }
@@ -85,8 +154,8 @@ impl<'a> MemStream<'a> {
         Ok(())
     }
 
-    /// `Stream::skip`
-    pub fn skip(&mut self, len: i64) -> Result<(), Error> {
+    /// `Stream::skip` と同じ結果を、読めない塊を試す回数を減らして求める
+    fn skip(&mut self, len: i64) -> Result<(), Error> {
         if len < 0 {
             return Err(Error::Stream("Stream::skip: negative length"));
         }
@@ -107,45 +176,6 @@ impl<'a> MemStream<'a> {
         }
         Ok(())
     }
-
-    /// `Stream::writeTo`: `len` バイトを 4096 バイトずつ読んで (読めなければ 0 で埋めて) `out` に書く。
-    pub fn write_to(&mut self, out: &mut MemStream, len: i64) -> Result<(), Error> {
-        let mut len = len;
-        while len != 0 {
-            // C++ 版は len が負だと rlen も負になり、read が例外を投げる
-            let rlen = if CHUNK > len { len } else { CHUNK };
-            let tmp = self.read(rlen)?;
-            out.write(&tmp)?;
-            len -= rlen;
-        }
-        Ok(())
-    }
-
-    pub fn read_i32(&mut self) -> Result<i32, Error> {
-        let b = self.read(4)?;
-        Ok(i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    }
-
-    pub fn read_i16(&mut self) -> Result<i16, Error> {
-        let b = self.read(2)?;
-        Ok(i16::from_le_bytes([b[0], b[1]]))
-    }
-
-    pub fn read_id4(&mut self) -> Result<Id4, Error> {
-        let b = self.read(4)?;
-        Ok([b[0], b[1], b[2], b[3]])
-    }
-
-    /// atom の見出しを読む。返り値は (ID、子の数、中身の長さ)。
-    pub fn read_header(&mut self) -> Result<(Id4, i32, i32), Error> {
-        let id = self.read_id4()?;
-        let v = self.read_i32()? as u32;
-        if v & 0x8000_0000 != 0 {
-            Ok((id, (v & 0x7fff_ffff) as i32, 0))
-        } else {
-            Ok((id, 0, v as i32))
-        }
-    }
 }
 
 /// アドレスの atom の値 (`AtomStream::readAddress`)
@@ -158,8 +188,8 @@ pub enum Ip {
 }
 
 /// `AtomStream`。`num_data` は最後に読んだ見出しの中身の長さで、値を読むときに長さを確かめる。
-pub struct AtomStream<'a> {
-    pub io: MemStream<'a>,
+pub struct AtomStream<IO> {
+    pub io: IO,
     pub num_children: i32,
     pub num_data: i32,
 }
@@ -167,8 +197,8 @@ pub struct AtomStream<'a> {
 /// `AtomStream::skip` のネストの上限 (C++ 版の `MAX_SKIP_DEPTH`)
 pub const MAX_SKIP_DEPTH: i32 = 64;
 
-impl<'a> AtomStream<'a> {
-    pub fn new(io: MemStream<'a>) -> Self {
+impl<IO: AtomIo> AtomStream<IO> {
+    pub fn new(io: IO) -> Self {
         AtomStream { io, num_children: 0, num_data: 0 }
     }
 
@@ -309,6 +339,9 @@ impl<'a> AtomStream<'a> {
         self.io.write(p)
     }
 
+}
+
+impl AtomStream<MemStream<'_>> {
     /// `writeStream`: 見出しを書き、`input` から `l` バイト写す
     fn write_stream(&mut self, id: Id4, input: &mut MemStream, l: i32) -> Result<i32, Error> {
         self.io.write(&id)?;

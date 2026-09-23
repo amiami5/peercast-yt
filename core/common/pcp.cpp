@@ -46,12 +46,16 @@ void PCPStream::init(const GnuID &rid)
 // ------------------------------------------
 void PCPStream::readVersion(Stream &in)
 {
+#ifdef WITH_RUST_CORE
+    int ver = rustbridge::readPcpVersion(in);
+#else
     int len = in.readInt();
 
     if (len != 4)
         throw StreamException("Invalid PCP");
 
     int ver = in.readInt();
+#endif
 
     LOG_DEBUG("PCP ver: %d", ver);
 }

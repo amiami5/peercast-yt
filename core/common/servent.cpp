@@ -22,6 +22,9 @@
 // todo: make lan->yp not check firewall
 
 #include "servent.h"
+#ifdef WITH_RUST_CORE
+#include "rustpcp.h"
+#endif
 #include "sys.h"
 #include "xml.h"
 #include "html.h"
@@ -500,6 +503,10 @@ bool    Servent::pingHost(Host &rhost, const GnuID &rsid)
 
             GnuID sid;
 
+#ifdef WITH_RUST_CORE
+            // oleh の読み取りは peercast-rs (src/pcp/handshake.rs)
+            rustbridge::readPingOleh(atom, sid);
+#else
             int numc, numd;
             ID4 id = atom.read(numc, numd);
             if (id == PCP_OLEH)
@@ -518,6 +525,7 @@ bool    Servent::pingHost(Host &rhost, const GnuID &rsid)
                 LOG_DEBUG("Ping response: %s", id.getString().str());
                 throw StreamException("Bad ping response");
             }
+#endif
 
             if (!sid.isSame(rsid))
                 throw StreamException("SIDs don`t match");
@@ -1001,6 +1009,15 @@ void Servent::handshakeOutgoingPCP(AtomStream &atom, const Host &rhost, /*out*/ 
 
     LOG_DEBUG("PCP outgoing waiting for OLEH..");
 
+#ifdef WITH_RUST_CORE
+    // oleh の読み取りは peercast-rs (src/pcp/handshake.rs)
+    int version = 0;
+    int disable = 0;
+
+    Host thisHost;
+
+    rustbridge::readOutgoingOleh(atom, rid, agent, thisHost, version, disable);
+#else
     int numc, numd;
     ID4 id = atom.read(numc, numd);
     if (id != PCP_OLEH)
@@ -1052,6 +1069,7 @@ void Servent::handshakeOutgoingPCP(AtomStream &atom, const Host &rhost, /*out*/ 
             atom.skip(c, dlen);
         }
     }
+#endif
 
     // update server ip/firewall status
     if (isTrusted)
@@ -1174,6 +1192,14 @@ Servent::SupportStatus Servent::continuationPacketSupportStatus(const std::strin
 // ク。
 void Servent::handshakeIncomingPCP(AtomStream &atom, Host &rhost, GnuID &rid, String &agent)
 {
+#ifdef WITH_RUST_CORE
+    // helo の読み取りは peercast-rs (src/pcp/handshake.rs)
+    int version=0;
+
+    int pingPort=0;
+
+    rustbridge::readIncomingHelo(atom, rhost, rid, agent, version, pingPort);
+#else
     int numc, numd;
     ID4 id = atom.read(numc, numd);
 
@@ -1232,6 +1258,7 @@ void Servent::handshakeIncomingPCP(AtomStream &atom, Host &rhost, GnuID &rid, St
             atom.skip(c, dlen);
         }
     }
+#endif
 
     if (version)
         LOG_DEBUG("Incoming PCP is %s : v%d", agent.cstr(), version);

@@ -393,6 +393,27 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   違った (x86 は符号付き、ARM の Linux は符号なし。例えば `ttl` が 0 の中継の扱いが変わる)。
   Rust 版は CPU によらず x86 と同じ符号付き。
 
+## 段階6b で追加したもの (PCP のハンドシェイクで受け取る atom)
+
+`src/pcp/handshake.rs` に、PCP のハンドシェイクで相手から受け取る atom の読み取りを移した。
+`Servent::handshakeIncomingPCP` の `helo`、`handshakeOutgoingPCP` の `oleh`、`pingHost` の `oleh`、
+`PCPStream::readVersion`。
+
+* ソケットなどの C++ の `Stream` から、段階 3b と同じ `pcrs_reader` で直接読む。このため atom の
+  層 (`src/pcp/atom.rs`) は、下の `Stream` を `AtomIo` トレイトで抽象化した (6a の `MemStream` と、
+  `Stream` を読む `StreamIo`)。
+* 返事を書くこと (`oleh`、`quit`) と、読んだ値を使った処理 (servMgr の IP アドレスやファイア
+  ウォールの状態の更新、`pingHost` など) は C++ のまま。servent.cpp は、`core/common/rustpcp.h` の
+  `readIncomingHelo` などを呼ぶ。C++ 版と同じく、エラーのときもそれまでに読んだ値 (`rid`、
+  `agent` など) を呼んだ側の変数に入れてから例外を投げる。
+* `GeneralException` はコピーすると `msg` が古い `msgbuf` を指したままになる (C++ 版の例外クラスの
+  性質)。`StreamException` は `std::make_exception_ptr` などでコピーせず、その場で作って投げる。
+
+### C++ 版との違い
+
+* エージェント名 (`agnt`) を読む `char arg[64]` の、まだ書いていない部分は C++ 版では初期化されて
+  いなかった。Rust 版は 0 とみなす (6a の文字列と同じ)。
+
 ## 差分テスト
 
 ```sh
@@ -414,6 +435,7 @@ make
                              # テンプレート: UI の実際のテンプレート、生成したもの、その変異
 ./diff_public                  # Accept-Language、formatUptime、コンソールの引数 (約80万件)
 ./diff_pcp                     # PCP の受け取ったパケット: 生成した atom の木とその変異 (10万件)
+./diff_pcp_hs                  # PCP のハンドシェイクの helo / oleh と readVersion (20万件)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした
