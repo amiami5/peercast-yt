@@ -22,6 +22,10 @@
 #include <vector>
 #include <mutex>
 
+#ifdef WITH_RUST_CORE
+#include "peercast_rs.h"
+#endif
+
 // ----------------------------------
 class Stream;
 
@@ -89,11 +93,21 @@ public:
     void    init()
     {
         std::lock_guard<std::recursive_mutex> cs(lock);
+#ifdef WITH_RUST_CORE
+        pcrs_cpb v = view();
+        pcrs_cpb_init(&v);
+#else
         lastPos = firstPos = safePos = 0;
         readPos = writePos = 0;
         accept = 0;
         lastWriteTime = 0;
+#endif
     }
+
+#ifdef WITH_RUST_CORE
+    // バッファの処理は peercast-rs (src/chanpacket.rs)。メンバーを指すものを渡す
+    pcrs_cpb view();
+#endif
 
     int     copyFrom(ChanPacketBuffer &, unsigned in);
 
@@ -125,6 +139,13 @@ public:
     {
         std::lock_guard<std::recursive_mutex> cs_(lock);
 
+#ifdef WITH_RUST_CORE
+        pcrs_cpb v = view();
+        uint32_t lens[MAX_PACKETS];
+        int cs = 0, ncs = 0;
+        size_t n = pcrs_cpb_statistics(&v, lens, &cs, &ncs);
+        return { std::vector<unsigned int>(lens, lens + n), cs, ncs };
+#else
         if (writePos == 0)
             return { {}, 0, 0 };
 
@@ -139,6 +160,7 @@ public:
                 ncs++;
         }
         return { lens, cs, ncs };
+#endif
     }
 
     ChanPacket              packets[MAX_PACKETS];

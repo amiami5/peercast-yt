@@ -458,6 +458,38 @@ int pcrs_pcp_read_hello(const pcrs_reader *r, int kind, const uint8_t *my_sid16,
 /* PCPStream::readVersion。返り値は pcrs_pcp_read_hello と同じで、成功なら版を *ver に書く */
 int pcrs_pcp_read_version(const pcrs_reader *r, int32_t *ver, pcrs_buf *err);
 
+/* チャンネルのパケットのバッファ (core/common/chanpacket.cpp の ChanPacketBuffer)。パケットと位置は
+ * C++ のクラスのメンバーのまま、pcrs_cpb でそれを指して渡す。ロックと readPacket の待ち合わせは
+ * C++ 側 */
+typedef struct pcrs_chan_packet {  /* ChanPacket と同じ並び */
+    int32_t type;
+    uint32_t len;
+    uint32_t pos;
+    uint32_t sync;
+    bool cont;
+    uint8_t data[16384];
+} pcrs_chan_packet;
+typedef struct pcrs_cpb {
+    pcrs_chan_packet *packets;     /* 64 個 */
+    uint32_t *last_pos, *first_pos, *safe_pos, *read_pos, *write_pos, *accept, *last_write_time;
+} pcrs_cpb;
+/* pcrs_cpb_pos の op */
+enum {
+    PCRS_CPB_LATEST_POS = 0, PCRS_CPB_OLDEST_POS = 1, PCRS_CPB_FIND_OLDEST_POS = 2, PCRS_CPB_STREAM_POS = 3,
+    PCRS_CPB_STREAM_POS_END = 4, PCRS_CPB_LATEST_NONCONT_POS = 5, PCRS_CPB_OLDEST_NONCONT_POS = 6
+};
+void pcrs_cpb_init(const pcrs_cpb *b);
+bool pcrs_cpb_write_packet(const pcrs_cpb *b, pcrs_chan_packet *pack, bool update_read_pos, uint32_t now);
+bool pcrs_cpb_will_skip(const pcrs_cpb *b);
+/* 0 読める、1 遅れすぎ (check_behind のときだけ)、2 まだない */
+int pcrs_cpb_read_state(const pcrs_cpb *b, bool check_behind);
+void pcrs_cpb_take(const pcrs_cpb *b, pcrs_chan_packet *pack);
+bool pcrs_cpb_find_packet(const pcrs_cpb *b, uint32_t spos, pcrs_chan_packet *pack);
+uint32_t pcrs_cpb_pos(const pcrs_cpb *b, int op, uint32_t arg);
+/* 長さを lens (64 個) に書き、その数を返す */
+size_t pcrs_cpb_statistics(const pcrs_cpb *b, uint32_t *lens, int *continuations, int *non_continuations);
+int pcrs_cpb_copy_from(const pcrs_cpb *b, const pcrs_cpb *src, uint32_t req_pos);
+
 #ifdef __cplusplus
 }
 #endif

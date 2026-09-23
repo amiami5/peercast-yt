@@ -52,6 +52,156 @@ ChanPacket& ChanPacket::operator=(const ChanPacket& other)
     return *this;
 }
 
+#ifdef WITH_RUST_CORE
+// ChanPacketBuffer の処理は peercast-rs (src/chanpacket.rs)。パケットと位置はこのクラスのメンバーの
+// まま、そこを指すもの (pcrs_cpb) を渡す。ロックと readPacket の待ち合わせはここで行う。
+
+#include <cstddef>
+
+static_assert(sizeof(ChanPacket) == sizeof(pcrs_chan_packet), "ChanPacket layout");
+static_assert(offsetof(ChanPacket, type) == offsetof(pcrs_chan_packet, type), "ChanPacket layout");
+static_assert(offsetof(ChanPacket, len) == offsetof(pcrs_chan_packet, len), "ChanPacket layout");
+static_assert(offsetof(ChanPacket, pos) == offsetof(pcrs_chan_packet, pos), "ChanPacket layout");
+static_assert(offsetof(ChanPacket, sync) == offsetof(pcrs_chan_packet, sync), "ChanPacket layout");
+static_assert(offsetof(ChanPacket, cont) == offsetof(pcrs_chan_packet, cont), "ChanPacket layout");
+static_assert(offsetof(ChanPacket, data) == offsetof(pcrs_chan_packet, data), "ChanPacket layout");
+static_assert(sizeof(unsigned int) == sizeof(uint32_t), "unsigned int is 32 bits");
+
+static pcrs_chan_packet* rp(ChanPacket& p) { return reinterpret_cast<pcrs_chan_packet*>(&p); }
+static uint32_t* rp(volatile unsigned int& v) { return reinterpret_cast<uint32_t*>(const_cast<unsigned int*>(&v)); }
+static uint32_t* rp(unsigned int& v) { return reinterpret_cast<uint32_t*>(&v); }
+
+pcrs_cpb ChanPacketBuffer::view()
+{
+    return { rp(packets[0]), rp(lastPos), rp(firstPos), rp(safePos), rp(readPos), rp(writePos), rp(accept), rp(lastWriteTime) };
+}
+
+// -----------------------------------
+// (使われていないようだ。)
+int ChanPacketBuffer::copyFrom(ChanPacketBuffer &buf, unsigned int reqPos)
+{
+    lock.lock();
+    buf.lock.lock();
+
+    pcrs_cpb v = view(), src = buf.view();
+    int r = pcrs_cpb_copy_from(&v, &src, reqPos);
+
+    buf.lock.unlock();
+    lock.unlock();
+    return r;
+}
+
+bool ChanPacketBuffer::findPacket(unsigned int spos, ChanPacket &pack)
+{
+    std::lock_guard<std::recursive_mutex> cs(lock);
+    pcrs_cpb v = view();
+    return pcrs_cpb_find_packet(&v, spos, rp(pack));
+}
+
+unsigned int ChanPacketBuffer::getLatestPos()
+{
+    std::lock_guard<std::recursive_mutex> cs(lock);
+    pcrs_cpb v = view();
+    return pcrs_cpb_pos(&v, PCRS_CPB_LATEST_POS, 0);
+}
+
+unsigned int ChanPacketBuffer::getLatestNonContinuationPos()
+{
+    if (writePos == 0)
+        return 0;
+
+    std::lock_guard<std::recursive_mutex> cs(lock);
+    pcrs_cpb v = view();
+    return pcrs_cpb_pos(&v, PCRS_CPB_LATEST_NONCONT_POS, 0);
+}
+
+unsigned int ChanPacketBuffer::getOldestNonContinuationPos()
+{
+    if (writePos == 0)
+        return 0;
+
+    std::lock_guard<std::recursive_mutex> cs(lock);
+    pcrs_cpb v = view();
+    return pcrs_cpb_pos(&v, PCRS_CPB_OLDEST_NONCONT_POS, 0);
+}
+
+unsigned int ChanPacketBuffer::getOldestPos()
+{
+    std::lock_guard<std::recursive_mutex> cs(lock);
+    pcrs_cpb v = view();
+    return pcrs_cpb_pos(&v, PCRS_CPB_OLDEST_POS, 0);
+}
+
+// C++ 版と同じく、ロックを取らずに読む
+unsigned int ChanPacketBuffer::findOldestPos(unsigned int spos)
+{
+    pcrs_cpb v = view();
+    return pcrs_cpb_pos(&v, PCRS_CPB_FIND_OLDEST_POS, spos);
+}
+
+unsigned int ChanPacketBuffer::getStreamPos(unsigned int index)
+{
+    pcrs_cpb v = view();
+    return pcrs_cpb_pos(&v, PCRS_CPB_STREAM_POS, index);
+}
+
+unsigned int ChanPacketBuffer::getStreamPosEnd(unsigned int index)
+{
+    pcrs_cpb v = view();
+    return pcrs_cpb_pos(&v, PCRS_CPB_STREAM_POS_END, index);
+}
+
+bool ChanPacketBuffer::writePacket(ChanPacket &pack, bool updateReadPos)
+{
+    if (pack.len == 0)
+        return false;
+    // C++ 版と同じく、willSkip は書き込みとは別のロックで確かめ、時刻はロックの中で読む
+    if (willSkip())
+        return false;
+    std::lock_guard<std::recursive_mutex> cs(lock);
+    unsigned int now = sys->getTime();
+    pcrs_cpb v = view();
+    return pcrs_cpb_write_packet(&v, rp(pack), updateReadPos, now);
+}
+
+void ChanPacketBuffer::readPacket(ChanPacket &pack)
+{
+    unsigned int tim = sys->getTime();
+
+    lock.lock();
+    pcrs_cpb v = view();
+
+    if (pcrs_cpb_read_state(&v, true) == 1)
+    {
+        lock.unlock();
+        throw StreamException("Read too far behind");
+    }
+
+    while (pcrs_cpb_read_state(&v, false) == 2)
+    {
+        lock.unlock();
+        sys->sleepIdle();
+        if ((sys->getTime() - tim) > 30)
+        {
+            throw TimeoutException();
+        }
+        lock.lock();
+    }
+
+    pcrs_cpb_take(&v, rp(pack));
+    lock.unlock();
+
+    sys->sleepIdle();
+}
+
+bool ChanPacketBuffer::willSkip()
+{
+    std::lock_guard<std::recursive_mutex> cs(lock);
+    pcrs_cpb v = view();
+    return pcrs_cpb_will_skip(&v);
+}
+
+#else
 // -----------------------------------
 // (使われていないようだ。)
 int ChanPacketBuffer::copyFrom(ChanPacketBuffer &buf, unsigned int reqPos)
@@ -287,3 +437,4 @@ bool    ChanPacketBuffer::willSkip()
     std::lock_guard<std::recursive_mutex> cs(lock);
     return ((writePos - readPos) >= MAX_PACKETS);
 }
+#endif // WITH_RUST_CORE

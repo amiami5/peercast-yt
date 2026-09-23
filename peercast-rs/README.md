@@ -414,6 +414,26 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
 * エージェント名 (`agnt`) を読む `char arg[64]` の、まだ書いていない部分は C++ 版では初期化されて
   いなかった。Rust 版は 0 とみなす (6a の文字列と同じ)。
 
+## 段階6c で追加したもの (チャンネルのパケットのバッファ)
+
+`src/chanpacket.rs` に、チャンネルのパケットのバッファ (`core/common/chanpacket.cpp` の
+`ChanPacketBuffer`。最近の 64 個のパケットを輪の形に持つ) の処理を移した。パケットの書き込みと
+読み出し、ストリーム位置からのパケットの探し方、一番古い・新しい位置、統計。
+
+* `ChanPacketBuffer` のメンバー (`writePos` や `lastWriteTime` など) は、チャンネルや配信の処理が
+  直接読み書きしているので、パケットと位置は C++ のクラスのメンバーのまま置き、そこを指すもの
+  (`pcrs_cpb`) を Rust に渡す。`ChanPacket` の並びは `static_assert` で確かめる。
+* ロックと、`readPacket` の待ち合わせ (`sleepIdle` と 30 秒のタイムアウト) は C++ に残る。
+  段階 7 でチャンネルを Rust に移すとき、同じ Rust のコードを Rust 側の記憶領域で使う。
+* `ChanPacket` の小さなメソッド (`init`、`writeRaw`、`operator=`) は C++ のまま。
+
+### C++ 版との違い
+
+* `lastPos` が `UINT_MAX` (4G 個目のパケット) のとき、C++ 版は `findPacket` などのループが
+  終わらなかった。Rust 版は 1 周で終える。
+* 使われていない `copyFrom` は、C++ 版は書き先の番号を 64 で割らずに `packets[writePos++]` に
+  書いていた (配列の外に書く)。Rust 版は 64 で割った位置に書く。
+
 ## 差分テスト
 
 ```sh
@@ -436,6 +456,7 @@ make
 ./diff_public                  # Accept-Language、formatUptime、コンソールの引数 (約80万件)
 ./diff_pcp                     # PCP の受け取ったパケット: 生成した atom の木とその変異 (10万件)
 ./diff_pcp_hs                  # PCP のハンドシェイクの helo / oleh と readVersion (20万件)
+./diff_chanpacket               # ChanPacketBuffer: 操作の列 2 万本 (約290万回の比較)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした

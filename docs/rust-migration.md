@@ -73,10 +73,12 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 | 3 | 完了。3a (HTTP の行の解析、`parseHttpDate`)、3b (AMF0、chunked 転送)、3c (XML)、3d (URL)。`atom` は段階 6 に回した。`cgi::Query` と `HTTP::parseRequestLine` は、Rust 化済みの `str::split` などを呼ぶだけなので C++ のまま |
 | 4 | 完了。相談の結果、NSV と Windows Media 系 (WMA/WMV、ASF、MMS、WMHTTP、ASX) のサポートを削除し、残る FLV、MKV/WebM、OGG、MP3、MP4 の解析器を Rust 化した (`peercast-rs/src/media`)。チャンネルとのやりとりは `pcrs_media_host` のコールバックで行う。差分テストは各形式 10 万件で、説明のつかない違いなし |
 | 5 | 完了。5a (テンプレートエンジンの式とディレクティブ)、5b (Accept-Language の解釈、コンソールの引数の解釈)。差分テストは UI の実際のテンプレートとその変異などで 20 万件、5b は約 80 万件で、説明のつかない違いなし。テンプレートのスコープ (変数) と正規表現、`html.cpp`、`commands.cpp` の各コマンドの本体、`public.cpp` の HTTP の処理は、入力を解釈せず `servMgr` や `chanMgr` を呼ぶだけなので、段階 7〜9 で扱う |
-| 6 | 進行中。6a (受け取ったパケットの処理: `procAtom` 以下と `ChanInfo::readInfoAtoms` / `readTrackAtoms`)、6b (ハンドシェイクで受け取る `helo` / `oleh` と `readVersion`)。チャンネルやサーバーの状態は `pcrs_pcp_host` のコールバックで触り、返事を書くことと読んだ値を使った処理は C++ に残る。差分テストは 6a が 10 万件、6b が 20 万件で、説明のつかない違いなし |
+| 6 | 完了。6a (受け取ったパケットの処理: `procAtom` 以下と `ChanInfo::readInfoAtoms` / `readTrackAtoms`)、6b (ハンドシェイクで受け取る `helo` / `oleh` と `readVersion`)、6c (`ChanPacketBuffer`)。チャンネルやサーバーの状態は `pcrs_pcp_host` のコールバックで触り、返事を書くことと読んだ値を使った処理は C++ に残る。差分テストは 6a が 10 万件、6b が 20 万件、6c が約 290 万回の比較で、説明のつかない違いなし。atom を書く側 (`AtomStream` の write 系、`writeInfoAtoms` など) と `PCPStream` のソケットの読み書きは、それを使うチャンネルや接続の処理と一緒に段階 7〜9 で扱う |
 | 7 以降 | 未着手 |
 
 ### 確認環境についての注記
+
+* 移行の途中で見つけた C++ 版の不具合は、C++ を最後に消すので C++ 側では直さず、`docs/cpp-known-issues.md` にメモとして残す。
 
 * gtest は Ubuntu 26.04 (g++ 15、googletest 1.12.1) で 725/727 件成功 (段階 4 で C++ 版の内部のクラスのテスト 5 件、段階 6 で `readPktAtoms` のテスト 2 件を、C++ 版のビルドでだけ動くようにした)。失敗する 2 件
   (`ServentFixture.handshakeStream_returnResponse_channelReady_direct`、`ServMgrFixture.writeVariable`)

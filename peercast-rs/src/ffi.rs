@@ -1961,3 +1961,166 @@ pub unsafe extern "C" fn pcrs_pcp_read_version(r: *const CReader, ver: *mut i32,
         }
     }
 }
+
+// ---------------------------------------------------------------- ChanPacketBuffer (src/chanpacket.rs)
+
+use crate::chanpacket::{Buffer, Packet as ChanPacket, Positions, MAX_PACKETS};
+
+/// C++ の `ChanPacketBuffer` のメンバーを指すもの (C の `pcrs_cpb`)。ロックは C++ 側で取る。
+#[repr(C)]
+pub struct CCpb {
+    pub packets: *mut ChanPacket,
+    pub last_pos: *mut u32,
+    pub first_pos: *mut u32,
+    pub safe_pos: *mut u32,
+    pub read_pos: *mut u32,
+    pub write_pos: *mut u32,
+    pub accept: *mut u32,
+    pub last_write_time: *mut u32,
+}
+
+/// # Safety
+/// `b` は有効な `CCpb` を指し、そのポインタはどれも有効で、`packets` は 64 個の配列であること。
+/// 呼ぶ側がロックを取っていて、ほかの誰もその間に書き換えないこと。
+unsafe fn with_cpb<R>(b: *const CCpb, f: impl FnOnce(&mut Buffer) -> R) -> R {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let b = &*b;
+        let mut p = Positions {
+            last_pos: *b.last_pos,
+            first_pos: *b.first_pos,
+            safe_pos: *b.safe_pos,
+            read_pos: *b.read_pos,
+            write_pos: *b.write_pos,
+            accept: *b.accept,
+            last_write_time: *b.last_write_time,
+        };
+        let packets = std::slice::from_raw_parts_mut(b.packets, MAX_PACKETS as usize);
+        let r = f(&mut Buffer { packets, p: &mut p });
+        *b.last_pos = p.last_pos;
+        *b.first_pos = p.first_pos;
+        *b.safe_pos = p.safe_pos;
+        *b.read_pos = p.read_pos;
+        *b.write_pos = p.write_pos;
+        *b.accept = p.accept;
+        *b.last_write_time = p.last_write_time;
+        r
+    }
+}
+
+/// `ChanPacketBuffer::init` の位置の初期化
+///
+/// # Safety
+/// `with_cpb` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_init(b: *const CCpb) {
+    // SAFETY: 関数の Safety 節
+    unsafe { with_cpb(b, |b| b.init()) }
+}
+
+/// `writePacket`。`pack` はバッファの外のパケット (`sync` を書き換える)。
+///
+/// # Safety
+/// `with_cpb` と同じ。`pack` は有効で、バッファの中のパケットではないこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_write_packet(b: *const CCpb, pack: *mut ChanPacket, update_read_pos: bool, now: u32) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe { with_cpb(b, |b| b.write_packet(&mut *pack, update_read_pos, now)) }
+}
+
+/// `willSkip`
+///
+/// # Safety
+/// `with_cpb` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_will_skip(b: *const CCpb) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe { with_cpb(b, |b| b.will_skip()) }
+}
+
+/// `readPacket` の状態: 0 読める、1 遅れすぎ (`Read too far behind`)、2 まだない (待つ)
+///
+/// # Safety
+/// `with_cpb` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_read_state(b: *const CCpb, check_behind: bool) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        with_cpb(b, |b| {
+            if check_behind && b.too_far_behind() {
+                1
+            } else if b.is_empty() {
+                2
+            } else {
+                0
+            }
+        })
+    }
+}
+
+/// `readPacket` の、次のパケットを `pack` に写して進めるところ (`pcrs_cpb_read_state` が 0 のとき)
+///
+/// # Safety
+/// `pcrs_cpb_write_packet` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_take(b: *const CCpb, pack: *mut ChanPacket) {
+    // SAFETY: 関数の Safety 節
+    unsafe { with_cpb(b, |b| b.take(&mut *pack)) }
+}
+
+/// `findPacket`
+///
+/// # Safety
+/// `pcrs_cpb_write_packet` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_find_packet(b: *const CCpb, spos: u32, pack: *mut ChanPacket) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe { with_cpb(b, |b| b.find_packet(spos, &mut *pack)) }
+}
+
+/// 位置を返すもの (`op` は C の `PCRS_CPB_*`)
+///
+/// # Safety
+/// `with_cpb` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_pos(b: *const CCpb, op: i32, arg: u32) -> u32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        with_cpb(b, |b| match op {
+            0 => b.latest_pos(),
+            1 => b.oldest_pos(),
+            2 => b.find_oldest_pos(arg),
+            3 => b.stream_pos(arg),
+            4 => b.stream_pos_end(arg),
+            5 => b.latest_non_continuation_pos(),
+            _ => b.oldest_non_continuation_pos(),
+        })
+    }
+}
+
+/// `getStatistics`。長さを `lens` (64 個書ける) に書き、その数を返す。
+///
+/// # Safety
+/// `with_cpb` と同じ。`lens` は 64 個、`cs` と `ncs` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_statistics(b: *const CCpb, lens: *mut u32, cs: *mut i32, ncs: *mut i32) -> usize {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let s = with_cpb(b, |b| b.statistics());
+        let n = s.packet_lengths.len().min(MAX_PACKETS as usize);
+        std::ptr::copy_nonoverlapping(s.packet_lengths.as_ptr(), lens, n);
+        *cs = s.continuations;
+        *ncs = s.non_continuations;
+        n
+    }
+}
+
+/// `copyFrom` (使われていない)
+///
+/// # Safety
+/// `b` と `src` はどちらも `with_cpb` と同じ条件で、別のバッファを指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cpb_copy_from(b: *const CCpb, src: *const CCpb, req_pos: u32) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe { with_cpb(src, |s| with_cpb(b, |b| b.copy_from(s, req_pos))) }
+}
