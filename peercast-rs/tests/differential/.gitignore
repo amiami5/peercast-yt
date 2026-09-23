@@ -5,4 +5,5 @@ diff_md5_gnuid
 diff_strutil
 diff_string
 diff_http
+diff_amf0_dechunk
 cxxcore.a

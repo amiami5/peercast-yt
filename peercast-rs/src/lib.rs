@@ -7,7 +7,9 @@
 //! 元のプログラムは GPL (v2 以降) なので、この移植も同じ条件で配布する。
 #![deny(unsafe_code)]
 
+pub mod amf0;
 pub mod cgi;
+pub mod dechunk;
 pub mod entities;
 #[allow(unsafe_code)]
 pub mod ffi;
@@ -18,6 +20,7 @@ pub mod jis;
 mod jis_table;
 pub mod md5;
 pub mod pcstring;
+pub mod reader;
 pub mod strutil;
 pub mod url;
 pub mod utf8;

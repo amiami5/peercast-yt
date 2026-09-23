@@ -18,7 +18,15 @@
 #include "md5.h" // md5::hexdigest
 #include "_string.h" // String
 #include "http.h" // HTTP
+#include "amf0.h" // amf0::Deserializer
+#include "dechunker.h" // Dechunker
+#include "stream.h" // Stream
+#include <exception>
+#include <vector>
 #include "str.h"
+#include "rustbridge.h"
+
+using rustbridge::RustBuf;
 
 namespace
 {
@@ -27,26 +35,6 @@ inline const uint8_t* bytes(const std::string& s)
 {
     return reinterpret_cast<const uint8_t*>(s.data());
 }
-
-// pcrs_buf の持ち主。例外が飛んでも確実に Rust 側へ返す。
-class RustBuf
-{
-public:
-    RustBuf() : m_buf{nullptr, 0} {}
-    explicit RustBuf(pcrs_buf buf) : m_buf(buf) {}
-    ~RustBuf() { pcrs_buf_free(m_buf); }
-    RustBuf(const RustBuf&) = delete;
-    RustBuf& operator=(const RustBuf&) = delete;
-
-    pcrs_buf* out() { return &m_buf; }
-    std::string str() const
-    {
-        return std::string(reinterpret_cast<const char*>(m_buf.ptr), m_buf.len);
-    }
-
-private:
-    pcrs_buf m_buf;
-};
 
 } // namespace
 
@@ -469,6 +457,64 @@ void copyTruncated(char* dst, size_t len, const std::string& s)
     dst[n] = '\0';
 }
 } // namespace
+
+#endif // WITH_RUST_CORE
+
+#ifdef WITH_RUST_CORE
+
+using rustbridge::StreamReader;
+using rustbridge::Amf0Builder;
+using rustbridge::readPrimitive;
+
+namespace amf0 {
+
+bool Deserializer::readBool(Stream &in) { return readPrimitive<bool>(in, pcrs_amf0_read_bool); }
+int32_t Deserializer::readInt32(Stream &in) { return readPrimitive<int32_t>(in, pcrs_amf0_read_int32); }
+int16_t Deserializer::readInt16(Stream& in) { return readPrimitive<int16_t>(in, pcrs_amf0_read_int16); }
+double Deserializer::readDouble(Stream &in) { return readPrimitive<double>(in, pcrs_amf0_read_double); }
+
+std::string Deserializer::readString(Stream &in)
+{
+    StreamReader reader(in);
+    pcrs_buf buf = {nullptr, 0};
+    if (pcrs_amf0_read_string(reader.get(), &buf) != 0)
+    {
+        reader.rethrowIfAborted();
+        throw StreamException("AMF0: read aborted");
+    }
+    return RustBuf(buf).str();
+}
+
+Value Deserializer::readValue(Stream &in)
+{
+    StreamReader reader(in);
+    Amf0Builder builder;
+    int8_t unknownType = 0;
+    int code = pcrs_amf0_read_value(reader.get(), builder.get(), &unknownType);
+    builder.check(code, unknownType, reader);
+    return builder.result;
+}
+
+std::vector<KeyValuePair> Deserializer::readObject(Stream &in)
+{
+    StreamReader reader(in);
+    Amf0Builder builder;
+    int8_t unknownType = 0;
+    int code = pcrs_amf0_read_object(reader.get(), builder.get(), &unknownType);
+    builder.check(code, unknownType, reader);
+    return builder.topPairs;
+}
+
+} // namespace amf0
+
+void Dechunker::getNextChunk()
+{
+    rustbridge::nextChunk(m_stream, MAX_CHUNK_SIZE, m_buffer, m_eof);
+}
+
+#endif // WITH_RUST_CORE
+
+#ifdef WITH_RUST_CORE
 
 void HTTP::parseAuthorizationHeader(const char* arg, char* user, char* pass, size_t ulen, size_t plen)
 {

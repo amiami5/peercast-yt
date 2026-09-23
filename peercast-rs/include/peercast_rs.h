@@ -116,6 +116,48 @@ bool     pcrs_http_is_cross_origin_request(const uint8_t *site, size_t site_n,
 bool     pcrs_http_is_loopback_host_header(const uint8_t *s, size_t n);
 int64_t  pcrs_cgi_parse_http_date(const uint8_t *s, size_t n);
 
+/*
+ * C++ の Stream を読むコールバック。どれも成功で 0、C++ の例外で中断したら -1 を返す。
+ * コールバックから例外を外に出してはいけない (Rust を通り抜けられない)。例外は ctx に
+ * 保存しておき、Rust の関数から戻ったあとで投げ直す。
+ */
+typedef struct pcrs_reader {
+    void *ctx;
+    int (*read_char)(void *ctx, uint8_t *out);                      /* Stream::readChar */
+    int (*read_exact)(void *ctx, uint8_t *buf, size_t n);           /* Stream::read(int) */
+    int (*read_some)(void *ctx, uint8_t *buf, size_t n, size_t *got); /* Stream::read(void*, int) */
+} pcrs_reader;
+
+/* amf0 (core/common/amf0.cpp)。読んだ値をコールバックで通知する。コールバックも例外を外に出さない。 */
+typedef struct pcrs_amf0_builder {
+    void *ctx;
+    void (*number)(void *ctx, double v);
+    void (*string)(void *ctx, const uint8_t *s, size_t n);
+    void (*boolean)(void *ctx, bool b);
+    void (*null)(void *ctx);
+    void (*date)(void *ctx, double unix_time, uint16_t timezone);
+    void (*begin_object)(void *ctx, int kind /* 0: object, 1: ECMA array */);
+    void (*key)(void *ctx, const uint8_t *s, size_t n);
+    void (*end_object)(void *ctx);
+    void (*begin_strict_array)(void *ctx);
+    void (*end_strict_array)(void *ctx);
+} pcrs_amf0_builder;
+
+/* 0 成功、1 読み出しの中断、2 深すぎる、3 値が多すぎる、4 不明な型 (*unknown_type に型) */
+int pcrs_amf0_read_value(const pcrs_reader *r, const pcrs_amf0_builder *b, int8_t *unknown_type);
+int pcrs_amf0_read_object(const pcrs_reader *r, const pcrs_amf0_builder *b, int8_t *unknown_type);
+/* 0 成功、-1 読み出しの中断 */
+int pcrs_amf0_read_bool(const pcrs_reader *r, bool *out);
+int pcrs_amf0_read_int32(const pcrs_reader *r, int32_t *out);
+int pcrs_amf0_read_int16(const pcrs_reader *r, int16_t *out);
+int pcrs_amf0_read_double(const pcrs_reader *r, double *out);
+int pcrs_amf0_read_string(const pcrs_reader *r, pcrs_buf *out);
+
+/* dechunker (core/common/dechunker.cpp)。*data は常に書かれる (空のこともある)。
+ * 0 なし、1 読み出しの中断、2 "Protocol error"、3 "Chunk size too large"、
+ * 4 最後のチャンク ("Closed on read")、5 "Premature end" */
+int pcrs_dechunk_next(const pcrs_reader *r, size_t max_chunk_size, pcrs_buf *data);
+
 #ifdef __cplusplus
 }
 #endif

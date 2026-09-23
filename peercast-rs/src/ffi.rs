@@ -598,6 +598,214 @@ pub unsafe extern "C" fn pcrs_cgi_parse_http_date(s: *const u8, n: usize) -> i64
     http::parse_http_date(unsafe { input(s, n) })
 }
 
+// ---------------------------------------------------------------- Stream から読む (reader.rs)
+
+use crate::reader::{Abort, Reader};
+
+/// C++ の `Stream` を読むコールバック。どれも成功で 0、C++ の例外で中断したら -1 を返す
+/// (例外は C++ 側で保存しておき、Rust の関数から戻ったあとに投げ直す)。
+#[repr(C)]
+pub struct CReader {
+    pub ctx: *mut std::ffi::c_void,
+    /// `Stream::readChar`
+    pub read_char: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, out: *mut u8) -> i32,
+    /// `Stream::read(int)`: ちょうど n バイト
+    pub read_exact: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, buf: *mut u8, n: usize) -> i32,
+    /// `Stream::read(void*, int)`: 最大 n バイト。読めたバイト数を *got に書く
+    pub read_some: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, buf: *mut u8, n: usize, got: *mut usize) -> i32,
+}
+
+/// `CReader` を `Reader` として使う。
+struct CReaderRef<'a>(&'a CReader);
+
+impl Reader for CReaderRef<'_> {
+    fn read_char(&mut self) -> Result<u8, Abort> {
+        let mut c = 0u8;
+        // SAFETY: CReader を渡した C++ 側が、関数ポインタと ctx の有効性を保証する
+        match unsafe { (self.0.read_char)(self.0.ctx, &mut c) } {
+            0 => Ok(c),
+            _ => Err(Abort),
+        }
+    }
+
+    fn read_exact(&mut self, n: usize) -> Result<Vec<u8>, Abort> {
+        let mut v = vec![0u8; n];
+        // SAFETY: 同上。v は n バイト書ける
+        match unsafe { (self.0.read_exact)(self.0.ctx, v.as_mut_ptr(), n) } {
+            0 => Ok(v),
+            _ => Err(Abort),
+        }
+    }
+
+    fn read_some(&mut self, n: usize) -> Result<Vec<u8>, Abort> {
+        let mut v = vec![0u8; n];
+        let mut got = 0usize;
+        // SAFETY: 同上。v は n バイト書ける
+        match unsafe { (self.0.read_some)(self.0.ctx, v.as_mut_ptr(), n, &mut got) } {
+            0 => {
+                v.truncate(got.min(n));
+                Ok(v)
+            }
+            _ => Err(Abort),
+        }
+    }
+}
+
+/// # Safety
+/// `r` は有効な `CReader` を指すこと。
+unsafe fn reader<'a>(r: *const CReader) -> CReaderRef<'a> {
+    // SAFETY: 呼び出し側が保証する
+    CReaderRef(unsafe { &*r })
+}
+
+// ---------------------------------------------------------------- amf0 (core/common/amf0.cpp)
+
+use crate::amf0;
+
+/// AMF0 の値を組み立てる C++ 側のコールバック (`amf0::Builder` の通知をそのまま渡す)。
+#[repr(C)]
+pub struct CAmf0Builder {
+    pub ctx: *mut std::ffi::c_void,
+    pub number: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, v: f64),
+    pub string: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, s: *const u8, n: usize),
+    pub boolean: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, b: bool),
+    pub null: unsafe extern "C" fn(ctx: *mut std::ffi::c_void),
+    pub date: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, unix_time: f64, timezone: u16),
+    /// kind: 0 = オブジェクト、1 = ECMA 配列
+    pub begin_object: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, kind: i32),
+    pub key: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, s: *const u8, n: usize),
+    pub end_object: unsafe extern "C" fn(ctx: *mut std::ffi::c_void),
+    pub begin_strict_array: unsafe extern "C" fn(ctx: *mut std::ffi::c_void),
+    pub end_strict_array: unsafe extern "C" fn(ctx: *mut std::ffi::c_void),
+}
+
+struct CBuilderRef<'a>(&'a CAmf0Builder);
+
+// SAFETY (この impl のすべての unsafe): CAmf0Builder を渡した C++ 側が、関数ポインタと ctx の
+// 有効性を保証する。文字列は呼び出しの間だけ有効なスライスを渡す。
+impl amf0::Builder for CBuilderRef<'_> {
+    fn number(&mut self, v: f64) { unsafe { (self.0.number)(self.0.ctx, v) } }
+    fn string(&mut self, s: &[u8]) { unsafe { (self.0.string)(self.0.ctx, s.as_ptr(), s.len()) } }
+    fn boolean(&mut self, b: bool) { unsafe { (self.0.boolean)(self.0.ctx, b) } }
+    fn null(&mut self) { unsafe { (self.0.null)(self.0.ctx) } }
+    fn date(&mut self, t: f64, tz: u16) { unsafe { (self.0.date)(self.0.ctx, t, tz) } }
+    fn begin_object(&mut self, kind: amf0::ObjectKind) {
+        let k = match kind {
+            amf0::ObjectKind::Object => 0,
+            amf0::ObjectKind::Array => 1,
+        };
+        unsafe { (self.0.begin_object)(self.0.ctx, k) }
+    }
+    fn key(&mut self, k: &[u8]) { unsafe { (self.0.key)(self.0.ctx, k.as_ptr(), k.len()) } }
+    fn end_object(&mut self) { unsafe { (self.0.end_object)(self.0.ctx) } }
+    fn begin_strict_array(&mut self) { unsafe { (self.0.begin_strict_array)(self.0.ctx) } }
+    fn end_strict_array(&mut self) { unsafe { (self.0.end_strict_array)(self.0.ctx) } }
+}
+
+/// 結果を C の値にする: 0 成功、1 読み出しの中断、2 深すぎる、3 値が多すぎる、4 不明な型
+/// (型を `*unknown_type` に書く)。
+fn amf0_result(res: Result<(), amf0::Error>, unknown_type: *mut i8) -> i32 {
+    match res {
+        Ok(()) => 0,
+        Err(amf0::Error::Abort) => 1,
+        Err(amf0::Error::TooDeep) => 2,
+        Err(amf0::Error::TooMany) => 3,
+        Err(amf0::Error::UnknownType(t)) => {
+            // SAFETY: 呼び出し側 (下の関数の Safety 節) が保証する
+            unsafe { *unknown_type = t };
+            4
+        }
+    }
+}
+
+/// `Deserializer::readValue`
+///
+/// # Safety
+/// `r`, `b` は有効な構造体を指すこと。`unknown_type` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_amf0_read_value(r: *const CReader, b: *const CAmf0Builder, unknown_type: *mut i8) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (mut rd, mut bd) = unsafe { (reader(r), CBuilderRef(&*b)) };
+    amf0_result(amf0::read_value(&mut rd, &mut bd), unknown_type)
+}
+
+/// `Deserializer::readObject` (型のバイトのないオブジェクト。`begin_object` から通知する)
+///
+/// # Safety
+/// `pcrs_amf0_read_value` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_amf0_read_object(r: *const CReader, b: *const CAmf0Builder, unknown_type: *mut i8) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (mut rd, mut bd) = unsafe { (reader(r), CBuilderRef(&*b)) };
+    amf0_result(amf0::read_object(&mut rd, &mut bd), unknown_type)
+}
+
+macro_rules! amf0_primitive {
+    ($name:ident, $f:path, $t:ty) => {
+        /// 成功で 0、読み出しの中断で -1。
+        ///
+        /// # Safety
+        /// `r` は有効な `CReader` を指し、`out` は書き込めること。
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(r: *const CReader, out: *mut $t) -> i32 {
+            // SAFETY: 関数の Safety 節
+            let mut rd = unsafe { reader(r) };
+            match $f(&mut rd) {
+                // SAFETY: 関数の Safety 節
+                Ok(v) => { unsafe { *out = v }; 0 }
+                Err(Abort) => -1,
+            }
+        }
+    };
+}
+
+amf0_primitive!(pcrs_amf0_read_bool, amf0::read_bool, bool);
+amf0_primitive!(pcrs_amf0_read_int32, amf0::read_int32, i32);
+amf0_primitive!(pcrs_amf0_read_int16, amf0::read_int16, i16);
+amf0_primitive!(pcrs_amf0_read_double, amf0::read_double, f64);
+
+/// `Deserializer::readString`。成功で 0、読み出しの中断で -1。
+///
+/// # Safety
+/// `r` は有効な `CReader` を指し、`out` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_amf0_read_string(r: *const CReader, out: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let mut rd = unsafe { reader(r) };
+    match amf0::read_string(&mut rd) {
+        // SAFETY: 関数の Safety 節
+        Ok(v) => { unsafe { *out = into_buf(v) }; 0 }
+        Err(Abort) => -1,
+    }
+}
+
+// ---------------------------------------------------------------- dechunker (core/common/dechunker.cpp)
+
+use crate::dechunk;
+
+/// `Dechunker::getNextChunk`。チャンクの中身を `*data` に書き (空のこともある)、その後に起きた
+/// エラーを返す: 0 なし、1 読み出しの中断、2 "Protocol error"、3 "Chunk size too large"、
+/// 4 最後のチャンク ("Closed on read")、5 "Premature end"。
+///
+/// # Safety
+/// `r` は有効な `CReader` を指し、`data` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_dechunk_next(r: *const CReader, max_chunk_size: usize, data: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let mut rd = unsafe { reader(r) };
+    let (d, err) = dechunk::next_chunk(&mut rd, max_chunk_size);
+    // SAFETY: 関数の Safety 節
+    unsafe { *data = into_buf(d) };
+    match err {
+        None => 0,
+        Some(dechunk::Error::Abort) => 1,
+        Some(dechunk::Error::Protocol) => 2,
+        Some(dechunk::Error::TooLarge) => 3,
+        Some(dechunk::Error::Closed) => 4,
+        Some(dechunk::Error::Premature) => 5,
+    }
+}
+
 /// base64 の 4 文字を 3 バイトに復号して `out` に書き、書いたバイト数 (3、不正なら 0) を返す。
 ///
 /// # Safety

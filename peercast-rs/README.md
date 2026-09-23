@@ -171,6 +171,43 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
   Content-Length があるときに接続が閉じるまで読み、ないときに 0 バイトだけ読む。
   ソケットを読む側の処理なので、段階 9 で扱う。
 
+## 段階3b で追加したもの (AMF0、chunked 転送)
+
+### `Stream` から読む解析器の設計
+
+解析器が C++ の `Stream` から読む必要がある場合は、**Rust 側が C++ のコールバックを呼んで
+1 バイトずつ (または決まった長さを) 読む**形にした (`src/reader.rs`、C の型は `pcrs_reader`)。
+
+* C++ 側のコールバック (`core/common/rustbridge.h` の `StreamReader`) が `Stream::readChar` などを
+  そのまま呼ぶ。`MemoryStream` はデータが尽きても例外を投げずに 0 を返す、といった各ストリームの
+  細かい挙動は変わらない。
+* コールバックの中で起きた C++ の例外は、Rust を通り抜けられないので、その場で捕まえて保存し、
+  Rust の関数から戻ったあとで投げ直す。例外の型とメッセージは C++ 版と同じになる。
+* 読んだ結果の組み立て (AMF0 の `amf0::Value` など) も、Rust からの通知 (`pcrs_amf0_builder`) を
+  受けて C++ 側で行う。信頼できない入力の解釈は Rust 側だけで行い、C++ 側は Rust が確かめた
+  構造をなぞるだけになる。
+
+メモリ上にそろったデータを解析するもの (段階 3a の HTTP の行など) は、これまでどおりバイト列を
+受け取る。
+
+### 置き換えたもの
+
+| 関数 | 内容 |
+|---|---|
+| `amf0::Deserializer` の全メソッド | `src/amf0.rs`。FLV のメタデータ (onMetaData) の解析に使われる |
+| `Dechunker::getNextChunk` | `src/dechunk.rs`。HTTP の chunked 転送の 1 チャンク |
+
+`Dechunker::read` (読んだチャンクを溜めて返す部分) と `amf0::Value` (値の型そのもの) は C++ に残る。
+
+### C++ 版との違い
+
+* **`readDouble` がリトルエンディアンの CPU でしか正しく動かなかった**: C++ 版は 8 バイトを
+  逆順にメモリへ書いて `double` とみなしていた。Rust 版はどの CPU でも正しい値になる
+  (x86 と ARM の一般的な構成はリトルエンディアンなので、今の利用環境での結果は同じ)。
+* **不明な型のエラーメッセージが CPU で違った**: `"unknown AMF value type N"` の N を `char` で
+  表示しており、0x80 以上の型が x86 では負の数、ARM の Linux では正の数になっていた。
+  Rust 版は常に符号付き (x86 の C++ 版と同じ)。
+
 ## 差分テスト
 
 ```sh
@@ -184,6 +221,7 @@ make
 ./diff_jis                     # JISConverter: 65536通り全数 (sjis/euc 各1関数)
 ./diff_string                  # String: 長さ0〜2全網羅+長さ3〜4を絞ったバイトで全通り+乱数30万件 (約980万件)
 ./diff_http                    # HTTP の行の解析と parseHttpDate: 見本の変異+乱数 (約120万件)
+./diff_amf0_dechunk            # AMF0 と Dechunker: 生成した値の変異・切り詰め (約100万件)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした

@@ -7,6 +7,8 @@
 
 namespace amf0 {
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustcore.cpp (peercast-rs の src/amf0.rs) を使う。
 bool Deserializer::readBool(Stream &in)
 {
     return in.readChar() != 0;
@@ -134,6 +136,8 @@ Value Deserializer::readValue(Stream &in, int depth, int& budget)
         throw std::runtime_error("unknown AMF value type " + std::to_string(type));
     }
 }
+
+#endif // WITH_RUST_CORE
 
 std::string Value::inspect() const
 {

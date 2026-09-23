@@ -57,6 +57,8 @@ int  Dechunker::read(void *buf, int aSize)
     }
 }
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustcore.cpp (peercast-rs の src/dechunk.rs) を使う。
 void Dechunker::getNextChunk()
 {
     size_t size = 0;
@@ -110,3 +112,4 @@ void Dechunker::getNextChunk()
     if (m_stream.readChar() != '\r' || m_stream.readChar() != '\n')
         throw StreamException("Protocol error");
 }
+#endif // WITH_RUST_CORE
