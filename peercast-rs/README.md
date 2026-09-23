@@ -74,7 +74,9 @@ Rust コード自体は普通のライブラリですが、`crate-type = ["stati
 アドレスのバイト列とは限らない (`IP` クラスの内部レイアウト次第)。Rust 版もこれをそのまま
 踏襲しているだけで、意味のある IP アドレスの計算はしていない。
 
-C++ 版との違いは見つからなかった (MD5、GnuID とも、既知の相違点なし)。
+C++ 版との違いは見つからなかった (MD5、GnuID とも、既知の相違点なし)。ただし段階 7a で、
+`fromStr` が空白と符号を読む `strtoul` の動きを再現していなかったことがわかり、直した
+(段階 7a の節を参照)。
 
 ## 段階1d で追加したもの
 
@@ -434,6 +436,32 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
 * 使われていない `copyFrom` は、C++ 版は書き先の番号を 64 で割らずに `packets[writePos++]` に
   書いていた (配列の外に書く)。Rust 版は 64 で割った位置に書く。
 
+## 段階7a で追加したもの (イエローページのチャンネル一覧)
+
+`src/chandir.rs` に、イエローページの index.txt の解釈 (`core/common/chandir.cpp` の
+`ChannelEntry::textToChannelEntries` と `ChannelEntry` のコンストラクタ) と、`chatUrl` / `statsUrl`、
+`ChannelDirectory::getState` が使う `directoryUrlOf` と `formatTime` を移した。
+
+* 1 行を 1 チャンネルとして Rust が解釈し、コールバック (`pcrs_chandir_parse` の `on_entry` と
+  `on_error`) で C++ に返す。C++ はそれで `ChannelEntry` を作る。
+* 一覧の入れ物 (`m_channels`、`m_feeds`) と、一覧を取りに行く処理 (フィードごとのスレッドと
+  HTTP)、`writeChannelVariable` などは C++ に残る。ほかのコード (`servmgr`、`jrpc`、`channel`) が
+  直接触っているので、それらと一緒に段階 9 で移す。
+
+### C++ 版との違い
+
+* 数の欄 (直接・リレーの数、ビットレート、`direct`) が `int` に収まらないとき、C++ 版の `atoi` は
+  x86-64 の Linux では一周した値になる (C 標準では未定義)。Rust 版は段階 3a と同じく範囲の端に丸める。
+* NUL を含む行は、段階 1 の `str::split` の違い (C++ 版は NUL で切れる) のとおり。
+
+### 段階 1c の `GnuID::fromStr` の修正
+
+`GnuID::fromStr` は 2 文字ずつ `strtoul(buf, nullptr, 16)` で読む。`strtoul` は先頭の空白と符号を
+読むので、C++ 版は `" 7"` と `"+7"` を 7、`"-1"` を 0xFF と読む。段階 1c の Rust 版はこれを 0 と
+していた (段階 1c の差分テストは 16 進数の文字しか試していなかった)。index.txt のチャンネル ID の
+欄の差分テストで見つけたので、C++ 版と同じにした。`diff_md5_gnuid` に 2 文字の組み合わせを全部
+試す比較を足した。
+
 ## 差分テスト
 
 ```sh
@@ -443,7 +471,7 @@ make
 ./diff --exhaustive3         # さらに長さ3バイトを全網羅 (1,677万通り、数十秒)
 ./diff_strutil                # str.cpp のその他の関数: 乱数20万組 (既定)
 ./diff_strutil --random 300000  # 比較件数780万件相当まで増やして実行
-./diff_md5_gnuid              # md5::hexdigest と GnuID: 乱数20万組 (既定)
+./diff_md5_gnuid              # md5::hexdigest と GnuID: 乱数20万組 (既定)、fromStr の 2 文字の全通り
 ./diff_jis                     # JISConverter: 65536通り全数 (sjis/euc 各1関数)
 ./diff_string                  # String: 長さ0〜2全網羅+長さ3〜4を絞ったバイトで全通り+乱数30万件 (約980万件)
 ./diff_http                    # HTTP の行の解析と parseHttpDate: 見本の変異+乱数 (約120万件)
@@ -457,6 +485,7 @@ make
 ./diff_pcp                     # PCP の受け取ったパケット: 生成した atom の木とその変異 (10万件)
 ./diff_pcp_hs                  # PCP のハンドシェイクの helo / oleh と readVersion (20万件)
 ./diff_chanpacket               # ChanPacketBuffer: 操作の列 2 万本 (約290万回の比較)
+./diff_chandir                  # index.txt の解釈と一覧の URL・時間の文字列 (約120万件)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした

@@ -13,6 +13,101 @@
 
 using namespace std;
 
+#ifdef WITH_RUST_CORE
+#include "rustbridge.h"
+
+// Rust が解釈した 1 行 (pcrs_chan_entry) から ChannelEntry を作る
+struct ChannelEntryBuilder
+{
+    std::vector<ChannelEntry>* out;
+    const std::string* feedUrl;
+    std::vector<std::string>* errors;
+
+    static std::string s(pcrs_bytes b)
+    {
+        return std::string(reinterpret_cast<const char*>(b.ptr), b.len);
+    }
+
+    static void fill(ChannelEntry& e, const pcrs_chan_entry* c)
+    {
+        e.name           = s(c->name);
+        memcpy(e.id.id, c->id, 16);
+        e.tip            = s(c->tip);
+        e.url            = s(c->url);
+        e.genre          = s(c->genre);
+        e.desc           = s(c->desc);
+        e.numDirects     = c->num_directs;
+        e.numRelays      = c->num_relays;
+        e.bitrate        = c->bitrate;
+        e.contentTypeStr = s(c->content_type);
+        e.trackArtist    = s(c->track_artist);
+        e.trackAlbum     = s(c->track_album);
+        e.trackName      = s(c->track_name);
+        e.trackContact   = s(c->track_contact);
+        e.encodedName    = s(c->encoded_name);
+        e.uptime         = s(c->uptime);
+        e.status         = s(c->status);
+        e.comment        = s(c->comment);
+        e.direct         = c->direct;
+    }
+
+    static void fillOne(void* ctx, const pcrs_chan_entry* c) noexcept
+    {
+        fill(*static_cast<ChannelEntry*>(ctx), c);
+    }
+
+    static void onEntry(void* ctx, const pcrs_chan_entry* c) noexcept
+    {
+        auto* b = static_cast<ChannelEntryBuilder*>(ctx);
+        ChannelEntry e(*b->feedUrl);
+        fill(e, c);
+        b->out->push_back(std::move(e));
+    }
+
+    static void onError(void* ctx, int32_t lineno) noexcept
+    {
+        auto* b = static_cast<ChannelEntryBuilder*>(ctx);
+        b->errors->push_back(str::format("Parse error at line %d.", (int) lineno));
+    }
+};
+
+ChannelEntry::ChannelEntry(const std::vector<std::string>& fields, const std::string& aFeedUrl)
+    : ChannelEntry(aFeedUrl)
+{
+    std::vector<pcrs_bytes> v;
+    for (auto& f : fields)
+        v.push_back({ reinterpret_cast<const uint8_t*>(f.data()), f.size() });
+    if (pcrs_chandir_entry(v.data(), v.size(), this, ChannelEntryBuilder::fillOne) != 0)
+        throw std::runtime_error("too few fields");
+}
+
+std::vector<ChannelEntry>
+ChannelEntry::textToChannelEntries(const std::string& text, const std::string& aFeedUrl, std::vector<std::string>& errors)
+{
+    vector<ChannelEntry> res;
+    ChannelEntryBuilder b{ &res, &aFeedUrl, &errors };
+    pcrs_chandir_parse(reinterpret_cast<const uint8_t*>(text.data()), text.size(), &b,
+                       ChannelEntryBuilder::onEntry, ChannelEntryBuilder::onError);
+    return res;
+}
+
+static std::string sideUrl(const std::string& feedUrl, const std::string& encodedName, int kind)
+{
+    return rustbridge::RustBuf(pcrs_chandir_side_url(reinterpret_cast<const uint8_t*>(feedUrl.data()), feedUrl.size(),
+                                                     reinterpret_cast<const uint8_t*>(encodedName.data()), encodedName.size(),
+                                                     kind)).str();
+}
+
+std::string ChannelEntry::chatUrl()
+{
+    return sideUrl(feedUrl, encodedName, 0);
+}
+
+std::string ChannelEntry::statsUrl()
+{
+    return sideUrl(feedUrl, encodedName, 1);
+}
+#else
 std::vector<ChannelEntry>
 ChannelEntry::textToChannelEntries(const std::string& text, const std::string& aFeedUrl, std::vector<std::string>& errors)
 {
@@ -57,6 +152,7 @@ std::string ChannelEntry::statsUrl()
     else
         return feedUrl.substr(0, index) + "/getgmt.php?cn=" + encodedName;
 }
+#endif // WITH_RUST_CORE
 
 ChannelDirectory::ChannelDirectory()
     : m_lastUpdate(0)
@@ -250,6 +346,17 @@ bool ChannelDirectory::writeChannelVariable(Stream& out, const String& varName, 
     return true;
 }
 
+#ifdef WITH_RUST_CORE
+static std::string directoryUrlOf(const std::string& url)
+{
+    return rustbridge::RustBuf(pcrs_chandir_directory_url(reinterpret_cast<const uint8_t*>(url.data()), url.size())).str();
+}
+
+static std::string formatTime(unsigned int diff)
+{
+    return rustbridge::RustBuf(pcrs_chandir_format_time(diff)).str();
+}
+#else
 static std::string directoryUrlOf(const std::string& url)
 {
     auto matches = Regexp("/[^/]*$").exec(url);
@@ -271,6 +378,7 @@ static std::string formatTime(unsigned int diff)
         return str::format("%dm %ds", min, sec);
     }
 }
+#endif // WITH_RUST_CORE
 
 amf0::Value ChannelDirectory::getState()
 {

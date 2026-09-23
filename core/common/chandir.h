@@ -17,6 +17,10 @@ class ChannelEntry
 public:
     static std::vector<ChannelEntry> textToChannelEntries(const std::string& text, const std::string& aFeedUrl, std::vector<std::string>& errors);
 
+#ifdef WITH_RUST_CORE
+    // 欄の解釈は Rust 版 (peercast-rs の chandir.rs)。欄が 19 個に足りなければ runtime_error
+    ChannelEntry(const std::vector<std::string>& fields, const std::string& aFeedUrl);
+#else
     ChannelEntry(const std::vector<std::string>& fields, const std::string& aFeedUrl)
         : feedUrl(aFeedUrl)
     {
@@ -43,6 +47,7 @@ public:
         comment        = fields[17];
         direct         = std::atoi(fields[18].c_str());
     }
+#endif
 
     std::string chatUrl();
     std::string statsUrl();
@@ -69,6 +74,13 @@ public:
     int         direct;
 
     std::string feedUrl; // チャットURL、統計URLを作成するために必要。
+
+#ifdef WITH_RUST_CORE
+private:
+    friend struct ChannelEntryBuilder;
+    explicit ChannelEntry(const std::string& aFeedUrl)
+        : numDirects(0), numRelays(0), bitrate(0), direct(0), feedUrl(aFeedUrl) {}
+#endif
 };
 
 class ChannelFeed

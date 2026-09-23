@@ -32,13 +32,20 @@ pub fn from_str(s: &[u8]) -> [u8; 16] {
 
 /// `strtoul("XY", NULL, 16)` を1バイトに切り詰めたもの相当。C++ 版は2文字を渡すだけなので、
 /// 1文字目が16進数でなければ0、2文字目が16進数でなければ1文字目だけの値になる。
+/// ただし `strtoul` は先頭の空白 (C ロケールの `isspace`) と符号を読むので、1文字目が空白か `+`
+/// なら2文字目の値、`-` なら2文字目の値を負にしたもの (を1バイトに切り詰めたもの) になる。
 fn parse_hex_byte_loose(c1: u8, c2: u8) -> u8 {
     let d1 = (c1 as char).to_digit(16);
     let d2 = (c2 as char).to_digit(16);
     match (d1, d2) {
         (Some(a), Some(b)) => ((a << 4) | b) as u8,
         (Some(a), None) => a as u8,
-        (None, _) => 0,
+        (None, Some(b)) => match c1 {
+            b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r' | b'+' => b as u8,
+            b'-' => (b as u8).wrapping_neg(),
+            _ => 0,
+        },
+        (None, None) => 0,
     }
 }
 
@@ -102,6 +109,14 @@ mod tests {
     fn from_str_lowercase_and_extra_chars() {
         let s = b"0123456789abcdef0123456789ABCDEFxxxx"; // 37文字、末尾は無視される
         let want: [u8; 16] = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF];
+        assert_eq!(from_str(s), want);
+    }
+
+    #[test]
+    fn from_str_space_and_sign_like_strtoul() {
+        // " 7" "+a" "-1" "-f" "zz" "9 " "\t0" "x0" "Xx" "1 " " +" "+-" "-1" "q1" "23" "45"
+        let s = b" 7+a-1-fzz9 \t0x0Xx1  ++--1q12345";
+        let want: [u8; 16] = [7, 0x0a, 0xff, 0xf1, 0, 9, 0, 0, 0, 1, 0, 0, 0xff, 0, 0x23, 0x45];
         assert_eq!(from_str(s), want);
     }
 

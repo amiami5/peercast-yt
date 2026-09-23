@@ -2124,3 +2124,153 @@ pub unsafe extern "C" fn pcrs_cpb_copy_from(b: *const CCpb, src: *const CCpb, re
     // SAFETY: 関数の Safety 節
     unsafe { with_cpb(src, |s| with_cpb(b, |b| b.copy_from(s, req_pos))) }
 }
+
+// ---- chandir (core/common/chandir.cpp の ChannelEntry と ChannelDirectory の一部) ----
+
+use crate::chandir;
+
+/// バイト列を借りたもの (C の `pcrs_bytes`)
+#[repr(C)]
+pub struct CBytes {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+
+impl CBytes {
+    fn of(v: &[u8]) -> CBytes {
+        CBytes { ptr: v.as_ptr(), len: v.len() }
+    }
+}
+
+/// `ChannelEntry` (C の `pcrs_chan_entry`)。中身は呼び出しの間だけ有効。
+#[repr(C)]
+pub struct CChanEntry {
+    pub name: CBytes,
+    pub tip: CBytes,
+    pub url: CBytes,
+    pub genre: CBytes,
+    pub desc: CBytes,
+    pub content_type: CBytes,
+    pub track_artist: CBytes,
+    pub track_album: CBytes,
+    pub track_name: CBytes,
+    pub track_contact: CBytes,
+    pub encoded_name: CBytes,
+    pub uptime: CBytes,
+    pub status: CBytes,
+    pub comment: CBytes,
+    pub id: [u8; 16],
+    pub num_directs: i32,
+    pub num_relays: i32,
+    pub bitrate: i32,
+    pub direct: i32,
+}
+
+pub type ChanEntryFn = unsafe extern "C" fn(ctx: *mut c_void, e: *const CChanEntry);
+pub type ChanErrorFn = unsafe extern "C" fn(ctx: *mut c_void, lineno: i32);
+
+fn emit_entry(ctx: *mut c_void, on_entry: ChanEntryFn, e: &chandir::Entry) {
+    let c = CChanEntry {
+        name: CBytes::of(&e.name),
+        tip: CBytes::of(&e.tip),
+        url: CBytes::of(&e.url),
+        genre: CBytes::of(&e.genre),
+        desc: CBytes::of(&e.desc),
+        content_type: CBytes::of(&e.content_type),
+        track_artist: CBytes::of(&e.track_artist),
+        track_album: CBytes::of(&e.track_album),
+        track_name: CBytes::of(&e.track_name),
+        track_contact: CBytes::of(&e.track_contact),
+        encoded_name: CBytes::of(&e.encoded_name),
+        uptime: CBytes::of(&e.uptime),
+        status: CBytes::of(&e.status),
+        comment: CBytes::of(&e.comment),
+        id: e.id,
+        num_directs: e.num_directs,
+        num_relays: e.num_relays,
+        bitrate: e.bitrate,
+        direct: e.direct,
+    };
+    // SAFETY: 呼び出し側が渡したコールバック。c と e はこの呼び出しの間有効
+    unsafe { on_entry(ctx, &c) }
+}
+
+/// `ChannelEntry::textToChannelEntries`。正しい行は `on_entry`、欄の数が違う行は `on_error` に
+/// 行番号を渡す。
+///
+/// # Safety
+/// `text` は `n` バイト読めること。コールバックは例外を投げないこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chandir_parse(
+    text: *const u8,
+    n: usize,
+    ctx: *mut c_void,
+    on_entry: ChanEntryFn,
+    on_error: ChanErrorFn,
+) {
+    // SAFETY: 関数の Safety 節
+    let text = unsafe { input(text, n) };
+    chandir::parse_index(text, |l| match l {
+        chandir::Line::Entry(e) => emit_entry(ctx, on_entry, &e),
+        // SAFETY: 関数の Safety 節
+        chandir::Line::Error(lineno) => unsafe { on_error(ctx, lineno) },
+    });
+}
+
+/// `ChannelEntry(fields, feedUrl)`。欄が 19 個に足りなければ -1 (`on_entry` は呼ばない)。
+///
+/// # Safety
+/// `fields` は `count` 個読めて、それぞれ `pcrs_bytes` の約束を守ること。コールバックは例外を
+/// 投げないこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chandir_entry(
+    fields: *const CBytes,
+    count: usize,
+    ctx: *mut c_void,
+    on_entry: ChanEntryFn,
+) -> i32 {
+    let fields: &[CBytes] = if count == 0 || fields.is_null() {
+        &[]
+    } else {
+        // SAFETY: 関数の Safety 節
+        unsafe { std::slice::from_raw_parts(fields, count) }
+    };
+    // SAFETY: 関数の Safety 節
+    let v: Vec<&[u8]> = fields.iter().map(|f| unsafe { input(f.ptr, f.len) }).collect();
+    match chandir::Entry::from_fields(&v) {
+        Some(e) => {
+            emit_entry(ctx, on_entry, &e);
+            0
+        }
+        None => -1,
+    }
+}
+
+/// `chatUrl` (`kind` が 0) と `statsUrl` (1)
+///
+/// # Safety
+/// `feed` は `fn_` バイト、`name` は `nn` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chandir_side_url(
+    feed: *const u8,
+    fn_: usize,
+    name: *const u8,
+    nn: usize,
+    kind: i32,
+) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    let (feed, name) = unsafe { (input(feed, fn_), input(name, nn)) };
+    into_buf(if kind == 0 { chandir::chat_url(feed, name) } else { chandir::stats_url(feed, name) })
+}
+
+bytes_to_buf!(
+    /// `directoryUrlOf`
+    pcrs_chandir_directory_url,
+    chandir::directory_url
+);
+
+/// `formatTime`
+#[no_mangle]
+pub extern "C" fn pcrs_chandir_format_time(diff: u32) -> PcrsBuf {
+    into_buf(chandir::format_time(diff))
+}

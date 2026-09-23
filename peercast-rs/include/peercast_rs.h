@@ -490,6 +490,29 @@ uint32_t pcrs_cpb_pos(const pcrs_cpb *b, int op, uint32_t arg);
 size_t pcrs_cpb_statistics(const pcrs_cpb *b, uint32_t *lens, int *continuations, int *non_continuations);
 int pcrs_cpb_copy_from(const pcrs_cpb *b, const pcrs_cpb *src, uint32_t req_pos);
 
+/* イエローページのチャンネル一覧 (core/common/chandir.cpp) */
+typedef struct pcrs_bytes {    /* 借りたバイト列 */
+    const uint8_t *ptr;
+    size_t len;
+} pcrs_bytes;
+typedef struct pcrs_chan_entry {  /* ChannelEntry (feedUrl を除く)。中身はコールバックの間だけ有効 */
+    pcrs_bytes name, tip, url, genre, desc, content_type, track_artist, track_album, track_name,
+               track_contact, encoded_name, uptime, status, comment;
+    uint8_t id[16];
+    int32_t num_directs, num_relays, bitrate, direct;
+} pcrs_chan_entry;
+typedef void (*pcrs_chan_entry_fn)(void *ctx, const pcrs_chan_entry *e);
+/* textToChannelEntries。正しい行は on_entry、欄の数が 19 でない行は on_error に行番号を渡す。
+ * コールバックは例外を投げないこと */
+void pcrs_chandir_parse(const uint8_t *text, size_t n, void *ctx, pcrs_chan_entry_fn on_entry,
+                        void (*on_error)(void *ctx, int32_t lineno));
+/* ChannelEntry(fields, feedUrl)。欄が 19 個に足りなければ -1 */
+int pcrs_chandir_entry(const pcrs_bytes *fields, size_t count, void *ctx, pcrs_chan_entry_fn on_entry);
+/* chatUrl (kind 0) と statsUrl (kind 1) */
+pcrs_buf pcrs_chandir_side_url(const uint8_t *feed, size_t fn_, const uint8_t *name, size_t nn, int kind);
+pcrs_buf pcrs_chandir_directory_url(const uint8_t *s, size_t n);
+pcrs_buf pcrs_chandir_format_time(uint32_t diff);
+
 #ifdef __cplusplus
 }
 #endif

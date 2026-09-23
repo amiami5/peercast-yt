@@ -60,6 +60,18 @@ int main(int argc, char** argv) {
                 printf("  [違い] GnuID::fromStr(\"%s\")\n", variant.c_str());
         }
     }
+    // fromStr: 2 文字の組み合わせを全部 (1〜255 の各バイト。strtoul は空白と符号も読む)
+    for (int c1 = 1; c1 < 256; c1++)
+        for (int c2 = 1; c2 < 256; c2++) {
+            string s;
+            for (int k = 0; k < 16; k++) { s += (char)c1; s += (char)c2; }
+            GnuID g2; g2.fromStr(s.c_str());
+            uint8_t rid[16];
+            pcrs_gnuid_from_str(B(s), s.size(), rid);
+            g_compared++;
+            if (memcmp(g2.id, rid, 16) != 0 && g_bad++ < 5)
+                printf("  [違い] GnuID::fromStr 2 文字 %02x %02x: C++ %02x Rust %02x\n", c1, c2, g2.id[0], rid[0]);
+        }
     printf("GnuID::toStr/fromStr: 完了\n");
 
     // GnuID::encode

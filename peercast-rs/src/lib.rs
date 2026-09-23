@@ -8,6 +8,7 @@
 #![deny(unsafe_code)]
 
 pub mod amf0;
+pub mod chandir;
 pub mod chanpacket;
 pub mod cgi;
 pub mod commands;
