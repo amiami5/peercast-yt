@@ -105,6 +105,17 @@ pcrs_buf pcrs_string_unquote(const uint8_t *s, size_t n);
 pcrs_buf pcrs_string_from_stopwatch(uint32_t t);
 int      pcrs_base64_word_to_chars(const uint8_t *word /* 4 bytes */, uint8_t *out /* 3 bytes */);
 
+/* http (core/common/http.cpp の行の解析) と cgi::parseHttpDate */
+int32_t  pcrs_http_parse_status_line(const uint8_t *s, size_t n, size_t *cut);
+bool     pcrs_http_parse_header_line(const uint8_t *s, size_t n, size_t *arg_offset,
+                                     pcrs_buf *name, pcrs_buf *value);
+bool     pcrs_http_parse_basic_auth(const uint8_t *s, size_t n, pcrs_buf *user, pcrs_buf *pass);
+bool     pcrs_http_is_cross_origin_request(const uint8_t *site, size_t site_n,
+                                           const uint8_t *origin, size_t origin_n,
+                                           const uint8_t *host, size_t host_n);
+bool     pcrs_http_is_loopback_host_header(const uint8_t *s, size_t n);
+int64_t  pcrs_cgi_parse_http_date(const uint8_t *s, size_t n);
+
 #ifdef __cplusplus
 }
 #endif

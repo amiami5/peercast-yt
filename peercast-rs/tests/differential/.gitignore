@@ -4,3 +4,5 @@ diff_jis
 diff_md5_gnuid
 diff_strutil
 diff_string
+diff_http
+cxxcore.a

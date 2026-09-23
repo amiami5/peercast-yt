@@ -158,6 +158,7 @@ std::string rfc1123Time(time_t t)
     return buf;
 }
 
+#ifndef WITH_RUST_CORE
 static Regexp rfc1123("^([A-z]{3}), (\\d+) ([A-z]{3}) (\\d+) (\\d+):(\\d+):(\\d+) (GMT|UTC)$");
 static Regexp rfc1036("^([A-z]+)day, (\\d+)-([A-z]{3})-(\\d{2}) (\\d+):(\\d+):(\\d+) (GMT|UTC)$");
 static Regexp asctime("^([A-z]{3}) ([A-z]{3}) +(\\d+) (\\d+):(\\d+):(\\d+) (\\d+)$");
@@ -223,6 +224,7 @@ time_t parseHttpDate(const std::string& str)
         return timegm(&tm);
     }
 }
+#endif // WITH_RUST_CORE
 
 #ifndef WITH_RUST_CORE
 static const std::map<std::string,uint32_t> entities = {

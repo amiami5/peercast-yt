@@ -140,6 +140,37 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
 * `BASE642ASCII` は出力の長さを確かめずに `data` に書いていた。`convertTo` 経由では入力が
   255 バイト以下なので実害はないが、Rust 版は出力を `MAX_LEN - 1` バイトで切り詰める。
 
+## 段階3a で追加したもの (HTTP の行の解析)
+
+`src/http.rs`。`HTTP` クラスはソケットから 1 行読む部分 (`readLine`) を C++ に残し、
+読んだ行の解釈だけを Rust にした。
+
+| 関数 | 内容 |
+|---|---|
+| `HTTP::readResponse` | ステータス行からステータスコードを取り出す (行をコードの後ろで切る副作用も同じ) |
+| `HTTP::nextHeader` | `名前: 値` の行を分け、名前を大文字にする |
+| `HTTP::parseAuthorizationHeader` | `Basic` 認証のユーザー名とパスワード |
+| `HTTP::isCrossOriginRequest`, `HTTP::isLoopbackHostHeader` | CSRF・DNS リバインディング対策の判定 |
+| `cgi::parseHttpDate` | RFC 1123 / RFC 1036 / asctime 形式の日付 |
+
+### C++ 版との違い
+
+* **ステータスコードの桁あふれ**: C++ 版は `atoi` を使っており、`int` に収まらない数字の
+  結果は未定義 (x86-64 の Linux では -1 になっていた。`long` の幅で CPU によっても違う)。
+  Rust 版は `int` の最大値・最小値に丸める。
+* **`parseHttpDate` が例外を投げる**: 日付の数字が `int` に収まらないと、C++ 版は
+  `std::stoi` の `std::out_of_range` をそのまま投げていた。Rust 版は -1 (解釈できない) を返す。
+  なお、この関数は今のところテストからしか呼ばれていない。
+* C++ 版と同じにしてあるが、おかしな点: `parseHttpDate` の RFC 1036 形式
+  (`Sunday, 06-Nov-94 ...`) は、曜日の名前から "day" を除いた部分を 3 文字の略号と比べるので、
+  Sunday, Monday, Friday 以外は解釈できない。
+
+### 見つけたが、この段階では直していないもの
+
+* `HTTP::getResponse` の `if (contentLengthStr.empty())` は条件が逆になっている。
+  Content-Length があるときに接続が閉じるまで読み、ないときに 0 バイトだけ読む。
+  ソケットを読む側の処理なので、段階 9 で扱う。
+
 ## 差分テスト
 
 ```sh
@@ -152,7 +183,11 @@ make
 ./diff_md5_gnuid              # md5::hexdigest と GnuID: 乱数20万組 (既定)
 ./diff_jis                     # JISConverter: 65536通り全数 (sjis/euc 各1関数)
 ./diff_string                  # String: 長さ0〜2全網羅+長さ3〜4を絞ったバイトで全通り+乱数30万件 (約980万件)
+./diff_http                    # HTTP の行の解析と parseHttpDate: 見本の変異+乱数 (約120万件)
 ```
+
+`diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした
+C++ のコア一式 (`cxxcore.a`、`make` が自動で作る) にリンクします。
 
 C++ 版の関数をそのままコンパイルしたもの (`WITH_RUST_CORE` を定義しない `cgi.cpp` / `str.cpp`) と、
 `libpeercast_rs.a` に、1 バイトずつ変えた入力を大量に与えて比較します。上に挙げた既知の違いは

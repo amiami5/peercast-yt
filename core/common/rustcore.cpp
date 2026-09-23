@@ -17,6 +17,7 @@
 #include "host.h" // Host
 #include "md5.h" // md5::hexdigest
 #include "_string.h" // String
+#include "http.h" // HTTP
 #include "str.h"
 
 namespace
@@ -80,6 +81,11 @@ std::string escape_javascript(const std::string& in)
 bool isSafeLocalPath(const std::string& path)
 {
     return pcrs_cgi_is_safe_local_path(bytes(path), path.size());
+}
+
+time_t parseHttpDate(const std::string& str)
+{
+    return static_cast<time_t>(pcrs_cgi_parse_http_date(bytes(str), str.size()));
 }
 
 } // namespace cgi
@@ -431,6 +437,49 @@ void String::ESC2ASCII(const char *in)
 void String::ASCII2META(const char *in, bool safe)
 {
     storeTo(data, pcrs_string_ascii_to_meta(cbytes(in), strlen(in), safe));
+}
+
+#endif // WITH_RUST_CORE
+
+#ifdef WITH_RUST_CORE
+
+bool HTTP::isCrossOriginRequest(const std::string& secFetchSite,
+                                const std::string& origin,
+                                const std::string& host)
+{
+    return pcrs_http_is_cross_origin_request(bytes(secFetchSite), secFetchSite.size(),
+                                             bytes(origin), origin.size(),
+                                             bytes(host), host.size());
+}
+
+bool HTTP::isLoopbackHostHeader(const std::string& host)
+{
+    return pcrs_http_is_loopback_host_header(bytes(host), host.size());
+}
+
+namespace
+{
+// strncpy(dst, src, len); dst[len - 1] = 0; と同じ結果 (len - 1 バイトまで写して NUL 終端)。
+void copyTruncated(char* dst, size_t len, const std::string& s)
+{
+    if (!dst || len == 0)
+        return;
+    size_t n = s.size() < len - 1 ? s.size() : len - 1;
+    memcpy(dst, s.data(), n);
+    dst[n] = '\0';
+}
+} // namespace
+
+void HTTP::parseAuthorizationHeader(const char* arg, char* user, char* pass, size_t ulen, size_t plen)
+{
+    if (!arg)
+        return;
+    pcrs_buf u = {nullptr, 0}, p = {nullptr, 0};
+    if (!pcrs_http_parse_basic_auth(cbytes(arg), strlen(arg), &u, &p))
+        return;
+    RustBuf ub(u), pb(p);
+    copyTruncated(user, ulen, ub.str());
+    copyTruncated(pass, plen, pb.str());
 }
 
 #endif // WITH_RUST_CORE

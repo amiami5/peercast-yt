@@ -516,6 +516,88 @@ pub extern "C" fn pcrs_string_from_stopwatch(t: u32) -> PcrsBuf {
     into_buf(pcstring::from_stopwatch(t))
 }
 
+// ---------------------------------------------------------------- http (core/common/http.cpp)
+
+use crate::http;
+
+/// ステータス行からステータスコードを取り出す。`*cut` には、C++ 版が行を切っていた位置を書く。
+///
+/// # Safety
+/// `s` は `n` バイト読めること (`n` が 0 なら NULL でもよい)。`cut` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_http_parse_status_line(s: *const u8, n: usize, cut: *mut usize) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (status, pos) = http::parse_status_line(unsafe { input(s, n) });
+    // SAFETY: 関数の Safety 節
+    unsafe { *cut = pos };
+    status
+}
+
+/// ヘッダー行を解析する。`:` があれば真を返し、値の位置・大文字にした名前・値を書く。
+///
+/// # Safety
+/// `s` は `n` バイト読めること。出力引数はすべて書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_http_parse_header_line(
+    s: *const u8, n: usize, arg_offset: *mut usize, name: *mut PcrsBuf, value: *mut PcrsBuf,
+) -> bool {
+    // SAFETY: 関数の Safety 節
+    match http::parse_header_line(unsafe { input(s, n) }) {
+        Some(h) => {
+            // SAFETY: 関数の Safety 節
+            unsafe {
+                *arg_offset = h.arg_offset;
+                *name = into_buf(h.name);
+                *value = into_buf(h.value);
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// Authorization ヘッダーの値から Basic 認証のユーザー名とパスワードを取り出す。
+///
+/// # Safety
+/// `s` は `n` バイト読めること。`user`, `pass` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_http_parse_basic_auth(
+    s: *const u8, n: usize, user: *mut PcrsBuf, pass: *mut PcrsBuf,
+) -> bool {
+    // SAFETY: 関数の Safety 節
+    match http::parse_basic_auth(unsafe { input(s, n) }) {
+        Some((u, p)) => {
+            // SAFETY: 関数の Safety 節
+            unsafe {
+                *user = into_buf(u);
+                *pass = into_buf(p);
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// # Safety
+/// 各入力は、それぞれの長さ分読めること (長さ 0 なら NULL でもよい)。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_http_is_cross_origin_request(
+    site: *const u8, site_n: usize, origin: *const u8, origin_n: usize, host: *const u8, host_n: usize,
+) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe { http::is_cross_origin_request(input(site, site_n), input(origin, origin_n), input(host, host_n)) }
+}
+
+bytes_to_bool!(pcrs_http_is_loopback_host_header, http::is_loopback_host_header);
+
+/// # Safety
+/// `s` は `n` バイト読めること (`n` が 0 なら NULL でもよい)。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_cgi_parse_http_date(s: *const u8, n: usize) -> i64 {
+    // SAFETY: 関数の Safety 節
+    http::parse_http_date(unsafe { input(s, n) })
+}
+
 /// base64 の 4 文字を 3 バイトに復号して `out` に書き、書いたバイト数 (3、不正なら 0) を返す。
 ///
 /// # Safety

@@ -29,6 +29,9 @@
 #include "version2.h" // PCX_AGENT
 #include "defer.h"
 #include "dechunker.h"
+#ifdef WITH_RUST_CORE
+#include "peercast_rs.h"
+#endif
 
 static const char* statusMessage(int statusCode);
 
@@ -73,6 +76,12 @@ int HTTP::readResponse()
 {
     readLine(cmdLine, sizeof(cmdLine));
 
+#ifdef WITH_RUST_CORE
+    size_t cut = 0;
+    int status = pcrs_http_parse_status_line(reinterpret_cast<const uint8_t*>(cmdLine), strlen(cmdLine), &cut);
+    cmdLine[cut] = 0;
+    return status;
+#else
     char *cp = cmdLine;
 
     while (*cp) if (*++cp == ' ') break;
@@ -84,6 +93,7 @@ int HTTP::readResponse()
     *cp = 0;
 
     return atoi(scp);
+#endif
 }
 
 //-----------------------------------------
@@ -100,6 +110,21 @@ bool    HTTP::nextHeader()
         if (++m_headerCount > MAX_HEADERS)
             throw StreamException("Too many headers");
 
+#ifdef WITH_RUST_CORE
+        size_t argOffset = 0;
+        pcrs_buf name = {nullptr, 0}, value = {nullptr, 0};
+        if (pcrs_http_parse_header_line(reinterpret_cast<const uint8_t*>(cmdLine), strlen(cmdLine),
+                                        &argOffset, &name, &value))
+        {
+            arg = cmdLine + argOffset;
+            std::string sName(reinterpret_cast<const char*>(name.ptr), name.len);
+            std::string sValue(reinterpret_cast<const char*>(value.ptr), value.len);
+            pcrs_buf_free(name);
+            pcrs_buf_free(value);
+            headers.set(sName, sValue);
+        }else
+            arg = nullptr;
+#else
         char *ap = strstr(cmdLine, ":");
         if (ap)
             while (*++ap)
@@ -120,6 +145,7 @@ bool    HTTP::nextHeader()
                 name[i] = toupper(name[i]);
             headers.set(name, value);
         }
+#endif
         return true;
     }else
     {
@@ -162,6 +188,7 @@ void HTTP::getAuthUserPass(char *user, char *pass, size_t ulen, size_t plen)
     parseAuthorizationHeader(arg, user, pass, ulen, plen);
 }
 
+#ifndef WITH_RUST_CORE
 //-----------------------------------------
 bool HTTP::isCrossOriginRequest(const std::string& secFetchSite,
                                 const std::string& origin,
@@ -241,6 +268,7 @@ void HTTP::parseAuthorizationHeader(const char* arg, char* user, char* pass, siz
         }
     }
 }
+#endif // WITH_RUST_CORE
 
 // -----------------------------------
 void HTTP::parseAuthorizationHeader(const std::string& arg, std::string& sUser, std::string& sPass)

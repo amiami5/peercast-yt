@@ -12,6 +12,7 @@ pub mod entities;
 #[allow(unsafe_code)]
 pub mod ffi;
 pub mod gnuid;
+pub mod http;
 pub mod inspect;
 pub mod jis;
 mod jis_table;

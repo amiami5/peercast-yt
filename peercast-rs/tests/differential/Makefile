@@ -19,7 +19,7 @@ $(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs) $(RUST)/Ca
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff *.o
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -32,3 +32,19 @@ diff_jis: diff_jis.cpp jis.o $(RUST)/target/release/libpeercast_rs.a
 
 diff_string: diff_string.cpp _string.o jis.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
+
+# Rust を使わない C++ のコア一式 (core/common と core/unix)。クラスごと比べたいときに使う。
+UNIX = ../../../core/unix
+CXXCORE_OBJS = $(patsubst $(CORE)/%.cpp,%.o,$(filter-out $(CORE)/rustcore.cpp,$(wildcard $(CORE)/*.cpp))) \
+               strerror.o usocket.o usubprog.o usys.o
+CXXCORE_LIBS = $(shell pkg-config openssl --libs) -lrtmp -pthread -ldl
+
+%.o: $(UNIX)/%.cpp
+	$(CXX) $(CXXFLAGS) $(shell pkg-config openssl --cflags) -c $< -o $@
+
+cxxcore.a: $(CXXCORE_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+diff_http: diff_http.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(CXXCORE_LIBS)

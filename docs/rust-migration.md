@@ -68,7 +68,8 @@ Rust 側の設計 (バイト列を受け取る形にするか、コールバッ�
 | 0 | 完了 |
 | 1 | 完了 (peercast-rs: cgi/str の一部関数、C ABI 境界、Makefile 統合)。差分テストは長さ 0〜3 バイトの入力を全網羅 (1,677 万通り) して確認 |
 | 2 | 完了 (str の残り、jis、md5、gnuid の純粋な部分、`String` の変換関数)。`String` クラス自体と `setFromTime`、`GnuID::generate` など状態や OS に依存する部分は C++ に残る。差分テストは String だけで約 980 万件、違いなし |
-| 3 以降 | 未着手 |
+| 3 | 作業中。3a (HTTP の行の解析、`parseHttpDate`) 完了 |
+| 4 以降 | 未着手 |
 
 ### 確認環境についての注記
 
