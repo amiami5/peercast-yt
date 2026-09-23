@@ -23,6 +23,7 @@ pub mod media;
 pub mod pcstring;
 pub mod reader;
 pub mod strutil;
+pub mod template;
 pub mod url;
 pub mod utf8;
 pub mod xml;

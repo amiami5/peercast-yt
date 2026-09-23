@@ -1219,3 +1219,242 @@ pub unsafe extern "C" fn pcrs_flv_read_meta_data(data: *const u8, n: usize, bitr
         }
     }
 }
+
+// ---------------------------------------------------------------- テンプレート (src/template)
+
+use crate::template::{self, value as tvalue, Engine, Value as TValue};
+use std::collections::VecDeque;
+
+/// テンプレートから見た C++ 側 (C の `pcrs_template_host`)。int を返すものは、成功で 0、
+/// C++ の例外で中断したら -1。
+#[repr(C)]
+pub struct CTemplateHost {
+    pub ctx: *mut c_void,
+    /// テンプレートの Stream (read_char と eof を使う)。ディレクティブを読まない呼び出しでは NULL
+    pub reader: *const CReader,
+    pub position: unsafe extern "C" fn(ctx: *mut c_void, out: *mut i32) -> i32,
+    pub seek: unsafe extern "C" fn(ctx: *mut c_void, pos: i32) -> i32,
+    pub write: unsafe extern "C" fn(ctx: *mut c_void, data: *const u8, len: usize) -> i32,
+    /// 値は、次のコールバックまで有効な C++ 側のバッファを指す
+    pub lookup: unsafe extern "C" fn(ctx: *mut c_void, name: *const u8, n: usize, value: *mut *const u8, value_len: *mut usize) -> i32,
+    pub push_scope: unsafe extern "C" fn(ctx: *mut c_void),
+    pub pop_scope: unsafe extern "C" fn(ctx: *mut c_void),
+    pub front_is_generic: unsafe extern "C" fn(ctx: *mut c_void) -> bool,
+    pub set_front: unsafe extern "C" fn(ctx: *mut c_void, name: *const u8, n: usize, value: *const u8, value_len: usize) -> i32,
+    pub regex_check: unsafe extern "C" fn(ctx: *mut c_void, pattern: *const u8, n: usize) -> i32,
+    pub regex_match: unsafe extern "C" fn(ctx: *mut c_void, pattern: *const u8, n: usize, subject: *const u8, m: usize, out: *mut bool) -> i32,
+    pub selected_fragment: unsafe extern "C" fn(ctx: *mut c_void, out: *mut *const u8, n: *mut usize),
+    pub current_fragment: unsafe extern "C" fn(ctx: *mut c_void, out: *mut *const u8, n: *mut usize),
+    pub set_current_fragment: unsafe extern "C" fn(ctx: *mut c_void, f: *const u8, n: usize),
+    pub log_error: unsafe extern "C" fn(ctx: *mut c_void, msg: *const u8, n: usize),
+}
+
+struct CTemplateHostRef<'a> {
+    h: &'a CTemplateHost,
+    r: Option<CReaderRef<'a>>,
+}
+
+impl CTemplateHostRef<'_> {
+    fn fragment(&self, f: unsafe extern "C" fn(*mut c_void, *mut *const u8, *mut usize)) -> Vec<u8> {
+        let (mut p, mut n) = (std::ptr::null(), 0usize);
+        // SAFETY: C++ 側が有効なポインタと長さを書く (次のコールバックまで有効)
+        unsafe {
+            f(self.h.ctx, &mut p, &mut n);
+            input(p, n).to_vec()
+        }
+    }
+}
+
+// 以下の unsafe ブロックはどれも、CTemplateHost を渡した C++ 側が関数ポインタと ctx の有効性を
+// 保証していることに頼る。渡すスライスは呼び出しの間だけ有効。
+impl template::Host for CTemplateHostRef<'_> {
+    fn read_char(&mut self) -> Result<u8, Abort> {
+        self.r.as_mut().ok_or(Abort)?.read_char()
+    }
+    fn eof(&mut self) -> Result<bool, Abort> {
+        self.r.as_mut().ok_or(Abort)?.eof()
+    }
+    fn position(&mut self) -> Result<i32, Abort> {
+        let mut out = 0;
+        // SAFETY: 上記
+        status(unsafe { (self.h.position)(self.h.ctx, &mut out) })?;
+        Ok(out)
+    }
+    fn seek(&mut self, pos: i32) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.seek)(self.h.ctx, pos) })
+    }
+    fn write(&mut self, data: &[u8]) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.write)(self.h.ctx, data.as_ptr(), data.len()) })
+    }
+    fn lookup(&mut self, name: &[u8]) -> Result<TValue, Abort> {
+        let (mut p, mut n) = (std::ptr::null(), 0usize);
+        // SAFETY: 上記。値は次のコールバックまで有効なので、すぐに読む
+        status(unsafe { (self.h.lookup)(self.h.ctx, name.as_ptr(), name.len(), &mut p, &mut n) })?;
+        // SAFETY: 同上
+        tvalue::decode(unsafe { input(p, n) }).ok_or(Abort)
+    }
+    fn push_scope(&mut self) {
+        // SAFETY: 上記
+        unsafe { (self.h.push_scope)(self.h.ctx) }
+    }
+    fn pop_scope(&mut self) {
+        // SAFETY: 上記
+        unsafe { (self.h.pop_scope)(self.h.ctx) }
+    }
+    fn front_is_generic(&mut self) -> bool {
+        // SAFETY: 上記
+        unsafe { (self.h.front_is_generic)(self.h.ctx) }
+    }
+    fn set_front(&mut self, name: &[u8], value: &TValue) -> Result<(), Abort> {
+        let v = tvalue::encoded(value);
+        // SAFETY: 上記
+        status(unsafe { (self.h.set_front)(self.h.ctx, name.as_ptr(), name.len(), v.as_ptr(), v.len()) })
+    }
+    fn regex_check(&mut self, pattern: &[u8]) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.regex_check)(self.h.ctx, pattern.as_ptr(), pattern.len()) })
+    }
+    fn regex_match(&mut self, pattern: &[u8], subject: &[u8]) -> Result<bool, Abort> {
+        let mut out = false;
+        // SAFETY: 上記
+        status(unsafe {
+            (self.h.regex_match)(self.h.ctx, pattern.as_ptr(), pattern.len(), subject.as_ptr(), subject.len(), &mut out)
+        })?;
+        Ok(out)
+    }
+    fn selected_fragment(&mut self) -> Vec<u8> {
+        self.fragment(self.h.selected_fragment)
+    }
+    fn current_fragment(&mut self) -> Vec<u8> {
+        self.fragment(self.h.current_fragment)
+    }
+    fn set_current_fragment(&mut self, f: &[u8]) {
+        // SAFETY: 上記
+        unsafe { (self.h.set_current_fragment)(self.h.ctx, f.as_ptr(), f.len()) }
+    }
+    fn log_error(&mut self, msg: &str) {
+        // SAFETY: 上記
+        unsafe { (self.h.log_error)(self.h.ctx, msg.as_ptr(), msg.len()) }
+    }
+}
+
+fn tokens_value(tokens: VecDeque<Vec<u8>>) -> TValue {
+    TValue::StrictArray(tokens.into_iter().map(TValue::String).collect())
+}
+
+fn value_tokens(v: &TValue) -> template::Result<VecDeque<Vec<u8>>> {
+    v.strict_array()?.iter().map(|t| Ok(t.string()?.to_vec())).collect()
+}
+
+/// ホストを使わない処理 (字句解析、構文解析、文字列リテラル)
+fn template_pure(op: i32, arg: &TValue) -> Option<template::Result<TValue>> {
+    fn tokenize(arg: &TValue) -> template::Result<TValue> {
+        Ok(TValue::StrictArray(template::tokenize(arg.string()?)?.into_iter().map(TValue::String).collect()))
+    }
+    fn parse(arg: &TValue) -> template::Result<TValue> {
+        let mut t = value_tokens(arg)?;
+        let v = template::parse(&mut t)?;
+        Ok(TValue::StrictArray(vec![v, tokens_value(t)]))
+    }
+    fn parse_let_spec(arg: &TValue) -> template::Result<TValue> {
+        let mut t = value_tokens(arg)?;
+        let spec = template::parse_let_spec(&mut t)?;
+        let spec = spec.into_iter().map(|(n, e)| TValue::StrictArray(vec![TValue::String(n), e])).collect();
+        Ok(TValue::StrictArray(vec![TValue::StrictArray(spec), tokens_value(t)]))
+    }
+    fn read_string_literal(arg: &TValue) -> template::Result<TValue> {
+        let (lit, rest) = template::read_string_literal(arg.string()?)?;
+        Ok(TValue::StrictArray(vec![TValue::String(lit), TValue::String(rest)]))
+    }
+    fn eval_string_literal(arg: &TValue) -> template::Result<TValue> {
+        Ok(TValue::String(template::eval_string_literal(arg.string()?)?))
+    }
+    let f: fn(&TValue) -> template::Result<TValue> = match op {
+        17 => tokenize,
+        18 => parse,
+        19 => parse_let_spec,
+        20 => read_string_literal,
+        21 => eval_string_literal,
+        _ => return None,
+    };
+    Some(f(arg))
+}
+
+/// ホストを使う処理
+fn template_with_host(op: i32, arg: &TValue, h: &mut dyn template::Host) -> Option<template::Result<TValue>> {
+    let mut e = Engine::new(h);
+    let flag = matches!(arg, TValue::Bool(true));
+    let r: template::Result<TValue> = match op {
+        1 => e.read_template(flag).map(|t| TValue::Number(t as f64)),
+        2 => e.read_cmd(flag).map(|t| TValue::Number(t as f64)),
+        3 => e.read_if(flag).map(|_| TValue::Null),
+        4 => e.read_loop(flag).map(|_| TValue::Null),
+        5 => e.read_foreach(flag).map(|_| TValue::Null),
+        6 => e.read_let(flag).map(|_| TValue::Null),
+        7 => e.read_fragment(flag).map(|_| TValue::Null),
+        8 => e.read_variable_value(flag).map(|s| TValue::StrictArray(s.into_iter().map(TValue::String).collect())),
+        9 => arg.string().map(|s| s.to_vec()).and_then(|s| e.eval_str(&s)),
+        10 => e.eval(arg),
+        11 => arg.strict_array().map(|a| a.to_vec()).and_then(|a| e.eval_form(&a)),
+        12 => arg.string().map(|s| s.to_vec()).and_then(|s| e.eval_condition(&s)).map(TValue::Bool),
+        13 => arg.string().map(|s| s.to_vec()).and_then(|s| e.get_int_variable(&s)).map(|n| TValue::Number(n as f64)),
+        14 => arg.string().map(|s| s.to_vec()).and_then(|s| e.get_bool_variable(&s)).map(TValue::Bool),
+        15 => arg.string().map(|s| s.to_vec()).and_then(|s| e.get_string_variable(&s)).map(TValue::String),
+        // [lambda, [引数の式...]]
+        16 => match arg {
+            TValue::StrictArray(a) if a.len() == 2 => a[1].strict_array().and_then(|arr| e.apply(&a[0], arr)),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(e.finish(r))
+}
+
+/// テンプレートの処理を 1 つ呼ぶ (C++ の `Template` の各メソッド)。`arg` と `*result` は
+/// src/template/value.rs の形式の値。返り値は 0 成功、1 コールバックの中断、
+/// 2〜6 は例外 (`*result` にメッセージ): 2 `GeneralException`、3 `StreamException`、
+/// 4 `std::runtime_error`、5 `std::out_of_range`、6 `std::invalid_argument`。
+/// 7 は呼び出し方の誤り (知らない `op`、壊れた `arg`、ホストが必要なのに NULL)。
+///
+/// # Safety
+/// `arg` は `arg_len` バイト読めること。`host` は NULL か、有効な `CTemplateHost` (その `reader`
+/// は NULL か有効な `CReader`) を指すこと。`result` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_template_call(op: i32, host: *const CTemplateHost, arg: *const u8, arg_len: usize, result: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let arg = match tvalue::decode(unsafe { input(arg, arg_len) }) {
+        Some(v) => v,
+        None => return 7,
+    };
+    let r = match template_pure(op, &arg) {
+        Some(r) => r,
+        None => {
+            if host.is_null() {
+                return 7;
+            }
+            // SAFETY: 関数の Safety 節
+            let h = unsafe { &*host };
+            // SAFETY: 同上
+            let r = if h.reader.is_null() { None } else { Some(unsafe { reader(h.reader) }) };
+            let mut hr = CTemplateHostRef { h, r };
+            match template_with_host(op, &arg, &mut hr) {
+                Some(r) => r,
+                None => return 7,
+            }
+        }
+    };
+    let (code, bytes) = match r {
+        Ok(v) => (0, tvalue::encoded(&v)),
+        Err(template::Error::Abort) => (1, Vec::new()),
+        Err(template::Error::General(m)) => (2, m),
+        Err(template::Error::Stream(m)) => (3, m),
+        Err(template::Error::Runtime(m)) => (4, m),
+        Err(template::Error::OutOfRange(m)) => (5, m),
+        Err(template::Error::InvalidArgument(m)) => (6, m),
+    };
+    // SAFETY: 関数の Safety 節
+    unsafe { *result = into_buf(bytes) };
+    code
+}

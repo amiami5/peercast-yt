@@ -261,6 +261,61 @@ void pcrs_media_free(pcrs_media *p);
  * 2 エラー (StreamException のメッセージを *err に書く。受け取った側が pcrs_buf_free で返す) */
 int pcrs_media_read_header(pcrs_media *p, const pcrs_media_host *host, pcrs_buf *err);
 int pcrs_media_read_packet(pcrs_media *p, const pcrs_media_host *host, pcrs_buf *err);
+/* テンプレート (core/common/template.cpp)。式とディレクティブの処理は Rust、スコープ (変数) と
+ * 正規表現 (std::regex) は C++ に残り、pcrs_template_host のコールバックで使う。
+ * 値の受け渡しには src/template/value.rs の形式 (型 1 バイト + 中身、リトルエンディアン) を使う。
+ * int を返すコールバックは、成功で 0、C++ の例外で中断したら -1。 */
+typedef struct pcrs_template_host {
+    void *ctx;
+    const pcrs_reader *reader;      /* テンプレートの Stream。ディレクティブを読まない呼び出しでは NULL */
+    int (*position)(void *ctx, int32_t *out);                   /* Stream::getPosition */
+    int (*seek)(void *ctx, int32_t pos);                        /* Stream::seekTo */
+    int (*write)(void *ctx, const uint8_t *data, size_t len);   /* 出力 (outp) */
+    /* Template::writeVariable。値は次のコールバックまで有効な C++ 側のバッファを指す */
+    int (*lookup)(void *ctx, const uint8_t *name, size_t n, const uint8_t **value, size_t *value_len);
+    void (*push_scope)(void *ctx);                              /* GenericScope を先頭に置く */
+    void (*pop_scope)(void *ctx);
+    bool (*front_is_generic)(void *ctx);
+    int (*set_front)(void *ctx, const uint8_t *name, size_t n, const uint8_t *value, size_t value_len);
+    int (*regex_check)(void *ctx, const uint8_t *pattern, size_t n);  /* Regexp を作る */
+    int (*regex_match)(void *ctx, const uint8_t *pattern, size_t n, const uint8_t *subject, size_t m, bool *out);
+    void (*selected_fragment)(void *ctx, const uint8_t **out, size_t *n);
+    void (*current_fragment)(void *ctx, const uint8_t **out, size_t *n);
+    void (*set_current_fragment)(void *ctx, const uint8_t *f, size_t n);
+    void (*log_error)(void *ctx, const uint8_t *msg, size_t n);
+} pcrs_template_host;
+
+/* pcrs_template_call の op。( ) の中は引数と結果の値 */
+enum {
+    PCRS_TMPL_READ_TEMPLATE = 1,        /* (bool 出力あり) -> 数 (TMPL_*) */
+    PCRS_TMPL_READ_CMD = 2,             /* (bool) -> 数 */
+    PCRS_TMPL_READ_IF = 3,              /* (bool) -> null */
+    PCRS_TMPL_READ_LOOP = 4,
+    PCRS_TMPL_READ_FOREACH = 5,
+    PCRS_TMPL_READ_LET = 6,
+    PCRS_TMPL_READ_FRAGMENT = 7,
+    PCRS_TMPL_READ_VARIABLE_VALUE = 8,  /* (bool) -> 表示する文字列の厳密配列 (表示しなければ空) */
+    PCRS_TMPL_EVAL_STR = 9,             /* (文字列) -> 値 */
+    PCRS_TMPL_EVAL = 10,                /* (式) -> 値 */
+    PCRS_TMPL_EVAL_FORM = 11,           /* (式) -> 値 */
+    PCRS_TMPL_EVAL_CONDITION = 12,      /* (文字列) -> bool */
+    PCRS_TMPL_GET_INT = 13,             /* (名前) -> 数 */
+    PCRS_TMPL_GET_BOOL = 14,            /* (名前) -> bool */
+    PCRS_TMPL_GET_STRING = 15,          /* (名前) -> 文字列 */
+    PCRS_TMPL_APPLY = 16,               /* ([lambda, [式...]]) -> 値 */
+    /* 以下はホストを使わない (host は NULL でよい) */
+    PCRS_TMPL_TOKENIZE = 17,            /* (文字列) -> [トークン...] */
+    PCRS_TMPL_PARSE = 18,               /* ([トークン...]) -> [式, [残りのトークン...]] */
+    PCRS_TMPL_PARSE_LET_SPEC = 19,      /* ([トークン...]) -> [[[名前, 式]...], [残り...]] */
+    PCRS_TMPL_READ_STRING_LITERAL = 20, /* (文字列) -> [リテラル, 残り] */
+    PCRS_TMPL_EVAL_STRING_LITERAL = 21  /* (文字列) -> 文字列 */
+};
+
+/* 0 成功 (*result に値)、1 コールバックの中断、2〜6 は例外 (*result にメッセージ):
+ * 2 GeneralException、3 StreamException、4 std::runtime_error、5 std::out_of_range、
+ * 6 std::invalid_argument。7 は呼び出し方の誤り。*result は常に書かれる (pcrs_buf_free で返す) */
+int pcrs_template_call(int op, const pcrs_template_host *host, const uint8_t *arg, size_t arg_len, pcrs_buf *result);
+
 /* FLVStream::readMetaData。onMetaData でビットレートがあれば 1 (*bitrate に書く)、なければ 0、
  * 形式が壊れていれば 2 (理由を *err に書く) */
 int pcrs_flv_read_meta_data(const uint8_t *data, size_t n, int32_t *bitrate, pcrs_buf *err);

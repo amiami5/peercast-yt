@@ -32,13 +32,19 @@
 #include "uptest.h"
 #include "yplist.h"
 
+#ifdef WITH_RUST_CORE
+#include "rusttemplate.h"
+#endif
+
 #include <assert.h>
 
 using namespace std;
 
+#ifndef WITH_RUST_CORE
 static bool isTruish(const amf0::Value& value);
 static void to_s(const amf0::Value& value, std::string& out);
 static bool readUntil(Stream& in, std::string& var /*OUT*/, std::function<bool(char)> pred);
+#endif // WITH_RUST_CORE
 
 // --------------------------------------
 Template::Template(const std::string& args)
@@ -142,6 +148,8 @@ bool Template::writeGlobalVariable(amf0::Value& out, const String &varName)
 
     return r;
 }
+
+#ifndef WITH_RUST_CORE
 
 // --------------------------------------
 string Template::getStringVariable(const string& varName)
@@ -1284,6 +1292,186 @@ int Template::readTemplate(Stream &in, Stream *outp)
     }
     return TMPL_END;
 }
+
+#else // WITH_RUST_CORE
+
+// WITH_RUST_CORE のときは、式の字句解析・構文解析・評価と、ディレクティブの読み出しは
+// peercast-rs (src/template) で行う。スコープ (変数の値) と正規表現は C++ のまま
+// (rusttemplate.h の rustbridge::TemplateHost を通して Rust から使う)。
+
+using rustbridge::templateCall;
+
+// --------------------------------------
+string Template::getStringVariable(const string& varName)
+{
+    return templateCall(this, nullptr, nullptr, PCRS_TMPL_GET_STRING, varName).string();
+}
+
+// --------------------------------------
+int Template::getIntVariable(const String &varName)
+{
+    return static_cast<int>(templateCall(this, nullptr, nullptr, PCRS_TMPL_GET_INT, varName.str()).number());
+}
+
+// --------------------------------------
+bool Template::getBoolVariable(const String &varName)
+{
+    return templateCall(this, nullptr, nullptr, PCRS_TMPL_GET_BOOL, varName.str()).boolean();
+}
+
+// --------------------------------------
+void Template::readFragment(Stream &in, Stream *outp)
+{
+    templateCall(this, &in, outp, PCRS_TMPL_READ_FRAGMENT, outp != nullptr);
+}
+
+// --------------------------------------
+string Template::evalStringLiteral(const string& input)
+{
+    return templateCall(nullptr, nullptr, nullptr, PCRS_TMPL_EVAL_STRING_LITERAL, input).string();
+}
+
+// --------------------------------------
+pair<string,string> Template::readStringLiteral(const string& input)
+{
+    auto r = templateCall(nullptr, nullptr, nullptr, PCRS_TMPL_READ_STRING_LITERAL, input).strictArray();
+    return make_pair(r.at(0).string(), r.at(1).string());
+}
+
+// --------------------------------------
+static amf0::Value tokensToValue(const std::list<std::string>& tokens)
+{
+    std::vector<amf0::Value> v;
+    for (auto& t : tokens)
+        v.push_back(t);
+    return v;
+}
+
+static std::list<std::string> valueToTokens(const amf0::Value& value)
+{
+    std::list<std::string> tokens;
+    for (auto& t : value.strictArray())
+        tokens.push_back(t.string());
+    return tokens;
+}
+
+std::list<std::string> Template::tokenize(const string& input)
+{
+    return valueToTokens(templateCall(nullptr, nullptr, nullptr, PCRS_TMPL_TOKENIZE, input));
+}
+
+// --------------------------------------
+amf0::Value Template::parse(std::list<std::string>& tokens)
+{
+    auto r = templateCall(nullptr, nullptr, nullptr, PCRS_TMPL_PARSE, tokensToValue(tokens)).strictArray();
+    tokens = valueToTokens(r.at(1));
+    return r.at(0);
+}
+
+// --------------------------------------
+std::vector<std::pair<std::string,amf0::Value>> Template::parseLetSpec(std::list<std::string>& tokens)
+{
+    auto r = templateCall(nullptr, nullptr, nullptr, PCRS_TMPL_PARSE_LET_SPEC, tokensToValue(tokens)).strictArray();
+    tokens = valueToTokens(r.at(1));
+    std::vector<std::pair<std::string,amf0::Value>> result;
+    for (auto& pair : r.at(0).strictArray())
+        result.push_back(std::make_pair(pair.strictArray().at(0).string(), pair.strictArray().at(1)));
+    return result;
+}
+
+// --------------------------------------
+amf0::Value Template::apply(const amf0::Value& lambda, const std::vector<amf0::Value>& arr)
+{
+    return templateCall(this, nullptr, nullptr, PCRS_TMPL_APPLY, amf0::Value::strictArray({ lambda, arr }));
+}
+
+// --------------------------------------
+amf0::Value Template::evalForm(const amf0::Value& exp)
+{
+    return templateCall(this, nullptr, nullptr, PCRS_TMPL_EVAL_FORM, exp);
+}
+
+// --------------------------------------
+amf0::Value Template::evalExpression(const amf0::Value& exp)
+{
+    return templateCall(this, nullptr, nullptr, PCRS_TMPL_EVAL, exp);
+}
+
+// --------------------------------------
+amf0::Value Template::evalExpression(const string& str)
+{
+    return templateCall(this, nullptr, nullptr, PCRS_TMPL_EVAL_STR, str);
+}
+
+// --------------------------------------
+bool    Template::evalCondition(const string& cond)
+{
+    return templateCall(this, nullptr, nullptr, PCRS_TMPL_EVAL_CONDITION, cond).boolean();
+}
+
+// --------------------------------------
+void    Template::readIf(Stream &in, Stream *outp)
+{
+    templateCall(this, &in, outp, PCRS_TMPL_READ_IF, outp != nullptr);
+}
+
+// --------------------------------------
+void    Template::readLoop(Stream &in, Stream *outp)
+{
+    templateCall(this, &in, outp, PCRS_TMPL_READ_LOOP, outp != nullptr);
+}
+
+// --------------------------------------
+void    Template::readForeach(Stream &in, Stream *outp)
+{
+    templateCall(this, &in, outp, PCRS_TMPL_READ_FOREACH, outp != nullptr);
+}
+
+// --------------------------------------
+void    Template::readLet(Stream &in, Stream *outp)
+{
+    templateCall(this, &in, outp, PCRS_TMPL_READ_LET, outp != nullptr);
+}
+
+// --------------------------------------
+int Template::readCmd(Stream &in, Stream *outp)
+{
+    return static_cast<int>(templateCall(this, &in, outp, PCRS_TMPL_READ_CMD, outp != nullptr).number());
+}
+
+// --------------------------------------
+void Template::readVariable_(Stream &in, Stream *outp, std::function<std::string(const std::string&)> filter)
+{
+    auto r = templateCall(this, &in, outp, PCRS_TMPL_READ_VARIABLE_VALUE, outp != nullptr).strictArray();
+    if (r.size() && outp)
+        outp->writeString(filter(r[0].string()));
+}
+
+// --------------------------------------
+void    Template::readVariable(Stream &in, Stream *outp)
+{
+    readVariable_(in, outp, cgi::escape_html);
+}
+
+// --------------------------------------
+void    Template::readVariableJavaScript(Stream &in, Stream *outp)
+{
+    readVariable_(in, outp, cgi::escape_javascript);
+}
+
+// --------------------------------------
+void    Template::readVariableRaw(Stream &in, Stream *outp)
+{
+    readVariable_(in, outp, [](const std::string& s) { return s; });
+}
+
+// --------------------------------------
+int Template::readTemplate(Stream &in, Stream *outp)
+{
+    return static_cast<int>(templateCall(this, &in, outp, PCRS_TMPL_READ_TEMPLATE, outp != nullptr).number());
+}
+
+#endif // WITH_RUST_CORE
 
 // --------------------------------------
 bool HTTPRequestScope::writeVariable(amf0::Value& out, const String& varName)

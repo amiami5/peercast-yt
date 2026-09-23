@@ -297,6 +297,40 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
   確かめていた。Rust 版は 16 KiB を超えた分は溜めずに長さだけ数える (エラーになることと、その
   メッセージは同じ)。
 
+## 段階5a で追加したもの (テンプレートエンジン)
+
+`src/template/` に、HTML テンプレートエンジン (`core/common/template.cpp` の `Template`) の
+式の字句解析・構文解析・評価と、ディレクティブ (`{$式}` `{\式}` `{!式}` `{@if}` `{@elsif}`
+`{@else}` `{@foreach}` `{@let}` `{@loop}` `{@fragment}`) の読み出しを移した。
+
+### 設計
+
+* 変数の値を持つスコープ (`servMgr` などの状態を返す `RootObjectScope`、`HTTPRequestScope`、
+  `GenericScope`) と、`=~` `!~` の正規表現 (`Regexp`、中身は `std::regex`) は C++ のまま。
+  Rust は `pcrs_template_host` のコールバックで変数を引き、`{@let}` などのスコープを置く。
+  正規表現を Rust に移すには ECMAScript の正規表現エンジンが要るので、後の段階で扱う。
+* `Template` クラスの形 (メンバーとメソッド) は変わらない。WITH_RUST_CORE のときは、各メソッドが
+  `pcrs_template_call` を呼ぶ (`core/common/rusttemplate.h`)。値は、型 1 バイトと中身の
+  簡単な形式 (`src/template/value.rs`) で受け渡す。
+* 出力は Rust 側で溜め、呼び出しの終わりに (エラーのときも、それまでの分を) 書く。
+
+### C++ 版との違い
+
+* **評価の順序**: C++ 版は `==` や関数の引数などの評価順序を決めていなかった (C++11 では
+  未規定)。Rust 版は、x86-64 の GCC でビルドした C++ 版に合わせた (二項演算子 `==` `!=` `=~` は
+  右辺から、`replacePrefix` などの引数は右から、`{@let x = 式}` などは右辺を評価してから
+  変数を作る)。
+* **`nth` の範囲外**: C++ 版は添字を確かめずに読んでいた (未定義動作で、落ちるか不定の値)。
+  Rust 版は `GeneralException` ("nth: index out of range") にする。
+* **入れ子の深さ**: C++ 版は式やディレクティブの入れ子、関数の再帰に上限がなく、深すぎると
+  スタックを使い果たして落ちた。Rust 版は 200 段で `GeneralException`
+  ("Template: nesting too deep") にする。
+* **例外のあとのスコープ**: `{@let}` などの途中で例外が起きると、C++ 版は破棄された (スタック上の)
+  スコープへのポインタを `Template` に残していた。Rust 版は、置いたスコープを取り除く。
+* **`{@loop}` の回数**: 変数の値が `int` に収まらない数 (か NaN) のとき、C++ 版は未定義動作で、
+  CPU によって違った (x86 では -2^31 で 1 回も回らず、ARM では `int` の最大値で約 21 億回回る)。
+  Rust 版は、どの CPU でも x86 と同じく -2^31 にする。
+
 ## 差分テスト
 
 ```sh
@@ -314,6 +348,8 @@ make
 ./diff_xml                     # XML: 見本の変異+乱数 (約40万件)
 ./diff_url                     # URL: 短い入力の全通り+見本の変異+乱数 (約116万件)
 ./diff_media                   # FLV/MKV/OGG/MP4/MP3: 生成した入力とその変異 (各2万件、引数で変更)
+./diff_template 20000 $(find ../../../ui/html -name "*.html")
+                             # テンプレート: UI の実際のテンプレート、生成したもの、その変異
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした

@@ -72,7 +72,8 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 | 2 | 完了 (str の残り、jis、md5、gnuid の純粋な部分、`String` の変換関数)。`String` クラス自体と `setFromTime`、`GnuID::generate` など状態や OS に依存する部分は C++ に残る。差分テストは String だけで約 980 万件、違いなし |
 | 3 | 完了。3a (HTTP の行の解析、`parseHttpDate`)、3b (AMF0、chunked 転送)、3c (XML)、3d (URL)。`atom` は段階 6 に回した。`cgi::Query` と `HTTP::parseRequestLine` は、Rust 化済みの `str::split` などを呼ぶだけなので C++ のまま |
 | 4 | 完了。相談の結果、NSV と Windows Media 系 (WMA/WMV、ASF、MMS、WMHTTP、ASX) のサポートを削除し、残る FLV、MKV/WebM、OGG、MP3、MP4 の解析器を Rust 化した (`peercast-rs/src/media`)。チャンネルとのやりとりは `pcrs_media_host` のコールバックで行う。差分テストは各形式 10 万件で、説明のつかない違いなし |
-| 5 以降 | 未着手 |
+| 5 | 進行中。5a (テンプレートエンジンの式とディレクティブ。スコープと正規表現は C++ のまま)。差分テストは UI の実際のテンプレートとその変異などで 20 万件、説明のつかない違いなし |
+| 6 以降 | 未着手 |
 
 ### 確認環境についての注記
 
