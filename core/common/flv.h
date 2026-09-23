@@ -25,6 +25,21 @@
 
 #include "channel.h"
 
+#ifdef WITH_RUST_CORE
+// WITH_RUST_CORE のときは peercast-rs (src/media/flv.rs) の実装を使う。
+#include "rustmedia.h"
+
+// ----------------------------------------------
+class FLVStream : public rustbridge::MediaStream
+{
+public:
+    FLVStream() : MediaStream(PCRS_MEDIA_FLV) {}
+
+    static std::pair<bool,int> readMetaData(void* data, int size);
+};
+
+#else // WITH_RUST_CORE
+
 // -----------------------------------
 class FLVFileHeader
 {
@@ -230,5 +245,7 @@ public:
 
     FLVTagBuffer m_buffer;
 };
+
+#endif // WITH_RUST_CORE
 
 #endif

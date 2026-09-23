@@ -139,19 +139,29 @@ $(LINUXDEPLOY):
 clean:
 	$(MAKE) -C .. clean
 	rm -f $(LINUXOBJ) $(COREOBJ) $(SYSOBJ) $(TARGET) ${LIBOBJSTATIC} $(COREOBJSTATIC) $(DEPENDFILE) $(RTMPSERVER) $(RTMPOBJ)
+	rm -f $(ALLOBJ:.o=.d)
 	rm -rf $(HTML) $(PUBLIC)
 	rm -rf $(RUST_RTMP)/target $(RUST_CORE)/target
 	rm -rf peercast-yt/
 	rm -f $(DISTARCHIVE)
 
+# ヘッダーの依存関係 (*.d) をコンパイルのついでに書き出し、ヘッダーが変わったら作り直す。
+# Makefile (フラグ) が変わったときも全部作り直す。
+DEPFLAGS = -MMD -MP
+ALLOBJ = $(COREOBJ) $(SYSOBJ) $(LINUXOBJ) $(RTMPOBJ)
+$(ALLOBJ): Makefile
+
 $(COREOBJ): %.o : $(CORE)/common/%.cpp
-	$(CXX) $(CPPFLAGS) -c $< -o $@
+	$(CXX) $(CPPFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(SYSOBJ): %.o : $(CORE)/unix/%.cpp
-	$(CXX) $(CPPFLAGS) -c $< -o $@
+	$(CXX) $(CPPFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(RTMPOBJ): %.o : $(RTMP)/%.cpp
-	$(CXX) $(CPPFLAGS) -c $< -o $@
+	$(CXX) $(CPPFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(LINUXOBJ): %.o : %.cpp
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(LIBOBJSTATIC): $(COREOBJ) $(SYSOBJ)
 	$(AR) rcs $(LIBOBJSTATIC) $(COREOBJ) $(SYSOBJ)
@@ -166,7 +176,7 @@ define CHECK_CARGO
 	  exit 1; }
 endef
 
-$(RUST_CORE_LIB): $(RUST_CORE)/Cargo.toml $(wildcard $(RUST_CORE)/src/*.rs) $(wildcard $(RUST_CORE)/include/*.h)
+$(RUST_CORE_LIB): $(RUST_CORE)/Cargo.toml $(wildcard $(RUST_CORE)/src/*.rs $(RUST_CORE)/src/*/*.rs) $(wildcard $(RUST_CORE)/include/*.h)
 	$(CHECK_CARGO)
 	$(CARGO) build --release --manifest-path $(RUST_CORE)/Cargo.toml
 
@@ -182,3 +192,4 @@ $(RTMPSERVER): $(RTMPOBJ) $(LIBOBJSTATIC) $(RUST_CORE_DEP)
 endif
 
 -include $(DEPENDFILE)
+-include $(ALLOBJ:.o=.d)

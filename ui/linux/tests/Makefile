@@ -39,8 +39,10 @@ GTEST_HEADERS = $(wildcard /usr/include/gtest/*.h) $(wildcard /usr/include/gtest
 
 # libpeercast.a が Rust 実装 (peercast-rs) を使ってビルドされているときは、それもリンクする。
 RUST_CORE_LIB = ../../../peercast-rs/target/release/libpeercast_rs.a
+# ヘッダーの中身 (FLVStream などのクラス) も変わるので、テストも WITH_RUST_CORE でコンパイルする。
 ifneq ($(shell nm ../libpeercast.a 2>/dev/null | grep -c pcrs_),0)
   LIBS += $(RUST_CORE_LIB)
+  CPPFLAGS += -DWITH_RUST_CORE -I../../../peercast-rs/include
 endif
 
 -include Makefile.local

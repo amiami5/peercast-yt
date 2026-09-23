@@ -1,3 +1,6 @@
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustmedia.h (peercast-rs の src/media/mkv.rs) を使う。
+
 #include <limits.h> // INT_MAX
 
 #include "mkv.h"
@@ -376,3 +379,5 @@ void MKVStream::readEnd(Stream &, std::shared_ptr<Channel>)
 {
     // we will never reach the end
 }
+
+#endif // WITH_RUST_CORE

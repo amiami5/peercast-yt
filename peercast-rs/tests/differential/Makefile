@@ -7,7 +7,9 @@ CORE = ../../../core/common
 RUST = ../..
 # -fsigned-char: C++ 版には char の符号で結果が変わる箇所がある。Rust 版は CPU によらず
 # 符号付きとして扱うので、比較の基準も CPU によらず符号付きにそろえる (ARM でも同じ結果になる)。
-CXXFLAGS = -O1 -g -std=c++11 -fsigned-char -D_UNIX -I$(CORE) -I../../../core/unix -I$(RUST)/include -Wall -Wno-unused-function
+# -ftrivial-auto-var-init=zero: C++ 版が初期化していないスタックの値を読む箇所 (読み出しが足りなかった
+# ときのバッファの残りなど) を 0 にそろえる。Rust 版はそこを 0 として扱うので、比べられるようになる。
+CXXFLAGS = -O1 -g -std=c++11 -fsigned-char -ftrivial-auto-var-init=zero -D_UNIX -I$(CORE) -I../../../core/unix -I$(RUST)/include -Wall -Wno-unused-function
 
 diff: diff.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -15,11 +17,11 @@ diff: diff.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_
 %.o: $(CORE)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs) $(RUST)/Cargo.toml
+$(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs $(RUST)/src/*/*.rs) $(RUST)/Cargo.toml
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url *.o cxxcore.a
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -57,3 +59,11 @@ diff_xml: diff_xml.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
 
 diff_url: diff_url.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(CXXCORE_LIBS)
+
+# Channel::newPacket と updateInfo (記録する) と LOG_* (捨てる) を横取りする
+MEDIA_WRAP = -Wl,--wrap=_ZN7Channel9newPacketER10ChanPacket -Wl,--wrap=_ZN7Channel10updateInfoERK8ChanInfo \
+             -Wl,--wrap=_Z9LOG_TRACEPKcz -Wl,--wrap=_Z9LOG_DEBUGPKcz -Wl,--wrap=_Z8LOG_INFOPKcz \
+             -Wl,--wrap=_Z8LOG_WARNPKcz -Wl,--wrap=_Z9LOG_ERRORPKcz
+
+diff_media: diff_media.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustmedia.h $(CORE)/rustbridge.h
+	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(MEDIA_WRAP) $(CXXCORE_LIBS)

@@ -249,6 +249,54 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
 * `URLSource::streamURL` は、プレイリストの中の URL を自分自身の再帰呼び出しで読むので、
   プレイリストを指すプレイリストが続くと再帰が深くなる。段階 7〜9 で扱う。
 
+## 段階4 で追加したもの (メディアコンテナ)
+
+`src/media/` に、配信の中身を解析する `ChannelStream` の派生クラス (`FLVStream`, `MKVStream`,
+`OGGStream`, `MP3Stream`, `MP4Stream`) を移した。FLV、Matroska/WebM、Ogg (Vorbis/Theora)、MP3
+(ICY メタデータを含む)、fragmented MP4 を扱う。NSV と Windows Media 系 (ASF, MMS, WMHTTP) は
+移植せずにサポートをやめた (ルートの `README.md` の「本家との違い」を参照)。
+
+### 設計
+
+* 解析器は、入力の `Stream` とチャンネル (`Channel`) を、`Host` トレイト (C の型は
+  `pcrs_media_host`) のメソッドだけで触る。C++ 側の実装 (`core/common/rustmedia.h` の
+  `rustbridge::MediaHost`) が、C++ 版の解析器と同じ順序で `Channel` のメンバー (`streamPos`,
+  `headPack`, `info` など) を読み書きする。入力の読み出しは段階 3b と同じコールバック (`pcrs_reader`)。
+* 解析器の状態 (FLV の溜めているタグ、OGG のヘッダーなど) は Rust 側が持つ (`pcrs_media_new` /
+  `pcrs_media_free`)。`FLVStream` などは `rustbridge::MediaStream` を継承するだけのクラスになった。
+* ヘッダーの中身 (クラスの定義) が変わるので、gtest も `WITH_RUST_CORE` でコンパイルする
+  (`ui/linux/tests/Makefile` が `libpeercast.a` を見て自動で決める)。C++ 版の内部のクラス
+  (`FLVTag`, `FLVFileHeader`, `MKVStream::unpackUnsignedInt`) の gtest は C++ 版のビルドでだけ動き、
+  同じ内容のテストは `src/media/*.rs` にある。
+* FLV の `readPacket` は、パケットを送らなかったとき続きが読めれば自分を再帰呼び出ししていた。
+  Rust 版は同じことをループで行う。
+* MKV は `Stream::read(int)` (4096 バイトずつ `read(void*, int)` を呼ぶ) を Rust 側で行うので、
+  大きな要素 (最大 256 MiB) でも、実際に届いた分しかメモリを確保しない (C++ 版と同じ)。
+
+### C++ 版との違い
+
+* **初期化していないメモリ**: 読み出しが足りなかったときのバッファの残り (FLV のタグ、MP4 の
+  ボックス、OGG のページ、MP3 のパケットなど) のように、C++ 版が初期化していないメモリを読んで
+  いた箇所は、すべて 0 として扱う。
+* **MKV の短い SimpleBlock**: トラック番号とタイムコードしかない SimpleBlock で、C++ 版は
+  フラグのバイトとしてデータの外を読んでいた。Rust 版は 0 (キーフレームでない) とみなす。
+* **OGG Vorbis のコメントの長さ**: ちょうど 8192 バイトのコメントで、C++ 版は終端の NUL を
+  スタックのバッファの外に 1 バイト書いていた。Rust 版は書かない。
+* **OGG Vorbis のコメント数**: データが尽きたあとも、ヘッダーに書かれたコメント数 (最大約 21 億)
+  の回数だけ空回りしてログを出していた (事実上止まる)。空回りの間は何も変わらないので、Rust 版は
+  残りが 4 バイト (長さのフィールド) に満たなくなったらループを抜ける。
+* **FLV のメタデータのビットレート**: videodatarate と audiodatarate の和が 2^31 以上のとき、
+  C++ 版は `double` を `int` に変換する未定義動作で、CPU によって値が違った (x86 では -2^31)。
+  Rust 版は `int` の最大値にする。
+* **バイト順**: OGG のグラニュール位置とシリアル番号、Vorbis のヘッダーの整数は、C++ 版は CPU の
+  バイト順で読んでいた (ビッグエンディアンの CPU では誤り)。Rust 版は仕様どおりリトルエンディアン
+  で読む (x86 と ARM の一般的な構成では同じ値)。
+* **符号付き整数の桁あふれ** (MKV の待ち時間、Theora の時刻の計算): C++ 版で未定義動作だった
+  ところは、2 の補数で一周する値にした (一般的な CPU での C++ 版と同じ値)。
+* **MKV のヘッダーの溜め方**: C++ 版は Cluster までの要素を全部メモリに溜めてから大きさを
+  確かめていた。Rust 版は 16 KiB を超えた分は溜めずに長さだけ数える (エラーになることと、その
+  メッセージは同じ)。
+
 ## 差分テスト
 
 ```sh
@@ -265,10 +313,18 @@ make
 ./diff_amf0_dechunk            # AMF0 と Dechunker: 生成した値の変異・切り詰め (約100万件)
 ./diff_xml                     # XML: 見本の変異+乱数 (約40万件)
 ./diff_url                     # URL: 短い入力の全通り+見本の変異+乱数 (約116万件)
+./diff_media                   # FLV/MKV/OGG/MP4/MP3: 生成した入力とその変異 (各2万件、引数で変更)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした
 C++ のコア一式 (`cxxcore.a`、`make` が自動で作る) にリンクします。
+
+`diff_media` は、同じ入力と同じ状態の `Channel` で C++ 版と Rust 版の解析器を動かし、
+`Channel::newPacket` と `Channel::updateInfo` に渡ったもの (リンク時の `--wrap` で横取りする)、
+`sys->sleep` の呼び出し、例外、最後の `Channel` の状態を比べます。時刻は読むたびに進むので、
+時刻を読む回数と順序も比べることになります。C++ 版が初期化していないメモリを読む箇所を
+比べられるように、差分テストの C++ はスタックを 0 で初期化し (`-ftrivial-auto-var-init=zero`)、
+ヒープも 0 で埋めます (`diff_media.cpp` の `operator new`)。
 
 C++ 版の関数をそのままコンパイルしたもの (`WITH_RUST_CORE` を定義しない `cgi.cpp` / `str.cpp`) と、
 `libpeercast_rs.a` に、1 バイトずつ変えた入力を大量に与えて比較します。上に挙げた既知の違いは

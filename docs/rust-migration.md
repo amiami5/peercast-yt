@@ -71,12 +71,12 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 | 1 | 完了 (peercast-rs: cgi/str の一部関数、C ABI 境界、Makefile 統合)。差分テストは長さ 0〜3 バイトの入力を全網羅 (1,677 万通り) して確認 |
 | 2 | 完了 (str の残り、jis、md5、gnuid の純粋な部分、`String` の変換関数)。`String` クラス自体と `setFromTime`、`GnuID::generate` など状態や OS に依存する部分は C++ に残る。差分テストは String だけで約 980 万件、違いなし |
 | 3 | 完了。3a (HTTP の行の解析、`parseHttpDate`)、3b (AMF0、chunked 転送)、3c (XML)、3d (URL)。`atom` は段階 6 に回した。`cgi::Query` と `HTTP::parseRequestLine` は、Rust 化済みの `str::split` などを呼ぶだけなので C++ のまま |
-| 4 | 準備完了。相談の結果、NSV と Windows Media 系 (WMA/WMV、ASF、MMS、WMHTTP、ASX) のサポートを削除した。残る FLV、MKV/WebM、MP4、OGG、MP3 を Rust 化する |
+| 4 | 完了。相談の結果、NSV と Windows Media 系 (WMA/WMV、ASF、MMS、WMHTTP、ASX) のサポートを削除し、残る FLV、MKV/WebM、OGG、MP3、MP4 の解析器を Rust 化した (`peercast-rs/src/media`)。チャンネルとのやりとりは `pcrs_media_host` のコールバックで行う。差分テストは各形式 10 万件で、説明のつかない違いなし |
 | 5 以降 | 未着手 |
 
 ### 確認環境についての注記
 
-* gtest は Ubuntu 26.04 (g++ 15、googletest 1.12.1) で 738/740 件成功。失敗する 2 件
+* gtest は Ubuntu 26.04 (g++ 15、googletest 1.12.1) で 727/729 件成功 (段階 4 で、C++ 版の内部のクラスのテスト 5 件は C++ 版のビルドでだけ動くようにした)。失敗する 2 件
   (`ServentFixture.handshakeStream_returnResponse_channelReady_direct`、`ServMgrFixture.writeVariable`)
   は移行前から失敗している。`IniFixture.parse` は、g++ 15 で既定になった
   `_GLIBCXX_ASSERTIONS` が `ini.cpp` の `trim` の範囲外アクセス (空文字列で `str[-1]`) を検出して

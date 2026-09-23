@@ -21,6 +21,19 @@
 
 #include "channel.h"
 
+#ifdef WITH_RUST_CORE
+// WITH_RUST_CORE のときは peercast-rs (src/media/mp3.rs) の実装を使う。
+#include "rustmedia.h"
+
+// ----------------------------------------------
+class MP3Stream : public rustbridge::MediaStream
+{
+public:
+    MP3Stream() : MediaStream(PCRS_MEDIA_MP3) {}
+};
+
+#else // WITH_RUST_CORE
+
 // ----------------------------------------------
 class MP3Stream : public ChannelStream
 {
@@ -29,5 +42,7 @@ public:
     int     readPacket(Stream &, std::shared_ptr<Channel>) override;
     void    readEnd(Stream &, std::shared_ptr<Channel>) override;
 };
+
+#endif // WITH_RUST_CORE
 
 #endif

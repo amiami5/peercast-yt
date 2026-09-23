@@ -28,6 +28,7 @@
 #include "url.h" // URLSource
 #include "chaninfo.h" // ChanInfo::PROTOCOL
 #include "rustbridge.h"
+#include "flv.h" // FLVStream (段階4、メディアコンテナの本体は rustmedia.h)
 
 using rustbridge::RustBuf;
 
@@ -603,6 +604,22 @@ void HTTP::parseAuthorizationHeader(const char* arg, char* user, char* pass, siz
     RustBuf ub(u), pb(p);
     copyTruncated(user, ulen, ub.str());
     copyTruncated(pass, plen, pb.str());
+}
+
+#endif // WITH_RUST_CORE
+
+#ifdef WITH_RUST_CORE
+
+std::pair<bool,int> FLVStream::readMetaData(void* data, int size)
+{
+    RustBuf err;
+    int32_t bitrate = 0;
+    int r = pcrs_flv_read_meta_data(static_cast<const uint8_t*>(data), size > 0 ? size : 0, &bitrate, err.out());
+    if (r == 2)
+        LOG_ERROR("readMetaData: %s", err.str().c_str());
+    if (r == 1)
+        return std::make_pair(true, static_cast<int>(bitrate));
+    return std::make_pair(false, 0);
 }
 
 #endif // WITH_RUST_CORE

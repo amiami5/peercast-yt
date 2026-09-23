@@ -16,6 +16,9 @@
 // GNU General Public License for more details.
 // ------------------------------------------------
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustmedia.h (peercast-rs の src/media/flv.rs) を使う。
+
 #include "channel.h"
 #include "flv.h"
 #include "amf0.h"
@@ -320,3 +323,5 @@ void FLVTagBuffer::flush(std::shared_ptr<Channel> ch)
 
     m_mem.rewind();
 }
+
+#endif // WITH_RUST_CORE

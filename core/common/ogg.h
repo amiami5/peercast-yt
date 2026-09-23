@@ -22,6 +22,19 @@
 #include <sys/types.h>
 #include "channel.h"
 
+#ifdef WITH_RUST_CORE
+// WITH_RUST_CORE のときは peercast-rs (src/media/ogg.rs) の実装を使う。
+#include "rustmedia.h"
+
+// ----------------------------------------------
+class OGGStream : public rustbridge::MediaStream
+{
+public:
+    OGGStream() : MediaStream(PCRS_MEDIA_OGG) {}
+};
+
+#else // WITH_RUST_CORE
+
 // ----------------------------------------------
 class OggPage;
 
@@ -169,5 +182,7 @@ public:
     int             headLen, bodyLen;
     unsigned char   data[MAX_HEADERLEN+MAX_BODYLEN];
 };
+
+#endif // WITH_RUST_CORE
 
 #endif

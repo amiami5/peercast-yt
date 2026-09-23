@@ -3,6 +3,10 @@
 #include "flv.h"
 #include "sstream.h"
 
+#ifndef WITH_RUST_CORE
+// FLVFileHeader は C++ 版の解析器にだけある。Rust 版 (WITH_RUST_CORE) のテストは
+// peercast-rs/src/media/flv.rs にある。
+
 class FLVFileHeaderFixture : public ::testing::Test {
 public:
     FLVFileHeaderFixture()
@@ -42,3 +46,5 @@ TEST_F(FLVFileHeaderFixture, read)
 }
 
 
+
+#endif // WITH_RUST_CORE

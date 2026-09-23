@@ -974,3 +974,248 @@ pub unsafe extern "C" fn pcrs_base64_word_to_chars(word: *const u8, out: *mut u8
         None => 0,
     }
 }
+
+// ---------------------------------------------------------------- メディアコンテナ (src/media)
+
+use crate::media::{self, HeadKind, Host, LogLevel, Parser, Track};
+use std::ffi::c_void;
+
+/// `Track` の 1 項目 (`present` が false なら値なし)
+#[repr(C)]
+pub struct CTrackField {
+    pub ptr: *const u8,
+    pub len: usize,
+    pub present: bool,
+}
+
+#[repr(C)]
+pub struct CTrack {
+    pub artist: CTrackField,
+    pub title: CTrackField,
+    pub genre: CTrackField,
+    pub contact: CTrackField,
+    pub album: CTrackField,
+}
+
+/// 解析器から見たチャンネルと入力 (C の `pcrs_media_host`)。int を返すものは、成功で 0、
+/// C++ の例外で中断したら -1 (例外は C++ 側で保存しておき、戻ったあとで投げ直す)。
+#[repr(C)]
+pub struct CMediaHost {
+    pub ctx: *mut c_void,
+    pub reader: *const CReader,
+    pub ready: unsafe extern "C" fn(ctx: *mut c_void, out: *mut bool) -> i32,
+    pub raise_bitrate: unsafe extern "C" fn(ctx: *mut c_void) -> i32,
+    pub packet: unsafe extern "C" fn(ctx: *mut c_void, data: *const u8, len: usize, cont: bool, read_delay: bool) -> i32,
+    pub head: unsafe extern "C" fn(ctx: *mut c_void, kind: i32, data: *const u8, len: usize) -> i32,
+    pub head_len: unsafe extern "C" fn(ctx: *mut c_void) -> u32,
+    pub head_clear: unsafe extern "C" fn(ctx: *mut c_void),
+    pub head_append: unsafe extern "C" fn(ctx: *mut c_void, data: *const u8, len: usize) -> i32,
+    pub set_bitrate: unsafe extern "C" fn(ctx: *mut c_void, bitrate: i32) -> i32,
+    pub ogg_set_info: unsafe extern "C" fn(ctx: *mut c_void, bitrate: i32, ogm: bool),
+    pub set_track: unsafe extern "C" fn(ctx: *mut c_void, track: *const CTrack) -> i32,
+    pub mp3_metadata: unsafe extern "C" fn(ctx: *mut c_void, buf: *const u8, len: usize) -> i32,
+    pub icy_meta_interval: unsafe extern "C" fn(ctx: *mut c_void) -> i32,
+    pub read_delay: unsafe extern "C" fn(ctx: *mut c_void) -> bool,
+    pub dtime: unsafe extern "C" fn(ctx: *mut c_void) -> f64,
+    pub time: unsafe extern "C" fn(ctx: *mut c_void) -> u32,
+    pub sleep: unsafe extern "C" fn(ctx: *mut c_void, ms: i32),
+    pub sleep_until: unsafe extern "C" fn(ctx: *mut c_void, t: f64),
+    pub log: unsafe extern "C" fn(ctx: *mut c_void, level: i32, msg: *const u8, len: usize),
+}
+
+/// `CMediaHost` を `Host` として使う。
+struct CMediaHostRef<'a> {
+    h: &'a CMediaHost,
+    r: CReaderRef<'a>,
+}
+
+fn status(code: i32) -> Result<(), Abort> {
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(Abort)
+    }
+}
+
+// 以下の unsafe ブロックはどれも、CMediaHost を渡した C++ 側が関数ポインタと ctx の有効性を
+// 保証していることに頼る。渡すスライスは呼び出しの間だけ有効。
+impl Reader for CMediaHostRef<'_> {
+    fn read_char(&mut self) -> Result<u8, Abort> {
+        self.r.read_char()
+    }
+    fn read_exact(&mut self, n: usize) -> Result<Vec<u8>, Abort> {
+        self.r.read_exact(n)
+    }
+    fn read_some(&mut self, n: usize) -> Result<Vec<u8>, Abort> {
+        self.r.read_some(n)
+    }
+    fn eof(&mut self) -> Result<bool, Abort> {
+        self.r.eof()
+    }
+}
+
+impl Host for CMediaHostRef<'_> {
+    fn ready(&mut self) -> Result<bool, Abort> {
+        let mut out = false;
+        // SAFETY: 上記
+        status(unsafe { (self.h.ready)(self.h.ctx, &mut out) })?;
+        Ok(out)
+    }
+    fn raise_bitrate(&mut self) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.raise_bitrate)(self.h.ctx) })
+    }
+    fn packet(&mut self, data: &[u8], cont: bool, read_delay: bool) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.packet)(self.h.ctx, data.as_ptr(), data.len(), cont, read_delay) })
+    }
+    fn head(&mut self, kind: HeadKind, data: &[u8]) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.head)(self.h.ctx, kind as i32, data.as_ptr(), data.len()) })
+    }
+    fn head_len(&mut self) -> u32 {
+        // SAFETY: 上記
+        unsafe { (self.h.head_len)(self.h.ctx) }
+    }
+    fn head_clear(&mut self) {
+        // SAFETY: 上記
+        unsafe { (self.h.head_clear)(self.h.ctx) }
+    }
+    fn head_append(&mut self, data: &[u8]) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.head_append)(self.h.ctx, data.as_ptr(), data.len()) })
+    }
+    fn set_bitrate(&mut self, bitrate: i32) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.set_bitrate)(self.h.ctx, bitrate) })
+    }
+    fn ogg_set_info(&mut self, bitrate: i32, ogm: bool) {
+        // SAFETY: 上記
+        unsafe { (self.h.ogg_set_info)(self.h.ctx, bitrate, ogm) }
+    }
+    fn set_track(&mut self, t: &Track) -> Result<(), Abort> {
+        let field = |f: &Option<Vec<u8>>| match f {
+            Some(v) => CTrackField { ptr: v.as_ptr(), len: v.len(), present: true },
+            None => CTrackField { ptr: std::ptr::null(), len: 0, present: false },
+        };
+        let c = CTrack { artist: field(&t.artist), title: field(&t.title), genre: field(&t.genre), contact: field(&t.contact), album: field(&t.album) };
+        // SAFETY: 上記 (c と t はこの呼び出しの間有効)
+        status(unsafe { (self.h.set_track)(self.h.ctx, &c) })
+    }
+    fn mp3_metadata(&mut self, buf: &[u8]) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.h.mp3_metadata)(self.h.ctx, buf.as_ptr(), buf.len()) })
+    }
+    fn icy_meta_interval(&mut self) -> i32 {
+        // SAFETY: 上記
+        unsafe { (self.h.icy_meta_interval)(self.h.ctx) }
+    }
+    fn read_delay(&mut self) -> bool {
+        // SAFETY: 上記
+        unsafe { (self.h.read_delay)(self.h.ctx) }
+    }
+    fn dtime(&mut self) -> f64 {
+        // SAFETY: 上記
+        unsafe { (self.h.dtime)(self.h.ctx) }
+    }
+    fn time(&mut self) -> u32 {
+        // SAFETY: 上記
+        unsafe { (self.h.time)(self.h.ctx) }
+    }
+    fn sleep(&mut self, ms: i32) {
+        // SAFETY: 上記
+        unsafe { (self.h.sleep)(self.h.ctx, ms) }
+    }
+    fn sleep_until(&mut self, t: f64) {
+        // SAFETY: 上記
+        unsafe { (self.h.sleep_until)(self.h.ctx, t) }
+    }
+    fn log(&mut self, level: LogLevel, msg: &str) {
+        // SAFETY: 上記
+        unsafe { (self.h.log)(self.h.ctx, level as i32, msg.as_ptr(), msg.len()) }
+    }
+}
+
+/// 解析器を作る。`kind` は `PCRS_MEDIA_*` (1: MP3、2: FLV、3: OGG、4: MKV、5: MP4)。
+/// 知らない値なら NULL。`pcrs_media_free` で解放する。
+#[no_mangle]
+pub extern "C" fn pcrs_media_new(kind: i32) -> *mut Parser {
+    match media::Kind::from_i32(kind) {
+        Some(k) => Box::into_raw(Box::new(Parser::new(k))),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `p` は `pcrs_media_new` が返した値 (または NULL) で、まだ解放されていないこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_media_free(p: *mut Parser) {
+    if !p.is_null() {
+        // SAFETY: 関数の Safety 節
+        drop(unsafe { Box::from_raw(p) });
+    }
+}
+
+/// 0 成功、1 コールバックの中断、2 エラー (メッセージを `*err` に書く)
+fn media_result(r: media::Result<()>, err: *mut PcrsBuf) -> i32 {
+    match r {
+        Ok(()) => 0,
+        Err(media::Error::Abort) => 1,
+        Err(media::Error::Stream(msg)) => {
+            // SAFETY: 呼び出し元 (pcrs_media_read_*) の Safety 節
+            unsafe { *err = into_buf(msg.into_bytes()) };
+            2
+        }
+    }
+}
+
+/// `readHeader`。返り値は 0 成功、1 コールバックの中断、2 エラー (`StreamException` のメッセージを
+/// `*err` に書く)。
+///
+/// # Safety
+/// `p` は `pcrs_media_new` が返した有効な値、`host` は有効な `CMediaHost` (その `reader` も有効)
+/// を指し、`err` は書き込めること。同じ `p` を同時に複数のスレッドから使わないこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_media_read_header(p: *mut Parser, host: *const CMediaHost, err: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (parser, h) = unsafe { (&mut *p, &*host) };
+    // SAFETY: 同上
+    let mut hr = CMediaHostRef { h, r: unsafe { reader(h.reader) } };
+    media_result(parser.read_header(&mut hr), err)
+}
+
+/// `readPacket`。返り値は `pcrs_media_read_header` と同じ。
+///
+/// # Safety
+/// `pcrs_media_read_header` と同じ。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_media_read_packet(p: *mut Parser, host: *const CMediaHost, err: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (parser, h) = unsafe { (&mut *p, &*host) };
+    // SAFETY: 同上
+    let mut hr = CMediaHostRef { h, r: unsafe { reader(h.reader) } };
+    media_result(parser.read_packet(&mut hr), err)
+}
+
+/// `FLVStream::readMetaData`。onMetaData でビットレートがあれば 1 (値を `*bitrate` に書く)、
+/// なければ 0、形式が壊れていれば 2 (理由を `*err` に書く)。
+///
+/// # Safety
+/// `data` は `n` バイト読めること (`n` が 0 なら NULL でもよい)。`bitrate` と `err` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_flv_read_meta_data(data: *const u8, n: usize, bitrate: *mut i32, err: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    match media::flv::read_meta_data(unsafe { input(data, n) }) {
+        Ok(Some(b)) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *bitrate = b };
+            1
+        }
+        Ok(None) => 0,
+        Err(msg) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *err = into_buf(msg.into_bytes()) };
+            2
+        }
+    }
+}

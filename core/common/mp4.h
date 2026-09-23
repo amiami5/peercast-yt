@@ -19,6 +19,19 @@
 
 #include <stdint.h>
 
+#ifdef WITH_RUST_CORE
+// WITH_RUST_CORE のときは peercast-rs (src/media/mp4.rs) の実装を使う。
+#include "rustmedia.h"
+
+// ----------------------------------------------
+class MP4Stream : public rustbridge::MediaStream
+{
+public:
+    MP4Stream() : MediaStream(PCRS_MEDIA_MP4) {}
+};
+
+#else // WITH_RUST_CORE
+
 class MP4Stream : public ChannelStream
 {
 public:
@@ -84,5 +97,7 @@ class MP4Box
 
     uint8_t *m_data;
 };
+
+#endif // WITH_RUST_CORE
 
 #endif

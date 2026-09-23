@@ -48,7 +48,7 @@ TEST(MediaParserSecurity, flvHeadPacketTooLarge)
         }).serialize();
 
     std::string flv = std::string("FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00", 13);
-    flv += flvTag(FLVTag::T_SCRIPT, meta);
+    flv += flvTag(18 /* スクリプトタグ */, meta);
 
     StringStream in(flv);
     auto ch = std::make_shared<Channel>();

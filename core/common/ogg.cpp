@@ -16,6 +16,9 @@
 // GNU General Public License for more details.
 // ------------------------------------------------
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustmedia.h (peercast-rs の src/media/ogg.rs) を使う。
+
 #include "channel.h"
 #include "ogg.h"
 
@@ -469,3 +472,5 @@ void    OggPacket::addLacing(OggPage &ogg)
         }
     }
 }
+
+#endif // WITH_RUST_CORE

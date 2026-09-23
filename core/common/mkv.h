@@ -3,6 +3,20 @@
 
 #include "stream.h"
 #include "channel.h"
+
+#ifdef WITH_RUST_CORE
+// WITH_RUST_CORE のときは peercast-rs (src/media/mkv.rs) の実装を使う。
+#include "rustmedia.h"
+
+// ----------------------------------------------
+class MKVStream : public rustbridge::MediaStream
+{
+public:
+    MKVStream() : MediaStream(PCRS_MEDIA_MKV) {}
+};
+
+#else // WITH_RUST_CORE
+
 #include "matroska.h"
 
 // ----------------------------------------------
@@ -38,5 +52,7 @@ public:
 private:
     using ChannelStream::sendPacket;
 };
+
+#endif // WITH_RUST_CORE
 
 #endif

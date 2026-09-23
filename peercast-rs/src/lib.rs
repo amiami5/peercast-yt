@@ -19,6 +19,7 @@ pub mod inspect;
 pub mod jis;
 mod jis_table;
 pub mod md5;
+pub mod media;
 pub mod pcstring;
 pub mod reader;
 pub mod strutil;

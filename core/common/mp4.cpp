@@ -14,6 +14,9 @@
 // GNU General Public License for more details.
 // ------------------------------------------------
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustmedia.h (peercast-rs の src/media/mp4.rs) を使う。
+
 #include "channel.h"
 #include "mp4.h"
 #include "amf0.h"
@@ -173,3 +176,5 @@ int MP4Stream::readPacket(Stream &in, std::shared_ptr<Channel> ch)
 
     return 0;
 }
+
+#endif // WITH_RUST_CORE

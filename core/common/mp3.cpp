@@ -16,6 +16,9 @@
 // GNU General Public License for more details.
 // ------------------------------------------------
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustmedia.h (peercast-rs の src/media/mp3.rs) を使う。
+
 #include "channel.h"
 #include "mp3.h"
 #include "chanmgr.h"
@@ -77,3 +80,5 @@ int MP3Stream::readPacket(Stream &in, std::shared_ptr<Channel> ch)
     }
     return 0;
 }
+
+#endif // WITH_RUST_CORE

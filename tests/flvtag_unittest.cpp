@@ -3,6 +3,10 @@
 #include "flv.h"
 #include "sstream.h"
 
+#ifndef WITH_RUST_CORE
+// FLVTag は C++ 版の解析器にだけある。Rust 版 (WITH_RUST_CORE) のテストは
+// peercast-rs/src/media/flv.rs にある。
+
 class FLVTagFixture : public ::testing::Test {
 public:
     FLVTagFixture()
@@ -70,3 +74,5 @@ TEST_F(FLVTagFixture, timestamp)
     ASSERT_FALSE(tag.isKeyFrame());
     ASSERT_EQ(FLVTag::T_SCRIPT, tag.type);
 }
+
+#endif // WITH_RUST_CORE

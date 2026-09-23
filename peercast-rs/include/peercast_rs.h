@@ -184,6 +184,87 @@ int pcrs_xml_parse_attributes(const uint8_t *s, size_t n, pcrs_buf *data, size_t
 /* 0 成功、-1 "Too much binary data" */
 int pcrs_xml_binary_content(const uint8_t *s, size_t n, size_t size, pcrs_buf *out);
 
+/* メディアコンテナの解析 (core/common の flv, mkv, ogg, mp3, mp4)。
+ * 解析器は pcrs_media_host を通してだけ、入力の Stream とチャンネル (Channel) を触る。
+ * int を返すコールバックは、成功で 0、C++ の例外で中断したら -1 (例外は ctx に保存しておき、
+ * Rust の関数から戻ったあとで投げ直す)。ほかのコールバックは例外を投げないこと。 */
+enum {
+    PCRS_MEDIA_MP3 = 1,
+    PCRS_MEDIA_FLV = 2,
+    PCRS_MEDIA_OGG = 3,
+    PCRS_MEDIA_MKV = 4,
+    PCRS_MEDIA_MP4 = 5
+};
+
+/* pcrs_media_host.head の kind */
+enum {
+    /* FLV, MP4: rawData.init()、streamIndex++ のあと、data を headPack に入れて位置 0 で送り、
+     * streamPos をその長さにする */
+    PCRS_HEAD_NEW_STREAM = 0,
+    /* MKV: streamIndex++、rawData.init()、streamPos = 0 のあと、data の新しいパケットを
+     * headPack に代入してから送り、streamPos を進める */
+    PCRS_HEAD_MKV = 1,
+    /* OGG: head_append で溜めた headPack を現在の streamPos の位置で送る
+     * (startTime を今の時刻にし、streamPos を進める)。data は使わない */
+    PCRS_HEAD_OGG = 2
+};
+
+/* ログの重要度 */
+enum { PCRS_LOG_TRACE = 0, PCRS_LOG_DEBUG = 1, PCRS_LOG_INFO = 2, PCRS_LOG_WARN = 3, PCRS_LOG_ERROR = 4 };
+
+typedef struct pcrs_track_field {
+    const uint8_t *ptr;
+    size_t len;
+    bool present;               /* false なら値なし (ptr は NULL) */
+} pcrs_track_field;
+
+/* OGG Vorbis のコメントから取った曲の情報 (ChanInfo::track) */
+typedef struct pcrs_track {
+    pcrs_track_field artist, title, genre, contact, album;
+} pcrs_track;
+
+typedef struct pcrs_media_host {
+    void *ctx;
+    const pcrs_reader *reader;                                      /* 入力の Stream */
+    int (*ready)(void *ctx, bool *out);                             /* in.readReady() */
+    /* in.stat.bytesInPerSecAvg() / 1000 * 8 が info.bitrate を超えていれば updateInfo で更新 */
+    int (*raise_bitrate)(void *ctx);
+    /* T_DATA のパケットを streamPos の位置で newPacket し、streamPos を進める。
+     * read_delay なら newPacket のあとに checkReadDelay(len) を呼ぶ */
+    int (*packet)(void *ctx, const uint8_t *data, size_t len, bool cont, bool read_delay);
+    int (*head)(void *ctx, int kind, const uint8_t *data, size_t len); /* PCRS_HEAD_* */
+    uint32_t (*head_len)(void *ctx);                                /* headPack.len */
+    void (*head_clear)(void *ctx);                                  /* headPack.len = 0 */
+    /* headPack の後ろに付け足す (呼ぶ側が MAX_DATALEN 未満に収まることを確かめる) */
+    int (*head_append)(void *ctx, const uint8_t *data, size_t len);
+    int (*set_bitrate)(void *ctx, int32_t bitrate);                 /* info.bitrate を updateInfo で */
+    /* info.bitrate を直接書き換え、ogm なら info.contentType を T_OGM にする */
+    void (*ogg_set_info)(void *ctx, int32_t bitrate, bool ogm);
+    /* info.track を空にしてから値を入れ (String::T_ASCII から T_UNICODE に変換)、updateInfo */
+    int (*set_track)(void *ctx, const pcrs_track *track);
+    int (*mp3_metadata)(void *ctx, const uint8_t *buf, size_t len); /* processMp3Metadata (NUL 終端) */
+    int32_t (*icy_meta_interval)(void *ctx);
+    bool (*read_delay)(void *ctx);
+    double (*dtime)(void *ctx);                                     /* sys->getDTime() */
+    uint32_t (*time)(void *ctx);                                    /* sys->getTime() */
+    void (*sleep)(void *ctx, int32_t ms);                           /* sys->sleep() */
+    void (*sleep_until)(void *ctx, double t);                       /* Channel::sleepUntil */
+    void (*log)(void *ctx, int level, const uint8_t *msg, size_t len);
+} pcrs_media_host;
+
+typedef struct pcrs_media pcrs_media;
+
+/* 解析器を作る (kind は PCRS_MEDIA_*、知らない値なら NULL)。pcrs_media_free で解放する */
+pcrs_media *pcrs_media_new(int kind);
+void pcrs_media_free(pcrs_media *p);
+/* readHeader / readPacket。0 成功、1 コールバックの中断、
+ * 2 エラー (StreamException のメッセージを *err に書く。受け取った側が pcrs_buf_free で返す) */
+int pcrs_media_read_header(pcrs_media *p, const pcrs_media_host *host, pcrs_buf *err);
+int pcrs_media_read_packet(pcrs_media *p, const pcrs_media_host *host, pcrs_buf *err);
+/* FLVStream::readMetaData。onMetaData でビットレートがあれば 1 (*bitrate に書く)、なければ 0、
+ * 形式が壊れていれば 2 (理由を *err に書く) */
+int pcrs_flv_read_meta_data(const uint8_t *data, size_t n, int32_t *bitrate, pcrs_buf *err);
+
 #ifdef __cplusplus
 }
 #endif
