@@ -587,6 +587,26 @@ void pcrs_hits_same_hosts(const pcrs_hit *hits, size_t n, const pcrs_hit *h, boo
 /* addHit。-2 自分のホスト、-1 del のものを消して先頭に加える、0 以上ならその番号を書き換える */
 int pcrs_hits_add(const pcrs_hit *hits, size_t n, const pcrs_hit *h, const uint8_t *my_sid, bool *del);
 
+/* ---- hostgraph (core/common/hostgraph.cpp の HostGraph のコンストラクター) ---- */
+typedef struct pcrs_graph_node {
+    pcrs_host rhost[2], uphost;
+} pcrs_graph_node;
+/* nodes は自分、続いてリストの順。ID (rhost[0], rhost[1]) の順に、採った番号 (同じ ID なら
+   最後のもの) を index に、親の位置 (根なら -1) を parent に書き、その数を返す */
+size_t pcrs_hostgraph_build(const pcrs_graph_node *nodes, size_t n, size_t *index, ptrdiff_t *parent);
+
+/* ---- uptest (core/common/uptest.cpp の通信しない部分) ---- */
+/* readInfo。0 なら out に UptestInfo の 14 個の欄を順に NUL で区切って入れる。失敗なら 3〜6
+   (pcrs_xml_read と同じ)、7 "Too many attributes"、8 "Bad tag value"、9 ノードか属性がない */
+int pcrs_uptest_read_info(const uint8_t *body, size_t n, pcrs_buf *out);
+pcrs_buf pcrs_uptest_post_url(const uint8_t *addr, size_t addr_len, const uint8_t *port, size_t port_len,
+                              const uint8_t *object, size_t object_len);
+bool pcrs_uptest_is_ready(int status, uint32_t last_tried_at, uint32_t now);
+const char *pcrs_uptest_text_status(int status);  /* 知らない値なら NULL */
+/* addURL の判断。加えてよければ NULL、だめなら理由 (静的な文字列) */
+const char *pcrs_uptest_check_add_url(bool valid, const uint8_t *scheme, size_t scheme_len,
+                                      const uint8_t *url, size_t url_len, const pcrs_bytes *existing, size_t count);
+
 #ifdef __cplusplus
 }
 #endif

@@ -2287,6 +2287,8 @@ static C_STRS: &[&[u8]] = &[
     b"audio/mpeg\0", b"application/x-ogg\0", b"video/quicktime\0", b"video/mpeg\0", b"video/x-flv\0",
     b"video/x-matroska\0", b"video/webm\0", b"video/mp4\0", b"application/octet-stream\0", b"HTTP\0",
     b"FILE\0", b"PCP\0", b"RTMP\0", b"PIPE\0", b".ram\0", b".m3u\0",
+    // uptest
+    b"Untried\0", b"Success\0", b"Error\0", b"invalid URL\0", b"unsupported protocol\0", b"URL already exists\0",
 ];
 
 fn c_static(s: &'static [u8]) -> *const std::ffi::c_char {
@@ -2713,6 +2715,168 @@ pub unsafe extern "C" fn pcrs_hits_add(hits: *const CHit, n: usize, h: *const CH
             chanhit::Add::Own => -2,
             chanhit::Add::New => -1,
             chanhit::Add::Replace(i) => i as i32,
+        }
+    }
+}
+
+// ---- hostgraph (core/common/hostgraph.cpp の HostGraph のコンストラクター) ----
+
+use crate::hostgraph;
+
+/// `HostGraph` で使う `ChanHit` の欄 (C の `pcrs_graph_node`)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CGraphNode {
+    pub rhost: [CHost; 2],
+    pub uphost: CHost,
+}
+
+/// `HostGraph::HostGraph`。ID の順に、採った番号を `index` に、親 (の `index` の中の位置、
+/// 根なら -1) を `parent` に書き、その数を返す。
+///
+/// # Safety
+/// `nodes` は `n` 個読め、`index` と `parent` は `n` 個書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_hostgraph_build(
+    nodes: *const CGraphNode,
+    n: usize,
+    index: *mut usize,
+    parent: *mut isize,
+) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    // SAFETY: 関数の Safety 節
+    let (nodes, index, parent) = unsafe {
+        (
+            std::slice::from_raw_parts(nodes, n),
+            std::slice::from_raw_parts_mut(index, n),
+            std::slice::from_raw_parts_mut(parent, n),
+        )
+    };
+    let nodes: Vec<hostgraph::Node> = nodes
+        .iter()
+        .map(|c| hostgraph::Node { rhost: [c.rhost[0].into(), c.rhost[1].into()], uphost: c.uphost.into() })
+        .collect();
+    let g = hostgraph::build(&nodes);
+    for (k, e) in g.iter().enumerate() {
+        index[k] = e.index;
+        parent[k] = e.parent.map_or(-1, |p| p as isize);
+    }
+    g.len()
+}
+
+// ---- uptest (core/common/uptest.cpp の通信しない部分) ----
+
+use crate::uptest;
+
+/// `UptestEndpoint::readInfo`。成功なら 0 で、`out` に `UptestInfo` の 14 個の欄を順に、
+/// それぞれ NUL で終えて並べる。失敗なら 3〜6 (`pcrs_xml_read` と同じ)、7 "Too many
+/// attributes"、8 "Bad tag value"、9 ノードか属性がない。
+///
+/// # Safety
+/// `body` は `n` バイト読め、`out` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_uptest_read_info(body: *const u8, n: usize, out: *mut PcrsBuf) -> i32 {
+    use crate::xml::{AttrError, Error};
+    // SAFETY: 関数の Safety 節
+    match uptest::read_info(unsafe { input(body, n) }) {
+        Ok(info) => {
+            let mut v = Vec::new();
+            for f in &info {
+                v.extend_from_slice(f);
+                v.push(0);
+            }
+            // SAFETY: 関数の Safety 節
+            unsafe { *out = into_buf(v) };
+            0
+        }
+        Err(uptest::ReadError::Xml(e)) => match e {
+            Error::Abort => 1,
+            Error::Callback => 2,
+            Error::TagTooLong => 3,
+            Error::ContentTooBig => 4,
+            Error::NotXml => 5,
+            Error::UnexpectedEndTag => 6,
+        },
+        Err(uptest::ReadError::Attr(AttrError::TooMany)) => 7,
+        Err(uptest::ReadError::Attr(AttrError::BadValue)) => 8,
+        Err(uptest::ReadError::Null) => 9,
+    }
+}
+
+/// `UptestInfo::postURL`
+///
+/// # Safety
+/// それぞれの先頭ポインタは、その長さだけ読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_uptest_post_url(
+    addr: *const u8,
+    addr_len: usize,
+    port: *const u8,
+    port_len: usize,
+    object: *const u8,
+    object_len: usize,
+) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    unsafe { into_buf(uptest::post_url(input(addr, addr_len), input(port, port_len), input(object, object_len))) }
+}
+
+/// `UptestEndpoint::isReady`
+#[no_mangle]
+pub extern "C" fn pcrs_uptest_is_ready(status: i32, last_tried_at: u32, now: u32) -> bool {
+    uptest::is_ready(status, last_tried_at, now)
+}
+
+/// `textStatus`。知らない値なら NULL。
+#[no_mangle]
+pub extern "C" fn pcrs_uptest_text_status(status: i32) -> *const std::ffi::c_char {
+    uptest::text_status(status).map_or(std::ptr::null(), c_static)
+}
+
+/// `UptestServiceRegistry::addURL` の判断。加えてよければ NULL、だめなら理由。
+///
+/// # Safety
+/// `scheme` と `url` はその長さだけ読め、`existing` は `count` 個の有効な `pcrs_bytes` を
+/// 指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_uptest_check_add_url(
+    valid: bool,
+    scheme: *const u8,
+    scheme_len: usize,
+    url: *const u8,
+    url_len: usize,
+    existing: *const CBytes,
+    count: usize,
+) -> *const std::ffi::c_char {
+    // SAFETY: 関数の Safety 節
+    let (scheme, url, existing) = unsafe {
+        let list: &[CBytes] = if count == 0 { &[] } else { std::slice::from_raw_parts(existing, count) };
+        (
+            input(scheme, scheme_len),
+            input(url, url_len),
+            list.iter().map(|b| input(b.ptr, b.len)).collect::<Vec<_>>(),
+        )
+    };
+    match uptest::check_add_url(valid, scheme, url, &existing) {
+        Ok(()) => std::ptr::null(),
+        Err(msg) => c_static(msg),
+    }
+}
+
+#[cfg(test)]
+mod tests_7c {
+    use super::*;
+
+    #[test]
+    fn uptest_strings_are_static() {
+        for st in 0..3 {
+            c_static(uptest::text_status(st).unwrap());
+        }
+        for (valid, scheme, url) in [(false, &b"http"[..], &b"a"[..]), (true, b"ftp", b"a"), (true, b"http", b"a")] {
+            if let Err(m) = uptest::check_add_url(valid, scheme, url, &[b"a"]) {
+                c_static(m);
+            }
         }
     }
 }

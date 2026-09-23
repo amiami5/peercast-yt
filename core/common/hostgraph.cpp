@@ -19,6 +19,59 @@
 
 using json = nlohmann::json;
 
+#ifdef WITH_RUST_CORE
+#include <cstring>
+#include "peercast_rs.h"
+
+static pcrs_host rsHost(const Host& h)
+{
+    pcrs_host r;
+    in6_addr a = h.ip.serialize();
+    memcpy(r.ip, a.s6_addr, 16);
+    r.port = h.port;
+    return r;
+}
+
+// どのホストをどのホストの下に置くかは Rust (peercast-rs の src/hostgraph.rs) が決める。
+HostGraph::HostGraph(const ChanHit& self, ChanHitList *hitList)
+{
+    if (hitList == nullptr)
+        throw std::invalid_argument("hitList");
+
+    std::vector<const ChanHit*> hits = { &self };
+    for (auto p = hitList->hit;
+         p;
+         p = p->next)
+    {
+        LOG_DEBUG("HostGraph: %s", p->rhost[0].str().c_str());
+        hits.push_back(p.get());
+    }
+
+    std::vector<pcrs_graph_node> nodes;
+    for (auto h : hits)
+        nodes.push_back({ { rsHost(h->rhost[0]), rsHost(h->rhost[1]) }, rsHost(h->uphost) });
+
+    std::vector<size_t> index(hits.size());
+    std::vector<ptrdiff_t> parent(hits.size());
+    size_t count = pcrs_hostgraph_build(nodes.data(), nodes.size(), index.data(), parent.data());
+
+    std::vector<ID> ids;
+    for (size_t k = 0; k < count; k++)
+    {
+        ids.push_back(id(*hits[index[k]]));
+        m_hit[ids[k]] = *hits[index[k]];
+        if (index[k] != 0)
+            m_hit[ids[k]].next = nullptr;
+    }
+    for (size_t k = 0; k < count; k++)
+    {
+        if (parent[k] < 0)
+            m_roots.push_back(ids[k]);
+        else
+            m_children[ids[parent[k]]].push_back(ids[k]);
+    }
+}
+#else
 HostGraph::HostGraph(const ChanHit& self, ChanHitList *hitList)
 {
     if (hitList == nullptr)
@@ -89,6 +142,7 @@ HostGraph::HostGraph(const ChanHit& self, ChanHitList *hitList)
         }
     }
 }
+#endif // WITH_RUST_CORE
 
 std::pair<Host, Host> HostGraph::id(const ChanHit& hit)
 {

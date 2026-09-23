@@ -7,6 +7,9 @@
 #include "xml.h"
 #include "sstream.h"
 #include <algorithm>
+#ifdef WITH_RUST_CORE
+#include "rustbridge.h"
+#endif
 
 // -------- class UptestServiceRegistry --------
 
@@ -15,12 +18,27 @@ std::pair<bool,std::string> UptestServiceRegistry::addURL(const std::string& url
     std::lock_guard<std::recursive_mutex> cs(m_lock);
 
     URI uri(url);
+#ifdef WITH_RUST_CORE
+    // 加えてよいかは Rust (peercast-rs の src/uptest.rs) が決める。
+    bool valid = uri.isValid();
+    std::string scheme = valid ? uri.scheme() : "";
+    std::vector<pcrs_bytes> existing;
+    for (auto& e : m_providers)
+        existing.push_back({ reinterpret_cast<const uint8_t*>(e.url.data()), e.url.size() });
+    const char* error = pcrs_uptest_check_add_url(valid,
+                                                  reinterpret_cast<const uint8_t*>(scheme.data()), scheme.size(),
+                                                  reinterpret_cast<const uint8_t*>(url.data()), url.size(),
+                                                  existing.data(), existing.size());
+    if (error)
+        return std::make_pair(false, error);
+#else
     if (!uri.isValid())
         return std::make_pair(false, "invalid URL");
     if (uri.scheme() != "http")
         return std::make_pair(false, "unsupported protocol");
     if (0 < std::count_if(m_providers.begin(), m_providers.end(), [url](UptestEndpoint& e) { return e.url == url; }))
         return std::make_pair(false, "URL already exists");
+#endif
 
     m_providers.push_back(UptestEndpoint(url));
     return std::make_pair(true, "");
@@ -69,6 +87,12 @@ void UptestServiceRegistry::clear()
 
 static std::string textStatus(int status)
 {
+#ifdef WITH_RUST_CORE
+    const char* s = pcrs_uptest_text_status(status);
+    if (!s)
+        abort();
+    return s;
+#else
     switch (status)
     {
     case UptestEndpoint::kUntried:
@@ -80,6 +104,7 @@ static std::string textStatus(int status)
     default:
         abort();
     }
+#endif
 }
 
 amf0::Value UptestServiceRegistry::getState()
@@ -145,7 +170,11 @@ std::pair<bool,std::string> UptestServiceRegistry::getXML(int index, std::string
 
 bool UptestEndpoint::isReady()
 {
+#ifdef WITH_RUST_CORE
+    return pcrs_uptest_is_ready(status, lastTriedAt, sys->getTime());
+#else
     return (status == kUntried) || (sys->getTime() - lastTriedAt > kXmlTryInterval);
+#endif
 }
 
 void UptestEndpoint::update()
@@ -206,6 +235,41 @@ std::string UptestEndpoint::download(const std::string& url)
                      __LINE__, __FILE__))                               \
      : (p))
 
+#ifdef WITH_RUST_CORE
+// yp4g.xml は Rust (peercast-rs の src/uptest.rs) が読む。
+UptestInfo UptestEndpoint::readInfo(const std::string& body)
+{
+    rustbridge::RustBuf out;
+    switch (pcrs_uptest_read_info(reinterpret_cast<const uint8_t*>(body.data()), body.size(), out.out()))
+    {
+    case 0: break;
+    case 3: throw StreamException("Tag too long");
+    case 4: throw StreamException("Content too big");
+    case 5: throw StreamException("Not XML document");
+    case 6: throw StreamException("Unexpected end tag");
+    case 7: throw StreamException("Too many attributes");
+    case 8: throw StreamException("Bad tag value");
+    default:
+        throw std::runtime_error(str::format("non-null assertion failed on line %d in file %s",
+                                             __LINE__, __FILE__));
+    }
+
+    UptestInfo info;
+    std::string* fields[] = {
+        &info.name, &info.ip, &info.port_open, &info.speed, &info.over, &info.checkable, &info.remain,
+        &info.addr, &info.port, &info.object, &info.post_size, &info.limit, &info.interval, &info.enabled,
+    };
+    std::string s = out.str();
+    size_t pos = 0;
+    for (auto f : fields)
+    {
+        size_t end = s.find('\0', pos);
+        *f = s.substr(pos, end - pos);
+        pos = end + 1;
+    }
+    return info;
+}
+#else
 UptestInfo UptestEndpoint::readInfo(const std::string& body)
 {
     UptestInfo info;
@@ -238,6 +302,7 @@ UptestInfo UptestEndpoint::readInfo(const std::string& body)
 
     return info;
 }
+#endif
 
 std::string UptestEndpoint::generateRandomBytes(size_t size)
 {
@@ -318,5 +383,12 @@ std::pair<bool,std::string> UptestEndpoint::takeSpeedtest()
 
 std::string UptestInfo::postURL()
 {
+#ifdef WITH_RUST_CORE
+    rustbridge::RustBuf url(pcrs_uptest_post_url(reinterpret_cast<const uint8_t*>(addr.data()), addr.size(),
+                                                 reinterpret_cast<const uint8_t*>(port.data()), port.size(),
+                                                 reinterpret_cast<const uint8_t*>(object.data()), object.size()));
+    return url.str();
+#else
     return str::format("http://%s:%s%s", addr.c_str(), port.c_str(), object.c_str());
+#endif
 }

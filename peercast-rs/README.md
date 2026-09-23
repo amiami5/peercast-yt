@@ -493,6 +493,31 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   選ばない。
 * `ChanHit::init` は `direct` を true にしたあと 0 にしている (結果は false)。
 
+## 段階7c で追加したもの (リレーツリーと帯域測定)
+
+* `src/hostgraph.rs`: `HostGraph` (`core/common/hostgraph.cpp`) のコンストラクターで、どのホストを
+  どのホストの下に置くか (トラッカー、WAN の中継、LAN の中継の順に親を探す) を決める。C++ は
+  自分とリストのホストを並べて渡し、返った順 (`std::map` を回す順) と親の位置から `m_hit`、
+  `m_roots`、`m_children` を作る。JSON を組み立てる `toRelayTree` / `getRelayTree` は C++ 側。
+* `src/uptest.rs`: 帯域測定 (`core/common/uptest.cpp`) の通信しない部分。yp4g.xml の読み取り
+  (`UptestEndpoint::readInfo`。`XML` の木の組み立てと `findNode` / `findAttr` も Rust で行う)、
+  `UptestInfo::postURL`、`isReady`、状態の文字列、`addURL` で加えてよいかの判断。URL が正しいか
+  (`URI`、LUrlParser) と、ダウンロード、POST、ロックは C++ 側。
+* `src/reader.rs` の `SliceReader` (バイト列から読む `Reader`) をテスト以外でも使えるようにした。
+
+### C++ 版との違い
+
+* `readInfo` でノードか属性が見つからなかったときの例外の文言 "non-null assertion failed on
+  line N in file F" の N は、C++ 版では見つからなかった項目の行、Rust 版では橋渡しの行 (どの項目
+  でも同じ)。
+* `isReady` は、状態が `kUntried` のときも `sys->getTime()` を呼ぶ (返り値は使わない)。
+
+### C++ 版と同じにしたもの (直していない)
+
+* `findAttr` は名前の先頭が一致すれば見つかったことにする (`port` で `port_open` も見つかる)。
+  大文字小文字は問わない。
+* 最上位の要素が 2 つ以上ある文書では、最後のものだけが根になる (C++ 版は前の根を解放しない)。
+
 ## 差分テスト
 
 ```sh
@@ -518,6 +543,7 @@ make
 ./diff_chanpacket               # ChanPacketBuffer: 操作の列 2 万本 (約290万回の比較)
 ./diff_chandir                  # index.txt の解釈と一覧の URL・時間の文字列 (約120万件)
 ./diff_chanhit                  # ChanInfo と ChanHit / ChanHitList: 乱数の一覧への操作 (約265万件)
+./diff_hostgraph_uptest         # HostGraph と帯域測定の yp4g.xml の読み取りなど (約70万件)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした

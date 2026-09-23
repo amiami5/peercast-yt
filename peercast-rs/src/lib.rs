@@ -19,6 +19,7 @@ pub mod entities;
 #[allow(unsafe_code)]
 pub mod ffi;
 pub mod gnuid;
+pub mod hostgraph;
 pub mod http;
 pub mod inspect;
 pub mod jis;
@@ -32,6 +33,7 @@ pub mod reader;
 pub mod strtod;
 pub mod strutil;
 pub mod template;
+pub mod uptest;
 pub mod url;
 pub mod utf8;
 pub mod xml;

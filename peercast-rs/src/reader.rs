@@ -22,15 +22,13 @@ pub trait Reader {
     fn eof(&mut self) -> Result<bool, Abort>;
 }
 
-/// テスト用: バイト列から読む。C++ の `MemoryStream` と同じく、データが尽きると
+/// バイト列から読む。C++ の `MemoryStream` と同じく、データが尽きると
 /// `read_char` と `read_some` は 0 (空) を返し、`read_exact` は中断する。
-#[cfg(test)]
 pub struct SliceReader<'a> {
     pub data: &'a [u8],
     pub pos: usize,
 }
 
-#[cfg(test)]
 impl Reader for SliceReader<'_> {
     fn read_char(&mut self) -> Result<u8, Abort> {
         match self.data.get(self.pos) {
