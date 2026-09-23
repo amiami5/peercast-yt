@@ -14,6 +14,7 @@ peercast.ini
 ui/html/
 **/gmon.out
 **/*.o
+**/*.d
 **/*.a
 .clang-format
 GPATH
