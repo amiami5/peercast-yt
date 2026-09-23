@@ -518,6 +518,39 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   大文字小文字は問わない。
 * 最上位の要素が 2 つ以上ある文書では、最後のものだけが根になる (C++ 版は前の根を解放しない)。
 
+## 段階7d で追加したもの (チャンネルと ChanMgr の、スレッドやソケットに触らない部分)
+
+`src/channel.rs` に、`Channel` (`core/common/channel.cpp`) と `ChanMgr` (`chanmgr.cpp`) のうち
+次のものを移した。
+
+* `processMp3Metadata`: ICY のメタデータ (`StreamTitle='...';StreamUrl='...';`) の解釈。値を
+  `String` に入れること (`setUnquote`、`convertTo`) と `updateInfo` は C++ 側。
+* atom を書く側: `writeTrackerUpdateAtom` と、`updateInfo` で中継先へ送る atom。自分の
+  `ChanHit` (`initLocal`) を作るのと、パケットを送るのは C++ 側。
+* `renderHexDump`、`getBufferString` の文字列。
+* `checkReadDelay` の待ち時間、`ChanMgr::authToken`、`ChanMgr::closeOldestIdle` で止める
+  チャンネルの選び方。
+* `ChanInfo` と `ChanHit` を Rust に渡す形にする関数を `core/common/rustchan.h` にまとめた
+  (`chaninfo.cpp`、`chanhit.cpp`、`hostgraph.cpp`、`channel.cpp` で使う)。
+
+チャンネルのスレッド (`Channel::stream`、`PeercastSource::stream`、`readStream`) と、チャンネルと
+ヒットリストの連結リストの管理 (`ChanMgr` の `find*`、`clearDeadHits` など) は、ソケットと
+スレッドと一緒に段階 9 で扱う。`createXML` と `getState` は段階 8 で扱う。
+
+### C++ 版との違い
+
+* `processMp3Metadata` は、受け取った文字列を書き換えない (C++ 版は区切りの `=` と `;` を NUL に
+  書き換えていた)。呼び出し元 (`mp3.cpp`) はそのあと文字列を使わない。
+* `getBufferString` で、受信の速さが 0 のときの秒数は、C++ 版では x86 で `-nan`、ARM で `nan`
+  (0.0 / 0.0 の NaN の符号が CPU で違う)。Rust 版は CPU によらず `-nan`。
+* `getBufferString` のパケットの長さの平均は、C++ 版では合計 (int) を `size_t` で割る。Rust 版は
+  64 ビットの `size_t` として計算する (32 ビットの CPU では、合計が 2GB を超えたとき C++ 版と
+  違う。バッファはそれよりずっと小さい)。
+* `checkReadDelay` は、C++ 版では `bitrate * 1024` が桁あふれすると未定義の動作で、2^22 の倍数の
+  ビットレートでは 0 で割る。Rust 版は桁あふれを 2 の補数で扱い、割る数が 0 なら待たない。
+  `readDelay` はファイルを流すときだけ使う。
+* `writeTrackerUpdateAtom` などは atom をまとめて 1 回で書く (段階 7b と同じ)。
+
 ## 差分テスト
 
 ```sh
@@ -544,6 +577,7 @@ make
 ./diff_chandir                  # index.txt の解釈と一覧の URL・時間の文字列 (約120万件)
 ./diff_chanhit                  # ChanInfo と ChanHit / ChanHitList: 乱数の一覧への操作 (約265万件)
 ./diff_hostgraph_uptest         # HostGraph と帯域測定の yp4g.xml の読み取りなど (約70万件)
+./diff_channel                   # Channel と ChanMgr の移した部分: 乱数のチャンネルへの操作 (約40万件)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした

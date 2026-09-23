@@ -229,6 +229,35 @@ mod tests {
         assert!(matches!(read_info(b"<a b=c>"), Err(ReadError::Attr(_))));
     }
 
+    /// 変異させた文書でパニックしないこと
+    #[test]
+    fn fuzz_no_panic() {
+        let mut rng = 0x9e3779b97f4a7c15u64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        for _ in 0..20000 {
+            let mut d = DOC.to_vec();
+            for _ in 0..(next() % 8) {
+                let p = (next() as usize) % d.len();
+                match next() % 3 {
+                    0 => d[p] = next() as u8,
+                    1 => d.truncate(p),
+                    _ => d.insert(p, [b'<', b'>', b'/', b'=', b'"', 0][(next() % 6) as usize]),
+                }
+                if d.is_empty() {
+                    break;
+                }
+            }
+            let _ = read_info(&d);
+        }
+        let _ = read_info(&vec![b'a'; 9000]);
+        let _ = read_info(&[&b"<"[..], &vec![b'a'; 9000], b" x=\"1\"/>"].concat());
+    }
+
     #[test]
     fn misc() {
         assert!(is_ready(UNTRIED, 0, 0));

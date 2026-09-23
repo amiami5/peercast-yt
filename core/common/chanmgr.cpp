@@ -4,6 +4,9 @@
 #include "peercast.h"
 #include "version2.h" // PCP_BROADCAST_FLAGS
 #include "md5.h"
+#ifdef WITH_RUST_CORE
+#include "rustbridge.h"
+#endif
 
 // -----------------------------------
 void ChanMgr::quit()
@@ -57,6 +60,26 @@ void ChanMgr::closeIdles()
 }
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+// どのチャンネルを止めるかは Rust (peercast-rs の src/channel.rs) が決める。
+void ChanMgr::closeOldestIdle()
+{
+    std::vector<std::shared_ptr<Channel>> chs;
+    std::vector<uint32_t> times;
+    std::unique_ptr<bool[]> idle;
+    for (auto ch = channel; ch; ch = ch->next)
+        chs.push_back(ch);
+    idle.reset(new bool[chs.size() + 1]());
+    for (size_t i = 0; i < chs.size(); i++)
+    {
+        idle[i] = chs[i]->isActive() && chs[i]->thread.active() && chs[i]->status == Channel::S_IDLE;
+        times.push_back(chs[i]->lastIdleTime);
+    }
+    ptrdiff_t i = pcrs_chanmgr_oldest_idle(idle.get(), times.data(), chs.size());
+    if (i >= 0)
+        chs[i]->thread.shutdown();
+}
+#else
 void ChanMgr::closeOldestIdle()
 {
     unsigned int idleTime = (unsigned int)-1;
@@ -78,6 +101,7 @@ void ChanMgr::closeOldestIdle()
     if (oldest)
         oldest->thread.shutdown();
 }
+#endif
 
 // -----------------------------------
 void ChanMgr::closeAll()
@@ -749,5 +773,9 @@ std::string ChanMgr::authSecret(const GnuID& id)
 // --------------------------------------------------
 std::string ChanMgr::authToken(const GnuID& id)
 {
+#ifdef WITH_RUST_CORE
+    return rustbridge::RustBuf(pcrs_chanmgr_auth_token(broadcastID.id, id.id)).str();
+#else
     return md5::hexdigest(authSecret(id));
+#endif
 }

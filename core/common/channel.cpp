@@ -38,6 +38,10 @@
 #include "chandir.h"
 
 #include "mp3.h"
+#ifdef WITH_RUST_CORE
+#include "rustbridge.h"
+#include "rustchan.h"
+#endif
 #include "ogg.h"
 #include "flv.h"
 #include "mkv.h"
@@ -335,11 +339,18 @@ void Channel::sleepUntil(double time)
 // -----------------------------------
 void Channel::checkReadDelay(unsigned int len)
 {
+#ifdef WITH_RUST_CORE
+    // 待ち時間は Rust (peercast-rs の src/channel.rs) が決める。
+    unsigned int time;
+    if (pcrs_channel_read_delay(readDelay, len, info.bitrate, &time))
+        sys->sleep(time);
+#else
     if (readDelay && info.bitrate > 0)
     {
         unsigned int time = (len*1000)/((info.bitrate*1024)/8);
         sys->sleep(time);
     }
+#endif
 }
 
 // -----------------------------------
@@ -859,6 +870,7 @@ void    Channel::startICY(std::shared_ptr<ClientSocket> cs, SRC_TYPE st)
 }
 
 // -----------------------------------
+#ifndef WITH_RUST_CORE
 static char *nextMetaPart(char *str, char delim)
 {
     while (*str)
@@ -872,8 +884,32 @@ static char *nextMetaPart(char *str, char delim)
     }
     return nullptr;
 }
+#endif
 
 // -----------------------------------
+#ifdef WITH_RUST_CORE
+// メタデータの解釈は Rust (peercast-rs の src/channel.rs)。
+void Channel::processMp3Metadata(char *str)
+{
+    ChanInfo newInfo = info;
+
+    size_t tpos = 0, tlen = 0, upos = 0, ulen = 0;
+    int found = pcrs_channel_mp3_metadata(reinterpret_cast<const uint8_t*>(str), strlen(str),
+                                          &tpos, &tlen, &upos, &ulen);
+    if (found & 1)
+    {
+        newInfo.track.title.setUnquote(std::string(str + tpos, tlen).c_str(), String::T_ASCII);
+        newInfo.track.title.convertTo(String::T_UNICODE);
+    }
+    if (found & 2)
+    {
+        newInfo.track.contact.setUnquote(std::string(str + upos, ulen).c_str(), String::T_ASCII);
+        newInfo.track.contact.convertTo(String::T_UNICODE);
+    }
+
+    updateInfo(newInfo);
+}
+#else
 void Channel::processMp3Metadata(char *str)
 {
     ChanInfo newInfo = info;
@@ -902,6 +938,7 @@ void Channel::processMp3Metadata(char *str)
 
     updateInfo(newInfo);
 }
+#endif
 
 // -----------------------------------
 XML::Node *ChanHit::createXML()
@@ -1013,6 +1050,14 @@ void Channel::writeTrackerUpdateAtom(AtomStream& atom)
                   oldp, newp, canAddRelay(), this->sourceHost.host, (ipVersion == IP_V6));
     hit.tracker = true;
 
+#ifdef WITH_RUST_CORE
+    // atom の組み立ては Rust (peercast-rs の src/channel.rs)。
+    pcrs_chan_info v = rsInfo(info);
+    pcrs_hit h = rsHit(hit);
+    rustbridge::RustBuf b(pcrs_channel_tracker_update_atom(&v, &h, servMgr->sessionID.id, chanMgr->broadcastID.id));
+    std::string bytes = b.str();
+    atom.io.write(bytes.data(), bytes.size());
+#else
     atom.writeParent(PCP_BCST, 10);
         atom.writeChar(PCP_BCST_GROUP, PCP_BCST_GROUP_ROOT);
         atom.writeChar(PCP_BCST_HOPS, 0);
@@ -1028,6 +1073,7 @@ void Channel::writeTrackerUpdateAtom(AtomStream& atom)
             info.writeInfoAtoms(atom);
             info.writeTrackAtoms(atom);
         hit.writeAtoms(atom, info.id);
+#endif
 }
 
 // -----------------------------------
@@ -1102,6 +1148,12 @@ bool Channel::updateInfo(const ChanInfo &newInfo)
             MemoryStream mem(pack.data, sizeof(pack.data));
             AtomStream atom(mem);
 
+#ifdef WITH_RUST_CORE
+            pcrs_chan_info v = rsInfo(info);
+            rustbridge::RustBuf b(pcrs_channel_info_update_atom(&v, servMgr->sessionID.id));
+            std::string bytes = b.str();
+            atom.io.write(bytes.data(), bytes.size());
+#else
             atom.writeParent(PCP_BCST, 10);
                 atom.writeChar(PCP_BCST_HOPS, 0);
                 atom.writeChar(PCP_BCST_TTL, 7);
@@ -1116,6 +1168,7 @@ bool Channel::updateInfo(const ChanInfo &newInfo)
                     atom.writeBytes(PCP_CHAN_ID, info.id.id, 16);
                     info.writeInfoAtoms(atom);
                     info.writeTrackAtoms(atom);
+#endif
 
             pack.len = mem.pos;
             pack.type = ChanPacket::T_PCP;
@@ -1301,6 +1354,9 @@ void RawStream::readEnd(Stream &, std::shared_ptr<Channel>)
 // -----------------------------------
 std::string Channel::renderHexDump(const std::string& in)
 {
+#ifdef WITH_RUST_CORE
+    return rustbridge::RustBuf(pcrs_channel_hex_dump(reinterpret_cast<const uint8_t*>(in.data()), in.size())).str();
+#else
     std::string res;
     size_t i;
     for (i = 0; i < in.size()/16; i++)
@@ -1315,6 +1371,7 @@ std::string Channel::renderHexDump(const std::string& in)
         res += str::format("%-47s  %s\n", str::hexdump(line).c_str(), str::ascii_dump(line).c_str());
     }
     return res;
+#endif
 }
 
 // -----------------------------------
@@ -1356,6 +1413,15 @@ std::string Channel::getBufferString()
     // 統計情報と齟齬しない lastWriteTime を呼び出すために rawData を
     // ロックする。
     std::lock_guard<std::recursive_mutex> cs(rawData.lock);
+#ifdef WITH_RUST_CORE
+    // 文字列は Rust (peercast-rs の src/channel.rs) が組み立てる。
+    (void) time;
+    unsigned int now = sys->getTime();
+    auto stat = rawData.getStatistics();
+    buf = rustbridge::RustBuf(pcrs_channel_buffer_string(byterate, now, rawData.lastWriteTime,
+                                                         stat.packetLengths.data(), stat.packetLengths.size(),
+                                                         stat.continuations, stat.nonContinuations)).str();
+#else
     auto lastWritten = (double)sys->getTime() - rawData.lastWriteTime;
 
     if (lastWritten < 5)
@@ -1384,6 +1450,7 @@ std::string Channel::getBufferString()
                            *pmin, static_cast<int>(sum/lens.size()), *pmax);
     }
     buf += str::format("Last written: %s", time.str().c_str());
+#endif
 
     return buf;
 }

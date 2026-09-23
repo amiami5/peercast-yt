@@ -39,41 +39,10 @@ const ::String ChanInfo::T_PLS = "PLS";
 
 #ifdef WITH_RUST_CORE
 #include "rustbridge.h"
+#include "rustchan.h"
 
 // 種類と MIME タイプの表、検索の一致、update で写す欄の判断、atom の組み立ては Rust 版
 // (peercast-rs の chaninfo.rs)。欄を写すこと (String の代入) はここで行う。
-static pcrs_bytes rsBytes(const char* s)
-{
-    return { reinterpret_cast<const uint8_t*>(s), strlen(s) };
-}
-
-static void rsTrack(pcrs_chan_info& v, const TrackInfo& t)
-{
-    v.track_contact = rsBytes(t.contact.data);
-    v.track_title   = rsBytes(t.title.data);
-    v.track_artist  = rsBytes(t.artist.data);
-    v.track_album   = rsBytes(t.album.data);
-    v.track_genre   = rsBytes(t.genre.data);
-}
-
-static pcrs_chan_info rsInfo(const ChanInfo& i)
-{
-    pcrs_chan_info v = {};
-    v.name         = rsBytes(i.name.data);
-    v.content_type = rsBytes(i.contentType.data);
-    v.mime         = rsBytes(i.MIMEType.data);
-    v.ext          = rsBytes(i.streamExt.data);
-    v.desc         = rsBytes(i.desc.data);
-    v.genre        = rsBytes(i.genre.data);
-    v.url          = rsBytes(i.url.data);
-    v.comment      = rsBytes(i.comment.data);
-    rsTrack(v, i.track);
-    memcpy(v.id, i.id.id, 16);
-    memcpy(v.bcid, i.bcID.id, 16);
-    v.bitrate = i.bitrate;
-    v.status  = i.status;
-    return v;
-}
 #endif
 
 // -----------------------------------

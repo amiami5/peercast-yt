@@ -21,7 +21,7 @@ $(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs $(RUST)/src
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp diff_pcp_hs diff_chanpacket diff_chandir diff_chanhit diff_hostgraph_uptest *.o cxxcore.a
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp diff_pcp_hs diff_chanpacket diff_chandir diff_chanhit diff_hostgraph_uptest diff_channel *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -105,3 +105,11 @@ diff_chanhit: diff_chanhit.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
 
 diff_hostgraph_uptest: diff_hostgraph_uptest.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LOG_WRAP) $(CXXCORE_LIBS)
+
+# ログ (捨てる)、送るパケット (記録する)、通知 (捨てる) を横取りする
+CHANNEL_WRAP = $(LOG_WRAP) \
+               -Wl,--wrap=_ZN7ServMgr15broadcastPacketER10ChanPacketRK5GnuIDS4_S4_N7Servent4TYPEE \
+               -Wl,--wrap=_ZN8peercast13notifyMessageEN7ServMgr11NOTIFY_TYPEERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE
+
+diff_channel: diff_channel.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(CHANNEL_WRAP) $(CXXCORE_LIBS)

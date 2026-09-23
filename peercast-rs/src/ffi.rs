@@ -2864,6 +2864,145 @@ pub unsafe extern "C" fn pcrs_uptest_check_add_url(
     }
 }
 
+// ---- channel (core/common/channel.cpp と chanmgr.cpp の、スレッドやソケットに触らない部分) ----
+
+use crate::channel;
+
+/// `processMp3Metadata`。`StreamTitle` があれば 1、`StreamUrl` があれば 2 を足した値を返し、
+/// 値の位置と長さを書く。
+///
+/// # Safety
+/// `s` は `n` バイト読め、出力引数はどれも書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_channel_mp3_metadata(
+    s: *const u8,
+    n: usize,
+    title_pos: *mut usize,
+    title_len: *mut usize,
+    url_pos: *mut usize,
+    url_len: *mut usize,
+) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (t, u) = channel::mp3_metadata(unsafe { input(s, n) });
+    let mut r = 0;
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        if let Some((p, l)) = t {
+            *title_pos = p;
+            *title_len = l;
+            r |= 1;
+        }
+        if let Some((p, l)) = u {
+            *url_pos = p;
+            *url_len = l;
+            r |= 2;
+        }
+    }
+    r
+}
+
+/// `writeTrackerUpdateAtom` の atom
+///
+/// # Safety
+/// `info` と `hit` は有効なものを指し、`session_id` と `broadcast_id` は 16 バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_channel_tracker_update_atom(
+    info: *const CChanInfo,
+    hit: *const CHit,
+    session_id: *const u8,
+    broadcast_id: *const u8,
+) -> PcrsBuf {
+    let mut b = AtomBuf::default();
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        channel::tracker_update_atom(
+            &mut b,
+            &*(session_id as *const [u8; 16]),
+            &*(broadcast_id as *const [u8; 16]),
+            &info_of(info),
+            &hit_of(hit),
+        );
+    }
+    into_buf(b.0)
+}
+
+/// `updateInfo` で中継先へ送る atom
+///
+/// # Safety
+/// `info` は有効な `pcrs_chan_info` を指し、`session_id` は 16 バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_channel_info_update_atom(info: *const CChanInfo, session_id: *const u8) -> PcrsBuf {
+    let mut b = AtomBuf::default();
+    // SAFETY: 関数の Safety 節
+    unsafe { channel::info_update_atom(&mut b, &*(session_id as *const [u8; 16]), &info_of(info)) };
+    into_buf(b.0)
+}
+
+bytes_to_buf!(
+    /// `renderHexDump`
+    pcrs_channel_hex_dump,
+    channel::render_hex_dump
+);
+
+/// `getBufferString`
+///
+/// # Safety
+/// `lens` は `n` 個読めること (`n` が 0 なら NULL でもよい)。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_channel_buffer_string(
+    byterate: f64,
+    now: u32,
+    last_write_time: u32,
+    lens: *const u32,
+    n: usize,
+    cont: i32,
+    non_cont: i32,
+) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    let lens: &[u32] = if n == 0 || lens.is_null() { &[] } else { unsafe { std::slice::from_raw_parts(lens, n) } };
+    into_buf(channel::buffer_string(byterate, now, last_write_time, lens, cont, non_cont))
+}
+
+/// `checkReadDelay`。眠るなら true を返し、時間 (ミリ秒) を `ms` に書く。
+///
+/// # Safety
+/// `ms` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_channel_read_delay(read_delay: bool, len: u32, bitrate: i32, ms: *mut u32) -> bool {
+    match channel::read_delay_ms(read_delay, len, bitrate) {
+        Some(t) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *ms = t };
+            true
+        }
+        None => false,
+    }
+}
+
+/// `ChanMgr::authToken`
+///
+/// # Safety
+/// `broadcast_id` と `id` は 16 バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chanmgr_auth_token(broadcast_id: *const u8, id: *const u8) -> PcrsBuf {
+    // SAFETY: 関数の Safety 節
+    unsafe { into_buf(channel::auth_token(&*(broadcast_id as *const [u8; 16]), &*(id as *const [u8; 16]))) }
+}
+
+/// `ChanMgr::closeOldestIdle` で止めるチャンネルの番号。なければ -1。
+///
+/// # Safety
+/// `idle` と `last_idle_time` は `n` 個読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_chanmgr_oldest_idle(idle: *const bool, last_idle_time: *const u32, n: usize) -> isize {
+    if n == 0 {
+        return -1;
+    }
+    // SAFETY: 関数の Safety 節
+    let (idle, t) = unsafe { (std::slice::from_raw_parts(idle, n), std::slice::from_raw_parts(last_idle_time, n)) };
+    channel::oldest_idle(idle, t).map_or(-1, |i| i as isize)
+}
+
 #[cfg(test)]
 mod tests_7c {
     use super::*;

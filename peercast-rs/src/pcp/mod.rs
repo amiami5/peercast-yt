@@ -124,6 +124,12 @@ pub const PCP_HOST_FLAGS1_RECV: i32 = 0x10;
 
 /// version2.h の `PCP_CLIENT_VERSION`
 pub const PCP_CLIENT_VERSION: u32 = 1218;
+/// version2.h の `PCP_CLIENT_VERSION_VP`
+pub const PCP_CLIENT_VERSION_VP: u32 = 27;
+/// version2.h の `PCP_CLIENT_VERSION_EX_PREFIX`
+pub const PCP_CLIENT_VERSION_EX_PREFIX: &[u8; 2] = b"YT";
+/// version2.h の `PCP_CLIENT_VERSION_EX_NUMBER`
+pub const PCP_CLIENT_VERSION_EX_NUMBER: u32 = 50;
 
 /// `String::MAX_LEN` (C++ の `String` のバッファの大きさ)
 pub const STRING_MAX: i32 = 256;

@@ -26,49 +26,11 @@
 #ifdef WITH_RUST_CORE
 #include <memory>
 #include "rustbridge.h"
+#include "rustchan.h"
 
 // host atom の組み立て、版の文字列、色、一覧の数え上げ、次につなぐホストの選び方、追加・削除する
 // ホストの判断は Rust 版 (peercast-rs の chanhit.rs)。連結リストはここにあり、並びどおりの配列に
 // して渡す。
-static pcrs_host rsHost(const Host& h)
-{
-    pcrs_host r;
-    in6_addr a = h.ip.serialize();
-    memcpy(r.ip, a.s6_addr, 16);
-    r.port = h.port;
-    return r;
-}
-
-static pcrs_hit rsHit(const ChanHit& h)
-{
-    pcrs_hit v = {};
-    v.host = rsHost(h.host);
-    v.rhost[0] = rsHost(h.rhost[0]);
-    v.rhost[1] = rsHost(h.rhost[1]);
-    v.uphost = rsHost(h.uphost);
-    v.num_listeners = h.numListeners;
-    v.num_relays = h.numRelays;
-    v.num_hops = h.numHops;
-    v.time = h.time;
-    v.up_time = h.upTime;
-    v.last_contact = h.lastContact;
-    v.version = h.version;
-    v.oldest_pos = h.oldestPos;
-    v.newest_pos = h.newestPos;
-    v.uphost_hops = h.uphostHops;
-    v.version_vp = h.versionVP;
-    v.version_ex_number = h.versionExNumber;
-    memcpy(v.session_id, h.sessionID.id, 16);
-    memcpy(v.version_ex_prefix, h.versionExPrefix, 2);
-    v.firewalled = h.firewalled;
-    v.tracker = h.tracker;
-    v.recv = h.recv;
-    v.dead = h.dead;
-    v.direct = h.direct;
-    v.relay = h.relay;
-    v.cin = h.cin;
-    return v;
-}
 
 // 連結リストを並びどおりの配列にしたもの
 struct HitArray

@@ -112,6 +112,29 @@ mod tests {
         assert_eq!(g, vec![Entry { index: 1, parent: None }, Entry { index: 2, parent: None }]);
     }
 
+    /// 乱数の一覧でパニックせず、親はいつも一覧の中を指すこと
+    #[test]
+    fn fuzz_no_panic() {
+        let mut rng = 0x853c49e6748fea9bu64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        for _ in 0..5000 {
+            let n = (next() % 12) as usize;
+            let mut pick = || if next() % 4 == 0 { NO_HOST } else { h((next() % 4) as u8, (next() % 3) as u16) };
+            let nodes: Vec<Node> = (0..n).map(|_| node(pick(), pick(), pick())).collect();
+            let g = build(&nodes);
+            assert!(g.len() <= n);
+            for e in &g {
+                assert!(e.index < n);
+                assert!(e.parent.map_or(true, |p| p < g.len()));
+            }
+        }
+    }
+
     #[test]
     fn lan_relay_and_self_parent() {
         let nodes = [

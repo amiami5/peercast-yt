@@ -20,17 +20,7 @@
 using json = nlohmann::json;
 
 #ifdef WITH_RUST_CORE
-#include <cstring>
-#include "peercast_rs.h"
-
-static pcrs_host rsHost(const Host& h)
-{
-    pcrs_host r;
-    in6_addr a = h.ip.serialize();
-    memcpy(r.ip, a.s6_addr, 16);
-    r.port = h.port;
-    return r;
-}
+#include "rustchan.h"
 
 // どのホストをどのホストの下に置くかは Rust (peercast-rs の src/hostgraph.rs) が決める。
 HostGraph::HostGraph(const ChanHit& self, ChanHitList *hitList)

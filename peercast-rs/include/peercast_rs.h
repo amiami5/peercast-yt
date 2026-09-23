@@ -607,6 +607,24 @@ const char *pcrs_uptest_text_status(int status);  /* 知らない値なら NULL 
 const char *pcrs_uptest_check_add_url(bool valid, const uint8_t *scheme, size_t scheme_len,
                                       const uint8_t *url, size_t url_len, const pcrs_bytes *existing, size_t count);
 
+/* ---- channel (core/common/channel.cpp と chanmgr.cpp の、スレッドやソケットに触らない部分) ---- */
+/* processMp3Metadata。StreamTitle があれば 1、StreamUrl があれば 2 を足して返し、値 (引用符は
+   付いたまま) の位置と長さを書く */
+int pcrs_channel_mp3_metadata(const uint8_t *s, size_t n, size_t *title_pos, size_t *title_len,
+                              size_t *url_pos, size_t *url_len);
+/* writeTrackerUpdateAtom と、updateInfo で中継先へ送る atom */
+pcrs_buf pcrs_channel_tracker_update_atom(const pcrs_chan_info *info, const pcrs_hit *hit,
+                                          const uint8_t *session_id, const uint8_t *broadcast_id);
+pcrs_buf pcrs_channel_info_update_atom(const pcrs_chan_info *info, const uint8_t *session_id);
+pcrs_buf pcrs_channel_hex_dump(const uint8_t *s, size_t n);   /* renderHexDump */
+pcrs_buf pcrs_channel_buffer_string(double byterate, uint32_t now, uint32_t last_write_time,
+                                    const uint32_t *lens, size_t n, int cont, int non_cont);
+/* checkReadDelay。眠るなら true で、時間 (ミリ秒) を ms に書く */
+bool pcrs_channel_read_delay(bool read_delay, uint32_t len, int32_t bitrate, uint32_t *ms);
+pcrs_buf pcrs_chanmgr_auth_token(const uint8_t *broadcast_id, const uint8_t *id);
+/* closeOldestIdle で止めるチャンネルの番号。なければ -1 */
+ptrdiff_t pcrs_chanmgr_oldest_idle(const bool *idle, const uint32_t *last_idle_time, size_t n);
+
 #ifdef __cplusplus
 }
 #endif
