@@ -13,6 +13,7 @@
 #include "common.h" // FormatException
 #include "peercast_rs.h"
 #include "gnuid.h" // GnuID
+#include "jis.h" // JISConverter
 #include "host.h" // Host
 #include "md5.h" // md5::hexdigest
 #include "str.h"
@@ -336,6 +337,20 @@ void GnuID::encode(Host *h, const char *salt1, const char *salt2, unsigned char 
                        reinterpret_cast<const uint8_t*>(salt1), salt1 ? strlen(salt1) : 0,
                        reinterpret_cast<const uint8_t*>(salt2), salt2 ? strlen(salt2) : 0,
                        salt3);
+}
+
+#endif // WITH_RUST_CORE
+
+#ifdef WITH_RUST_CORE
+
+unsigned short JISConverter::sjisToUnicode(unsigned short sjis)
+{
+    return pcrs_jis_sjis_to_unicode(sjis);
+}
+
+unsigned short JISConverter::eucToUnicode(unsigned short euc)
+{
+    return pcrs_jis_euc_to_unicode(euc);
 }
 
 #endif // WITH_RUST_CORE

@@ -24,3 +24,6 @@ diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/rele
 
 diff_md5_gnuid: diff_md5_gnuid.cpp md5.o gnuid.o regexp.o common.o str.o cgi.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
+
+diff_jis: diff_jis.cpp jis.o $(RUST)/target/release/libpeercast_rs.a
+	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl

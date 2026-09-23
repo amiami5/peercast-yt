@@ -472,3 +472,17 @@ pub unsafe extern "C" fn pcrs_gnuid_encode(
     // SAFETY: 呼び出し側が約束する
     unsafe { std::ptr::copy_nonoverlapping(id_arr.as_ptr(), id, 16) };
 }
+
+// ---------------------------------------------------------------- jis
+
+use crate::jis;
+
+#[no_mangle]
+pub extern "C" fn pcrs_jis_sjis_to_unicode(sjis: u16) -> u16 {
+    jis::sjis_to_unicode(sjis)
+}
+
+#[no_mangle]
+pub extern "C" fn pcrs_jis_euc_to_unicode(euc: u16) -> u16 {
+    jis::euc_to_unicode(euc)
+}

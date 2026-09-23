@@ -90,6 +90,10 @@ void pcrs_gnuid_encode(uint8_t *id /* 16 bytes, in/out */, const uint8_t *ip /* 
                         bool has_ip, const uint8_t *salt1, size_t salt1n,
                         const uint8_t *salt2, size_t salt2n, uint8_t salt3);
 
+/* jis (core/common/jis.cpp) */
+uint16_t pcrs_jis_sjis_to_unicode(uint16_t sjis);
+uint16_t pcrs_jis_euc_to_unicode(uint16_t euc);
+
 #ifdef __cplusplus
 }
 #endif

@@ -36,6 +36,7 @@ Rust コード自体は普通のライブラリですが、`crate-type = ["stati
 | `str::to_lines`, `str::indent_tab`, `str::shellwords` | 同上 |
 | `md5::hexdigest` | `core/common/md5.cpp` (段階1c) |
 | `GnuID::toStr`, `GnuID::fromStr`, `GnuID::encode` | `core/common/gnuid.cpp` (同上、純粋な部分のみ) |
+| `JISConverter::sjisToUnicode`, `JISConverter::eucToUnicode` | `core/common/jis.cpp` (段階1d) |
 
 ## C++ 版との違い
 
@@ -75,6 +76,18 @@ Rust コード自体は普通のライブラリですが、`crate-type = ["stati
 
 C++ 版との違いは見つからなかった (MD5、GnuID とも、既知の相違点なし)。
 
+## 段階1d で追加したもの
+
+`JISConverter::sjisToUnicode`/`eucToUnicode` (Shift_JIS・EUC-JPの1文字をUnicodeのコード
+ポイントにする、JIS X 0208 の94×94変換表を使う) を移植した。呼び出し元は `_string.cpp` の
+Shift_JIS/EUC-JPからUTF-8への変換のみ。変換表 (`src/jis_table.rs`) は元のCソースから
+正規表現で機械的に抽出したもので、手作業では書き写していない。
+
+C++版は `unsigned int` の引き算がラップアラウンドすることを前提にした書き方をしている
+(範囲外になったら `> 93` の判定で弾かれる)。Rust版も同じ32ビットラップアラウンド演算で
+実装し、`sjisToUnicode`/`eucToUnicode` それぞれ65536通り全数の差分テストで、C++版とビット単位
+で一致することを確認した (相違なし)。
+
 ## C++ 版との違い (段階1b で追加で見つかったもの)
 
 * **`str::split` (2引数・3引数の両方) が NUL バイトで壊れる**: `p = in.c_str()`、
@@ -104,6 +117,7 @@ make
 ./diff_strutil                # str.cpp のその他の関数: 乱数20万組 (既定)
 ./diff_strutil --random 300000  # 比較件数780万件相当まで増やして実行
 ./diff_md5_gnuid              # md5::hexdigest と GnuID: 乱数20万組 (既定)
+./diff_jis                     # JISConverter: 65536通り全数 (sjis/euc 各1関数)
 ```
 
 C++ 版の関数をそのままコンパイルしたもの (`WITH_RUST_CORE` を定義しない `cgi.cpp` / `str.cpp`) と、

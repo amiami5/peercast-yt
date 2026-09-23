@@ -699,6 +699,7 @@ static unsigned short uniTable[94][94] = {
 
 
 // ------------------------------------------------------------
+#ifndef WITH_RUST_CORE
 unsigned short JISConverter::sjisToUnicode(unsigned short sjis)
 {
     unsigned short u;
@@ -728,7 +729,9 @@ unsigned short JISConverter::sjisToUnicode(unsigned short sjis)
 
     return u;
 }
+#endif // WITH_RUST_CORE
 // ------------------------------------------------------------
+#ifndef WITH_RUST_CORE
 unsigned short JISConverter::eucToUnicode(unsigned short euc)
 {
     unsigned short u;
@@ -750,3 +753,4 @@ unsigned short JISConverter::eucToUnicode(unsigned short euc)
     }
     return u;
 }
+#endif // WITH_RUST_CORE
