@@ -117,7 +117,7 @@ pub trait Host: Reader {
 
 /// 入力から最大 `buf.len()` バイト読み (`Stream::read(void*, int)`)、`buf` の先頭に書く。
 /// 足りなかった残りは書き換えない (C++ 版と同じ)。
-pub(crate) fn read_into(r: &mut dyn Reader, buf: &mut [u8]) -> std::result::Result<(), Abort> {
+pub(crate) fn read_into<R: Reader + ?Sized>(r: &mut R, buf: &mut [u8]) -> std::result::Result<(), Abort> {
     let got = r.read_some(buf.len())?;
     let n = got.len().min(buf.len());
     buf[..n].copy_from_slice(&got[..n]);
@@ -127,7 +127,7 @@ pub(crate) fn read_into(r: &mut dyn Reader, buf: &mut [u8]) -> std::result::Resu
 /// `Stream::read(int)`: 4096 バイトずつ `read(void*, int)` を呼んで、ちょうど `n` バイト読む。
 /// 1 回も読めなければ例外 (C++ 版と同じ処理を Rust で行う。大きな要素でも、届いた分しか
 /// メモリを確保しない)。
-pub(crate) fn read_exact(r: &mut dyn Reader, n: usize) -> Result<Vec<u8>> {
+pub(crate) fn read_exact<R: Reader + ?Sized>(r: &mut R, n: usize) -> Result<Vec<u8>> {
     let mut res = Vec::new();
     let mut remaining = n;
     while remaining > 0 {

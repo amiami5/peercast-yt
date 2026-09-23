@@ -2,6 +2,8 @@
 name = "peercast-rs"
 version = "0.1.0"
 edition = "2021"
+# 確認した最も古い Rust (Ubuntu などの配布版の rustc でもビルドできるようにする)
+rust-version = "1.70"
 description = "PeerCast YT の C++ コードを段階的に置き換える Rust 実装 (C++ から静的ライブラリとして呼ぶ)"
 license = "GPL-2.0-or-later"
 publish = false

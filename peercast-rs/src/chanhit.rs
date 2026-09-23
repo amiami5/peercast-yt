@@ -317,6 +317,8 @@ pub fn add(hits: &[Hit], h: &Hit, my_session_id: &[u8; 16], del: &mut [bool]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    // pcp::Host (トレイト) と区別する (古い rustc はグロブの取り込みどうしを別に扱う)
+    use super::Host;
 
     fn v4(a: u8, b: u8, c: u8, d: u8, port: u16) -> Host {
         let mut ip = [0u8; 16];
