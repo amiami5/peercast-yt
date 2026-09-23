@@ -885,6 +885,51 @@ pub unsafe extern "C" fn pcrs_xml_binary_content(s: *const u8, n: usize, size: u
     store(out, xml::binary_content(unsafe { input(s, n) }, size))
 }
 
+// ---------------------------------------------------------------- URL (LUrlParser.cpp, url.cpp)
+
+/// `LUrlParser::clParseURL::ParseURL`。成功で 0 を返し、`*out` に 8 つの部分
+/// (scheme, host, port, path, query, fragment, user_name, password の順) を書く。
+/// 失敗なら `LUrlParserError` の値 (2〜5) を返し、`*out` には何も書かない。
+///
+/// # Safety
+/// `s` は `n` バイト読めること。`out` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_url_parse(s: *const u8, n: usize, out: *mut PcrsVec) -> i32 {
+    // SAFETY: 関数の Safety 節
+    match url::parse_url(unsafe { input(s, n) }) {
+        Ok(u) => {
+            let parts = vec![u.scheme, u.host, u.port, u.path, u.query, u.fragment, u.user_name, u.password];
+            // SAFETY: 関数の Safety 節
+            unsafe { *out = into_vec(parts) };
+            0
+        }
+        Err(e) => e as i32,
+    }
+}
+
+/// `clParseURL::GetPort` の数値化。1〜65535 ならその値、そうでなければ 0。
+///
+/// # Safety
+/// `s` は `n` バイト読めること (`n` が 0 なら NULL でもよい)。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_url_port_number(s: *const u8, n: usize) -> i32 {
+    // SAFETY: 関数の Safety 節
+    url::port_number(unsafe { input(s, n) }).map_or(0, i32::from)
+}
+
+/// `URLSource::getSourceProtocol`。`ChanInfo::PROTOCOL` の値を返し、読み飛ばす長さを `*skip` に書く。
+///
+/// # Safety
+/// `s` は `n` バイト読めること。`skip` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_url_source_protocol(s: *const u8, n: usize, skip: *mut usize) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (proto, len) = url::source_protocol(unsafe { input(s, n) });
+    // SAFETY: 関数の Safety 節
+    unsafe { *skip = len };
+    proto as i32
+}
+
 // ---------------------------------------------------------------- dechunker (core/common/dechunker.cpp)
 
 use crate::dechunk;

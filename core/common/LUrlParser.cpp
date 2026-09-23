@@ -31,6 +31,8 @@
 #include <cstring>
 #include <stdlib.h>
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustcore.cpp (peercast-rs の src/url.rs) を使う。
 // check if the scheme name is valid
 static bool IsSchemeValid( const std::string& SchemeName )
 {
@@ -253,3 +255,4 @@ LUrlParser::clParseURL LUrlParser::clParseURL::ParseURL( const std::string& URL 
 
 	return Result;
 }
+#endif // WITH_RUST_CORE

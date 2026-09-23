@@ -24,6 +24,9 @@
 #include <exception>
 #include <vector>
 #include "str.h"
+#include "LUrlParser.h" // LUrlParser::clParseURL
+#include "url.h" // URLSource
+#include "chaninfo.h" // ChanInfo::PROTOCOL
 #include "rustbridge.h"
 
 using rustbridge::RustBuf;
@@ -510,6 +513,56 @@ std::vector<KeyValuePair> Deserializer::readObject(Stream &in)
 void Dechunker::getNextChunk()
 {
     rustbridge::nextChunk(m_stream, MAX_CHUNK_SIZE, m_buffer, m_eof);
+}
+
+LUrlParser::clParseURL LUrlParser::clParseURL::ParseURL(const std::string& URL)
+{
+    pcrs_vec v{};
+    int code = pcrs_url_parse(bytes(URL), URL.size(), &v);
+    if (code != 0)
+        return clParseURL(static_cast<LUrlParserError>(code));
+
+    std::vector<std::string> parts;
+    const char* p = reinterpret_cast<const char*>(v.joined.ptr);
+    size_t off = 0;
+    for (size_t i = 0; i < v.count; i++)
+    {
+        parts.emplace_back(p + off, v.lens[i]);
+        off += v.lens[i];
+    }
+    pcrs_vec_free(v);
+
+    clParseURL result;
+    result.m_Scheme = parts.at(0);
+    result.m_Host = parts.at(1);
+    result.m_Port = parts.at(2);
+    result.m_Path = parts.at(3);
+    result.m_Query = parts.at(4);
+    result.m_Fragment = parts.at(5);
+    result.m_UserName = parts.at(6);
+    result.m_Password = parts.at(7);
+    result.m_ErrorCode = LUrlParserError_Ok;
+    return result;
+}
+
+bool LUrlParser::clParseURL::GetPort(int* OutPort) const
+{
+    if (!IsValid())
+        return false;
+    int port = pcrs_url_port_number(bytes(m_Port), m_Port.size());
+    if (port == 0)
+        return false;
+    if (OutPort)
+        *OutPort = port;
+    return true;
+}
+
+ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
+{
+    size_t skip = 0;
+    int proto = pcrs_url_source_protocol(cbytes(fileName), strlen(fileName), &skip);
+    fileName += skip;
+    return static_cast<ChanInfo::PROTOCOL>(proto);
 }
 
 void XML::read(Stream &in)

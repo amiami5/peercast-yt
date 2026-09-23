@@ -159,6 +159,15 @@ int pcrs_amf0_read_string(const pcrs_reader *r, pcrs_buf *out);
  * 4 最後のチャンク ("Closed on read")、5 "Premature end" */
 int pcrs_dechunk_next(const pcrs_reader *r, size_t max_chunk_size, pcrs_buf *data);
 
+/* URL (core/common/LUrlParser.cpp, url.cpp) */
+/* 0 成功 (*out に scheme, host, port, path, query, fragment, user_name, password の 8 要素)、
+ * 失敗なら LUrlParserError の値 (2〜5) */
+int pcrs_url_parse(const uint8_t *s, size_t n, pcrs_vec *out);
+/* 1〜65535 ならその値、そうでなければ 0 */
+int pcrs_url_port_number(const uint8_t *s, size_t n);
+/* ChanInfo::PROTOCOL の値を返し、読み飛ばす長さを *skip に書く */
+int pcrs_url_source_protocol(const uint8_t *s, size_t n, size_t *skip);
+
 /* xml (core/common/xml.cpp)。要素をコールバックで通知する。どれも成功で 0、例外で中断したら -1。 */
 typedef struct pcrs_xml_builder {
     void *ctx;

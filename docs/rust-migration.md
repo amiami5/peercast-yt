@@ -70,8 +70,9 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 | 0 | 完了 |
 | 1 | 完了 (peercast-rs: cgi/str の一部関数、C ABI 境界、Makefile 統合)。差分テストは長さ 0〜3 バイトの入力を全網羅 (1,677 万通り) して確認 |
 | 2 | 完了 (str の残り、jis、md5、gnuid の純粋な部分、`String` の変換関数)。`String` クラス自体と `setFromTime`、`GnuID::generate` など状態や OS に依存する部分は C++ に残る。差分テストは String だけで約 980 万件、違いなし |
-| 3 | 作業中。3a (HTTP の行の解析、`parseHttpDate`)、3b (AMF0、chunked 転送)、3c (XML) 完了。`atom` は段階 6 に回した |
-| 4 以降 | 未着手 |
+| 3 | 完了。3a (HTTP の行の解析、`parseHttpDate`)、3b (AMF0、chunked 転送)、3c (XML)、3d (URL)。`atom` は段階 6 に回した。`cgi::Query` と `HTTP::parseRequestLine` は、Rust 化済みの `str::split` などを呼ぶだけなので C++ のまま |
+| 4 | 着手前にメディアコンテナの扱い (使われていないものを残すか) を相談する |
+| 5 以降 | 未着手 |
 
 ### 確認環境についての注記
 

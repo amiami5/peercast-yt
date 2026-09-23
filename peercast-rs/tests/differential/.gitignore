@@ -7,4 +7,5 @@ diff_string
 diff_http
 diff_amf0_dechunk
 diff_xml
+diff_url
 cxxcore.a

@@ -61,6 +61,7 @@ int URLSource::getSourceRateAvg()
         return 0;
 }
 
+#ifndef WITH_RUST_CORE
 // ------------------------------------------------
 ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
 {
@@ -99,6 +100,8 @@ ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
         return ChanInfo::SP_FILE;
     }
 }
+
+#endif // WITH_RUST_CORE
 
 // ------------------------------------------------
 ::String URLSource::streamURL(std::shared_ptr<Channel> ch, const char *url)

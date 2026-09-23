@@ -19,7 +19,7 @@ $(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs) $(RUST)/Ca
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml *.o cxxcore.a
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -53,4 +53,7 @@ diff_amf0_dechunk: diff_amf0_dechunk.cpp cxxcore.a $(RUST)/target/release/libpee
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(CXXCORE_LIBS)
 
 diff_xml: diff_xml.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(CXXCORE_LIBS)
+
+diff_url: diff_url.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(CXXCORE_LIBS)
