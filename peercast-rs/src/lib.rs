@@ -9,6 +9,7 @@
 
 pub mod amf0;
 pub mod cgi;
+pub mod commands;
 pub mod dechunk;
 pub mod entities;
 #[allow(unsafe_code)]
@@ -21,7 +22,9 @@ mod jis_table;
 pub mod md5;
 pub mod media;
 pub mod pcstring;
+pub mod public;
 pub mod reader;
+pub mod strtod;
 pub mod strutil;
 pub mod template;
 pub mod url;

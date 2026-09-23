@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <tuple> // std::tie
 
+#ifndef WITH_RUST_CORE
 static std::pair< std::map<std::string, std::string>,
                   std::vector<std::string> >
 parse_options(const std::vector<std::string>& args,
@@ -43,6 +44,37 @@ parse_options(const std::vector<std::string>& args,
     }
     return { options, positionals };
 }
+
+#else // WITH_RUST_CORE
+// WITH_RUST_CORE のときは peercast-rs (src/commands.rs) を使う。
+#include "rustbridge.h"
+
+static std::pair< std::map<std::string, std::string>,
+                  std::vector<std::string> >
+parse_options(const std::vector<std::string>& args,
+              const std::vector<std::string>& option_names)
+{
+    rustbridge::JoinedParts a(args), n(option_names);
+    pcrs_vec out{};
+    size_t numOptions = 0;
+    rustbridge::RustBuf err;
+    int r = pcrs_commands_parse_options(a.data(), a.joined.size(), a.lens.data(), a.lens.size(),
+                                        n.data(), n.joined.size(), n.lens.data(), n.lens.size(),
+                                        &out, &numOptions, err.out());
+    if (r == -1)
+        throw FormatException(err.str());
+    if (r != 0)
+        throw GeneralException("parse_options: internal error");
+
+    std::vector<std::string> flat = rustbridge::takeVec(out);
+    std::map<std::string, std::string> options;
+    for (size_t i = 0; i < numOptions; i++)
+        options[flat[2 * i]] = flat[2 * i + 1];
+    std::vector<std::string> positionals(flat.begin() + 2 * numOptions, flat.end());
+    return { options, positionals };
+}
+
+#endif // WITH_RUST_CORE
 
 static std::map<std::string,
                 std::function< void(Stream&,const std::vector<std::string>&,std::function<bool()>) > >

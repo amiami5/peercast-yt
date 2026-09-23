@@ -39,6 +39,35 @@ private:
 };
 
 
+// pcrs_vec を vector<string> にして返す (pcrs_vec は解放する)。
+inline std::vector<std::string> takeVec(pcrs_vec v)
+{
+    std::vector<std::string> res;
+    res.reserve(v.count);
+    const char* p = reinterpret_cast<const char*>(v.joined.ptr);
+    size_t off = 0;
+    for (size_t i = 0; i < v.count; i++)
+    {
+        res.emplace_back(p + off, v.lens[i]);
+        off += v.lens[i];
+    }
+    pcrs_vec_free(v);
+    return res;
+}
+
+// vector<string> を、連結したバイト列と各要素の長さにして Rust に渡す。
+struct JoinedParts
+{
+    explicit JoinedParts(const std::vector<std::string>& v)
+    {
+        lens.reserve(v.size());
+        for (auto& s : v) { joined += s; lens.push_back(s.size()); }
+    }
+    const uint8_t* data() const { return reinterpret_cast<const uint8_t*>(joined.data()); }
+    std::string joined;
+    std::vector<size_t> lens;
+};
+
 // Stream を pcrs_reader として Rust に渡す。コールバックの中で起きた例外は保存しておき、
 // Rust の関数から戻ったあとで rethrowIfAborted() が投げ直す (例外は Rust を通り抜けられない)。
 class StreamReader

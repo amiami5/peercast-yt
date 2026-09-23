@@ -80,6 +80,8 @@ static string getTIP()
     return servMgr->serverHost.str();
 }
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustcore.cpp (peercast-rs の src/public.rs) を使う。
 // ------------------------------------------------------------
 string PublicController::formatUptime(unsigned int totalSeconds)
 {
@@ -89,6 +91,8 @@ string PublicController::formatUptime(unsigned int totalSeconds)
 
     return str::format("%02d:%02d", hours, minutes);
 }
+
+#endif // WITH_RUST_CORE
 
 // ------------------------------------------------------------
 static string getDirectPermission()
@@ -171,6 +175,8 @@ string PublicController::createChannelIndex()
     return res;
 }
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustcore.cpp (peercast-rs の src/public.rs) を使う。
 // ------------------------------------------------------------
 vector<string>
 PublicController::acceptableLanguages(const string& acceptLanguage)
@@ -204,6 +210,8 @@ PublicController::acceptableLanguages(const string& acceptLanguage)
                    [](pair<string,double>& x) { return x.first; });
     return res;
 }
+
+#endif // WITH_RUST_CORE
 
 // ------------------------------------------------------------
 HTTPResponse PublicController::operator()(const HTTPRequest& req, Stream& stream, Host& remoteHost)

@@ -1458,3 +1458,86 @@ pub unsafe extern "C" fn pcrs_template_call(op: i32, host: *const CTemplateHost,
     unsafe { *result = into_buf(bytes) };
     code
 }
+
+// ---------------------------------------------------------------- 公開ディレクトリとコンソール (段階5b)
+
+use crate::{commands, public};
+
+/// 連結したバイト列と各要素の長さ (`pcrs_str_join` と同じ形) を要素に戻す。長さが合わなければ `None`。
+///
+/// # Safety
+/// `joined` は `joined_len` バイト、`lens` は `count` 個の `usize` が読めること。
+unsafe fn input_parts(joined: *const u8, joined_len: usize, lens: *const usize, count: usize) -> Option<Vec<Vec<u8>>> {
+    // SAFETY: 関数の Safety 節
+    let (joined, lens) = unsafe { (input(joined, joined_len), input_usize(lens, count)) };
+    let mut parts = Vec::with_capacity(lens.len());
+    let mut p = 0usize;
+    for &len in lens {
+        parts.push(joined.get(p..p.checked_add(len)?)?.to_vec());
+        p += len;
+    }
+    Some(parts)
+}
+
+/// `PublicController::formatUptime`
+#[no_mangle]
+pub extern "C" fn pcrs_public_format_uptime(total_seconds: u32) -> PcrsBuf {
+    into_buf(public::format_uptime(total_seconds).into_bytes())
+}
+
+/// `PublicController::acceptableLanguages`
+///
+/// # Safety
+/// `s` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_public_acceptable_languages(s: *const u8, n: usize) -> PcrsVec {
+    // SAFETY: 関数の Safety 節
+    into_vec(public::acceptable_languages(unsafe { input(s, n) }))
+}
+
+/// commands.cpp の `parse_options`。成功なら 0 で、`*out` に (名前, 値) の組を `*num_options` 組
+/// 並べたあとに位置引数を並べる。知らないオプションなら -1 で、`*err` にメッセージ
+/// (`FormatException`)。引数の形が壊れていれば -2。
+///
+/// # Safety
+/// 各入力は `pcrs_str_join` の引数と同じく読めること。`out`、`num_options`、`err` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_commands_parse_options(
+    args_joined: *const u8, args_joined_len: usize, args_lens: *const usize, args_count: usize,
+    names_joined: *const u8, names_joined_len: usize, names_lens: *const usize, names_count: usize,
+    out: *mut PcrsVec, num_options: *mut usize, err: *mut PcrsBuf,
+) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let parts = unsafe {
+        (
+            input_parts(args_joined, args_joined_len, args_lens, args_count),
+            input_parts(names_joined, names_joined_len, names_lens, names_count),
+        )
+    };
+    let (args, names) = match parts {
+        (Some(a), Some(n)) => (a, n),
+        _ => return -2,
+    };
+    match commands::parse_options(&args, &names) {
+        Ok((options, positionals)) => {
+            let n = options.len();
+            let mut flat: Vec<Vec<u8>> = Vec::with_capacity(n * 2 + positionals.len());
+            for (k, v) in options {
+                flat.push(k);
+                flat.push(v);
+            }
+            flat.extend(positionals);
+            // SAFETY: 関数の Safety 節
+            unsafe {
+                out.write(into_vec(flat));
+                *num_options = n;
+            }
+            0
+        }
+        Err(msg) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *err = into_buf(msg) };
+            -1
+        }
+    }
+}

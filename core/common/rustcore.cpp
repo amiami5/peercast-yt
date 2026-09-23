@@ -28,6 +28,7 @@
 #include "url.h" // URLSource
 #include "chaninfo.h" // ChanInfo::PROTOCOL
 #include "rustbridge.h"
+#include "public.h" // PublicController (段階5b)
 #include "flv.h" // FLVStream (段階4、メディアコンテナの本体は rustmedia.h)
 
 using rustbridge::RustBuf;
@@ -620,6 +621,20 @@ std::pair<bool,int> FLVStream::readMetaData(void* data, int size)
     if (r == 1)
         return std::make_pair(true, static_cast<int>(bitrate));
     return std::make_pair(false, 0);
+}
+
+#endif // WITH_RUST_CORE
+
+#ifdef WITH_RUST_CORE
+
+std::string PublicController::formatUptime(unsigned int totalSeconds)
+{
+    return RustBuf(pcrs_public_format_uptime(totalSeconds)).str();
+}
+
+std::vector<std::string> PublicController::acceptableLanguages(const std::string& acceptLanguage)
+{
+    return rustbridge::takeVec(pcrs_public_acceptable_languages(bytes(acceptLanguage), acceptLanguage.size()));
 }
 
 #endif // WITH_RUST_CORE

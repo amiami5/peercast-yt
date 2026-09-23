@@ -316,6 +316,16 @@ enum {
  * 6 std::invalid_argument。7 は呼び出し方の誤り。*result は常に書かれる (pcrs_buf_free で返す) */
 int pcrs_template_call(int op, const pcrs_template_host *host, const uint8_t *arg, size_t arg_len, pcrs_buf *result);
 
+/* 公開ディレクトリ (core/common/public.cpp の PublicController) */
+pcrs_buf pcrs_public_format_uptime(uint32_t total_seconds);
+pcrs_vec pcrs_public_acceptable_languages(const uint8_t *s, size_t n);
+/* コンソールのコマンドの引数 (core/common/commands.cpp の parse_options)。入力の形は pcrs_str_join と同じ。
+ * 0 成功 (*out に (名前, 値) を *num_options 組並べたあとに位置引数)、-1 知らないオプション
+ * (*err に FormatException のメッセージ)、-2 引数の形が壊れている */
+int pcrs_commands_parse_options(const uint8_t *args_joined, size_t args_joined_len, const size_t *args_lens, size_t args_count,
+                                const uint8_t *names_joined, size_t names_joined_len, const size_t *names_lens, size_t names_count,
+                                pcrs_vec *out, size_t *num_options, pcrs_buf *err);
+
 /* FLVStream::readMetaData。onMetaData でビットレートがあれば 1 (*bitrate に書く)、なければ 0、
  * 形式が壊れていれば 2 (理由を *err に書く) */
 int pcrs_flv_read_meta_data(const uint8_t *data, size_t n, int32_t *bitrate, pcrs_buf *err);

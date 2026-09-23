@@ -21,7 +21,7 @@ $(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs $(RUST)/src
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template *.o cxxcore.a
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -69,4 +69,7 @@ diff_media: diff_media.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(C
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(MEDIA_WRAP) $(CXXCORE_LIBS)
 
 diff_template: diff_template.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rusttemplate.h $(CORE)/rustbridge.h
+	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(CXXCORE_LIBS)
+
+diff_public: diff_public.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustbridge.h
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(CXXCORE_LIBS)

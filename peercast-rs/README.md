@@ -331,6 +331,27 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
   CPU によって違った (x86 では -2^31 で 1 回も回らず、ARM では `int` の最大値で約 21 億回回る)。
   Rust 版は、どの CPU でも x86 と同じく -2^31 にする。
 
+## 段階5b で追加したもの (Accept-Language、コンソールの引数)
+
+* `src/public.rs`: `PublicController::acceptableLanguages` (Accept-Language ヘッダーの解釈) と
+  `formatUptime`。q 値は glibc の `atof` と同じく読む (`src/strtod.rs`。16 進数、`inf`、
+  `nan(...)`、空白や途中の文字の扱いも同じ)。
+* `src/commands.rs`: 管理画面のコンソールのコマンドの引数の解釈 (`commands.cpp` の
+  `parse_options`)。
+
+段階5 の残り (`html.cpp` の HTML の出力、`commands.cpp` の各コマンドの本体、`public.cpp` の
+HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバーの管理 (`servMgr`、`chanMgr`) を
+呼ぶだけなので、それらを移す段階 7〜9 で扱う。テンプレートのスコープと正規表現も同じ。
+
+### C++ 版との違い
+
+* **Accept-Language の並べ替え**: C++ 版は `std::sort` で q 値の大きい順に並べていた。
+  タグが 16 個以下なら挿入ソートになるので、Rust 版は同じ挿入ソートを使う (結果は同じ)。
+  17 個以上のとき、C++ 版は q 値が同じタグの順序が実装次第で、q 値が NaN (`q=nan`) だと
+  比較が一貫せず、配列の外を読むことがあった (ネットワークから届くヘッダーで起きる)。
+  Rust 版は個数によらず同じ挿入ソートで、同じ q 値は書かれた順になる。
+* NUL を含むヘッダーや引数は、段階1 の `str::split` の違い (C++ 版は NUL で切れる) のとおり。
+
 ## 差分テスト
 
 ```sh
@@ -350,6 +371,7 @@ make
 ./diff_media                   # FLV/MKV/OGG/MP4/MP3: 生成した入力とその変異 (各2万件、引数で変更)
 ./diff_template 20000 $(find ../../../ui/html -name "*.html")
                              # テンプレート: UI の実際のテンプレート、生成したもの、その変異
+./diff_public                  # Accept-Language、formatUptime、コンソールの引数 (約80万件)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした
