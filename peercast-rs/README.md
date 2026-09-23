@@ -555,6 +555,51 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   `readDelay` はファイルを流すときだけ使う。
 * `writeTrackerUpdateAtom` などは atom をまとめて 1 回で書く (段階 7b と同じ)。
 
+## 段階8a で追加したもの (JSON-RPC)
+
+`src/json/` に nlohmann::json 3.7.3 (`core/common/json.hpp`) と同じふるまいの JSON を作り、`src/jrpc.rs` に
+JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
+
+* 要求の解釈 (構文解析、`jsonrpc`・`id`・`method`・`params` の検査、メソッドの選び方、名前付き引数の
+  並べ替え、引数の型の変換) と、結果の JSON の組み立ては Rust。チャンネルやサーバーの状態は
+  `pcrs_jrpc_host` の `call` で触り、結果は `pcrs_jrpc_put_*` で受け取る。C++ 側
+  (`core/common/rustjrpc.h`) は、C++ 版の同じ箇所を写したもの。
+* JSON は、受け付ける入力 (先頭の BOM を読み飛ばす、NUL を入力の終わりとみなす、なども)、数の種類
+  (符号なし・符号付き・浮動小数点数)、例外の文言 (行と桁、`last read: '...'`)、書き出し (浮動小数点数は
+  nlohmann の Grisu2 をそのまま移したもので、最短の桁とは限らない)、不正な UTF-8 を書き出すときの例外まで
+  nlohmann と同じにした。`get<int>()` などの変換と、その失敗の文言も同じ。
+* メソッドの中の評価の順序も C++ 版と同じにしてあり、途中で失敗したときに、どこまで状態が変わって
+  いるかも同じ。
+* `JrpcApi` クラスは残り、`call` と、各メソッド (`getChannels` など。`public.cpp`、`/api/1`、gtest が
+  使う) は Rust を呼ぶだけになった (`JrpcApi::invoke`)。結果は `pcrs_json_builder` の通知で
+  nlohmann::json に組み立てる。JSON-RPC では呼べない `getChannelsFound` も同じ。
+* リレーツリーの JSON (`HostGraph::toRelayTree`) も Rust。木の形は段階 7c の `hostgraph::build` で決める。
+* gtest の `JrpcApiFixture` のうち、C++ 版の中身 (メソッドの表と `toPositionalArguments`) を直接
+  使う 2 件は C++ 版のビルドでだけ動き、同じ内容のテストは `src/jrpc/tests.rs` にある。
+
+### C++ 版との違い
+
+* **有限でない数**: `1e400` のように `double` に収まらない数を含む要求で、nlohmann は `out_of_range`
+  (406) を投げる。C++ 版は `parse_error` しか捕まえていなかったので、例外がスレッドの一番上まで飛び、
+  応答を返さずに接続を切っていた。Rust 版は、ほかの構文の誤りと同じく Parse error (-32700) を返す。
+* **範囲外の浮動小数点数の変換**: `getLog` の `from` などで、`int` に収まらない浮動小数点数の変換は
+  C++ では未定義の動作 (x86 では `INT_MIN`、ARM では範囲の端の値)。Rust 版は CPU によらず x86-64 と同じ
+  にした。`maxLines` の `size_t` への変換も、x86-64 の GCC のコードと同じ値にする (2^64 以上は 0)。
+* **`get<size_t>()` と真偽値**: 64 ビットの CPU では `size_t` が nlohmann の `number_unsigned_t` と同じ型
+  なので、真偽値を受け付けない。32 ビットの CPU の C++ 版は受け付けていた。Rust 版は CPU によらず 64 ビット
+  の CPU と同じ。
+
+### C++ 版と同じにしたもの (直していない)
+
+* `getLog` は、`from` が null でないときだけ `maxLines` が負かを確かめる (`from` が null なら、負の
+  `maxLines` は大きな数になって全部返す)。
+* `setChannelInfo` の `info` と `track` は、x86-64 の GCC では右 (`track`) から変換されるので、両方が
+  オブジェクトでなければ `track` の変換の例外になる。`info` か `track` に欄がなければ `std::map::at`
+  の例外 ("map::at") で、Internal error になる。
+* `setSettings` は、途中の値の変換に失敗しても、それまでに変えた設定はそのまま。
+* `getYellowPages` の `uri` は `String::format` で作るので、254 バイトで切れる (文字の途中でも)。
+* 例外の文言 (`what()`) は C の文字列なので、メソッド名などに NUL があるとそこで切れる。
+
 ## 差分テスト
 
 ```sh
@@ -582,6 +627,7 @@ make
 ./diff_chanhit                  # ChanInfo と ChanHit / ChanHitList: 乱数の一覧への操作 (約265万件)
 ./diff_hostgraph_uptest         # HostGraph と帯域測定の yp4g.xml の読み取りなど (約70万件)
 ./diff_channel                   # Channel と ChanMgr の移した部分: 乱数のチャンネルへの操作 (約40万件)
+./diff_jrpc                      # JSON-RPC: 乱数の状態への要求とその変異 10万件、メソッドを直接呼ぶもの 2.5万件
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした
@@ -593,6 +639,12 @@ C++ のコア一式 (`cxxcore.a`、`make` が自動で作る) にリンクしま
 時刻を読む回数と順序も比べることになります。C++ 版が初期化していないメモリを読む箇所を
 比べられるように、差分テストの C++ はスタックを 0 で初期化し (`-ftrivial-auto-var-init=zero`)、
 ヒープも 0 で埋めます (`diff_media.cpp` の `operator new`)。
+
+`diff_jrpc` は、同じ乱数の種から同じ状態 (チャンネル、サーバント、ヒットリスト、ログ、YP の一覧、
+設定、状態のファイル) を作り直して C++ 版と Rust 版に同じ要求を与え、応答、ログ、横取りした呼び出し
+(チャンネルを作る、配信元に接続する、情報を更新する、など)、あとの状態を比べます。`id` に乱数の JSON を
+入れて書き出しを比べ、`getState` が読む `inspect()` の結果も横取りして、構文解析の例外の文言も比べます。
+`DJ_STATS=1` を付けると、メソッドごとの応答の種類の数を表示します。
 
 `diff_pcp` は、同じパケットのバッファと同じ状態の `chanMgr`、`servMgr`、`PCPStream` で C++ 版の
 `procAtom` と Rust 版を動かし、ログ、中継、通知、ヒットの追加と削除、`Channel::updateInfo`

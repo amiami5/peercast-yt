@@ -8,6 +8,9 @@ public:
     JrpcApi api;
 };
 
+// JrpcApi の中身 (メソッドの表と名前付き引数の並べ替え) は、Rust のビルドでは peercast-rs の
+// src/jrpc.rs にあり、同じ内容のテストは src/jrpc/tests.rs の methods_table。
+#ifndef WITH_RUST_CORE
 TEST_F(JrpcApiFixture, methodListIsInitialized)
 {
     ASSERT_NE(0, api.m_methods.size());
@@ -26,6 +29,7 @@ TEST_F(JrpcApiFixture, toPositionalArguments)
 
     ASSERT_TRUE(json::array({ 1, 2 }) == result);
 }
+#endif
 
 TEST_F(JrpcApiFixture, getNewVersions)
 {

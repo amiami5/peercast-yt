@@ -48,6 +48,48 @@ public:
         int m_errno;
     };
 
+#ifdef WITH_RUST_CORE
+    // 要求の解釈と結果の JSON の組み立ては Rust (peercast-rs の src/jrpc.rs)。サーバーの状態は
+    // core/common/rustjrpc.h のコールバックで触る。
+    std::string call(const std::string& request);
+
+    // メソッドを直接呼ぶ。結果と、投げる例外 (method_not_found、invalid_params、
+    // application_error) は C++ 版と同じ。それ以外の例外は std::runtime_error になる。
+    json invoke(const char* method, const json::array_t& args);
+
+#define JRPC_METHOD(name) json name(json::array_t args) { return invoke(#name, args); }
+    JRPC_METHOD(bumpChannel)
+    JRPC_METHOD(clearLog)
+    JRPC_METHOD(fetch)
+    JRPC_METHOD(getChannelConnections)
+    JRPC_METHOD(getChannelInfo)
+    JRPC_METHOD(getChannelRelayTree)
+    JRPC_METHOD(getChannelStatus)
+    JRPC_METHOD(getChannels)
+    JRPC_METHOD(getChannelsFound)
+    JRPC_METHOD(getLog)
+    JRPC_METHOD(getLogSettings)
+    JRPC_METHOD(getNewVersions)
+    JRPC_METHOD(getNotificationMessages)
+    JRPC_METHOD(getPlugins)
+    JRPC_METHOD(getServerStorageItem)
+    JRPC_METHOD(getSettings)
+    JRPC_METHOD(getState)
+    JRPC_METHOD(getStatus)
+    JRPC_METHOD(getVersionInfo)
+    JRPC_METHOD(getYPChannels)
+    JRPC_METHOD(getYellowPageProtocols)
+    JRPC_METHOD(getYellowPages)
+    JRPC_METHOD(playChannel)
+    JRPC_METHOD(removeYellowPage)
+    JRPC_METHOD(setChannelInfo)
+    JRPC_METHOD(setLogSettings)
+    JRPC_METHOD(setServerStorageItem)
+    JRPC_METHOD(setSettings)
+    JRPC_METHOD(stopChannel)
+    JRPC_METHOD(stopChannelConnection)
+#undef JRPC_METHOD
+#else
     std::string call(const std::string& request)
     {
         std::string result = call_internal(request).dump();
@@ -155,6 +197,7 @@ public:
     json to_json(TrackInfo& track);
     json to_json(std::shared_ptr<Channel> c);
     json to_json(Channel::IP_VERSION ipVersion);
+#endif // WITH_RUST_CORE
 };
 
 #endif

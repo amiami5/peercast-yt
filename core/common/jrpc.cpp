@@ -5,6 +5,38 @@
 #include "str.h"
 #include "hostgraph.h"
 
+#ifdef WITH_RUST_CORE
+#include "rustjrpc.h"
+
+// -----------------------------------
+std::string JrpcApi::call(const std::string& request)
+{
+    return rustbridge::jrpcCall(request);
+}
+
+// -----------------------------------
+nlohmann::json JrpcApi::invoke(const char* method, const json::array_t& args)
+{
+    rustbridge::JrpcHost host;
+    rustbridge::JsonBuilder builder;
+    std::string a = json(args).dump();
+    int32_t code = 0;
+    rustbridge::RustBuf what;
+    int r = pcrs_jrpc_invoke(reinterpret_cast<const uint8_t*>(method), strlen(method),
+                             reinterpret_cast<const uint8_t*>(a.data()), a.size(),
+                             host.get(), builder.get(), &code, what.out());
+    switch (r)
+    {
+    case 0: return builder.result;
+    case 1: throw method_not_found(what.str());
+    case 2: throw invalid_params(what.str());
+    case 3: throw application_error(code, what.str());
+    default: throw std::runtime_error(what.str());
+    }
+}
+
+#else // WITH_RUST_CORE
+
 using namespace std;
 using json = nlohmann::json;
 using str::valid_utf8;
@@ -1042,3 +1074,5 @@ json JrpcApi::setServerStorageItem(json::array_t args)
 
     return nullptr;
 }
+
+#endif // WITH_RUST_CORE

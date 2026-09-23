@@ -21,7 +21,7 @@ $(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs $(RUST)/src
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp diff_pcp_hs diff_chanpacket diff_chandir diff_chanhit diff_hostgraph_uptest diff_channel *.o cxxcore.a
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp diff_pcp_hs diff_chanpacket diff_chandir diff_chanhit diff_hostgraph_uptest diff_channel diff_jrpc *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -113,3 +113,14 @@ CHANNEL_WRAP = $(LOG_WRAP) \
 
 diff_channel: diff_channel.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(CHANNEL_WRAP) $(CXXCORE_LIBS)
+
+# ログ (記録する)、チャンネルを作る・配信元に接続する・再生する・情報を更新する、IPv6 のポートの確認、
+# 接続を止める、getState が読む inspect() の結果を横取りする
+JRPC_WRAP = $(LOG_WRAP) \
+            -Wl,--wrap=_ZN7ChanMgr13createChannelER8ChanInfoPKc -Wl,--wrap=_ZN7Channel8startURLEPKc \
+            -Wl,--wrap=_ZN7ServMgr17checkFirewallIPv6Ev -Wl,--wrap=_ZN7ChanMgr18findAndPlayChannelER8ChanInfob \
+            -Wl,--wrap=_ZN7Channel10updateInfoERK8ChanInfo -Wl,--wrap=_ZN7Servent5abortEv \
+            -Wl,--wrap=_ZNK4amf05Value7inspectB5cxx11Ev
+
+diff_jrpc: diff_jrpc.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustjrpc.h $(CORE)/rustbridge.h $(CORE)/rustchan.h
+	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(JRPC_WRAP) $(CXXCORE_LIBS)

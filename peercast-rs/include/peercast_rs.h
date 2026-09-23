@@ -625,6 +625,141 @@ pcrs_buf pcrs_chanmgr_auth_token(const uint8_t *broadcast_id, const uint8_t *id)
 /* closeOldestIdle で止めるチャンネルの番号。なければ -1 */
 ptrdiff_t pcrs_chanmgr_oldest_idle(const bool *idle, const uint32_t *last_idle_time, size_t n);
 
+/* ---- jrpc (core/common/jrpc.cpp の JrpcApi) ---- */
+/* 要求の解釈と結果の JSON の組み立ては Rust (src/jrpc.rs、JSON は src/json)。サーバーの状態は
+   pcrs_jrpc_host の call で触る。call は op ごとに下の値を受け取り、結果を pcrs_jrpc_put_* で渡す。
+   中身の見えない受け取り口 (pcrs_jrpc_sink) と args は、その call の間だけ有効 */
+typedef struct pcrs_jrpc_sink pcrs_jrpc_sink;
+
+typedef struct pcrs_jrpc_args {
+    uint8_t id[16];
+    int32_t i, j;
+    pcrs_bytes a, b;
+    const pcrs_bytes *fields;   /* UPDATE_INFO は 10 個、FETCH は url, name, desc, genre, contact, type の 6 個 */
+} pcrs_jrpc_args;
+
+typedef struct pcrs_jrpc_channel {
+    pcrs_chan_info info;
+    int32_t status;
+    pcrs_bytes source_url;
+    pcrs_bytes source_host;     /* sourceHost.host.str() */
+    uint32_t uptime;            /* info.getUptime() */
+    int32_t local_relays, local_directs, total_relays, total_directs;
+    bool is_broadcasting, is_full, is_receiving;
+    int32_t ip_version;
+    bool has_sock;
+    pcrs_bytes sock_host;       /* sock->host.str() */
+    int32_t source_rate;        /* sourceData ? getSourceRate() : 0 */
+    int32_t src_protocol;
+    uint32_t stream_pos;
+} pcrs_jrpc_channel;
+
+typedef struct pcrs_jrpc_servent {
+    int32_t index;
+    pcrs_bytes type, status;    /* getTypeStr()、getStatusStr() */
+    uint32_t send_rate, recv_rate;
+    int32_t protocol;           /* outputProtocol */
+    pcrs_bytes agent;
+    bool has_sock;
+    pcrs_bytes sock_host;
+} pcrs_jrpc_servent;
+
+typedef struct pcrs_jrpc_yp {   /* ChannelEntry */
+    pcrs_bytes feed_url, name;
+    uint8_t id[16];
+    pcrs_bytes tip, url, genre, desc, comment;
+    int32_t bitrate;
+    pcrs_bytes content_type, track_name, track_album, track_artist, track_contact;
+    int32_t num_directs, num_relays;
+} pcrs_jrpc_yp;
+
+typedef struct pcrs_jrpc_found {    /* ChanHitList (getChannelsFound) */
+    pcrs_chan_info info;
+    uint32_t uptime, skips, age;
+    uint8_t bcflags;
+    int32_t hosts, listeners, relays, firewalled, closest, furthest;
+    uint32_t newest;                /* sys->getTime() - newestHit() */
+} pcrs_jrpc_found;
+
+typedef struct pcrs_jrpc_found_hit {
+    pcrs_bytes ip;                  /* host.str() */
+    uint32_t hops, listeners, relays, uptime;
+    bool push, relay, direct, cin, stable;
+    uint32_t version;
+    uint32_t update;                /* sys->getTime() - time */
+    bool tracker;
+} pcrs_jrpc_found_hit;
+
+/* call の op。( ) の中は使う引数、-> のあとは結果 */
+enum {
+    PCRS_JRPC_AGENT = 0,            /* -> bytes: PCX_AGENT */
+    PCRS_JRPC_LOG_LINES = 1,        /* -> bytes: ログの各行 */
+    PCRS_JRPC_CLEAR_LOG = 2,
+    PCRS_JRPC_LOG_LEVEL = 3,        /* -> int */
+    PCRS_JRPC_SET_LOG_LEVEL = 4,    /* (i) */
+    PCRS_JRPC_FETCH = 5,            /* (fields, i: bitrate, j: IPv6 なら 1) -> 作れたら bytes: チャンネル ID (16 バイト) */
+    PCRS_JRPC_CHANNELS = 6,         /* -> channel: chanMgr->channel の並び */
+    PCRS_JRPC_FIND_CHANNEL = 7,     /* (id) -> あれば channel */
+    PCRS_JRPC_SERVENTS = 8,         /* (id) -> servent: chanID が id のもの */
+    PCRS_JRPC_STOP_CONNECTION = 9,  /* (id, i: connectionId) -> int: 止めたら 1 */
+    PCRS_JRPC_RELAY_TREE = 10,      /* (id) -> int: 0 チャンネルなし、1 ヒットリストなし、2 あり。2 なら hit: 自分とヒットリスト */
+    PCRS_JRPC_BUMP = 11,            /* (id) -> int: チャンネルがあれば 1 */
+    PCRS_JRPC_PLAY = 12,            /* (id) */
+    PCRS_JRPC_STOP_CHANNEL = 13,    /* (id) */
+    PCRS_JRPC_ROOT_HOST = 14,       /* -> bytes */
+    PCRS_JRPC_CLEAR_ROOT_HOST = 15,
+    PCRS_JRPC_SETTINGS = 16,        /* -> int: maxRelays, maxRelaysPerChannel, maxDirect, maxBitrateOut */
+    PCRS_JRPC_SET_SETTING = 17,     /* (i: 0〜3 は上の順、j: 値) */
+    PCRS_JRPC_STATUS = 18,          /* -> int: uptime, firewall, port、bytes: globalIP, localIP */
+    PCRS_JRPC_STATE = 19,           /* (i: 0 servMgr 1 chanMgr 2 stats 3 notificationBuffer 4 sys 5 ypList) -> bytes: getState().inspect() */
+    PCRS_JRPC_UPDATE_INFO = 20,     /* (id, fields: name, desc, genre, url, comment, track の contact, title, artist, album, genre) */
+    PCRS_JRPC_YP_CHANNELS = 21,     /* -> yp */
+    PCRS_JRPC_READ_STORAGE = 22,    /* (a: key) -> int: 開けたら 1、bytes: 中身 */
+    PCRS_JRPC_WRITE_STORAGE = 23,   /* (a: key, b: 中身) */
+    PCRS_JRPC_CHANNELS_FOUND = 24   /* -> found と、そのあとに found_hit (IP アドレスのあるヒット) */
+};
+
+typedef struct pcrs_jrpc_host {
+    void *ctx;
+    void (*log)(void *ctx, int level, const uint8_t *msg, size_t len);  /* 0 DEBUG、1 INFO、2 WARN、3 ERROR */
+    /* 0 成功、1 例外、2 std::domain_error。1 と 2 は pcrs_jrpc_put_error で what() を渡す */
+    int (*call)(void *ctx, int op, const pcrs_jrpc_args *args, pcrs_jrpc_sink *out);
+} pcrs_jrpc_host;
+
+void pcrs_jrpc_put_bytes(pcrs_jrpc_sink *out, const uint8_t *s, size_t n);
+void pcrs_jrpc_put_int(pcrs_jrpc_sink *out, int64_t v);
+void pcrs_jrpc_put_error(pcrs_jrpc_sink *out, const uint8_t *s, size_t n);
+void pcrs_jrpc_put_channel(pcrs_jrpc_sink *out, const pcrs_jrpc_channel *c);
+void pcrs_jrpc_put_servent(pcrs_jrpc_sink *out, const pcrs_jrpc_servent *s);
+void pcrs_jrpc_put_hit(pcrs_jrpc_sink *out, const pcrs_hit *h, const uint8_t *addr, size_t n);  /* addr: rhost[0].ip.str() */
+void pcrs_jrpc_put_yp(pcrs_jrpc_sink *out, const pcrs_jrpc_yp *y);
+void pcrs_jrpc_put_found(pcrs_jrpc_sink *out, const pcrs_jrpc_found *f);
+void pcrs_jrpc_put_found_hit(pcrs_jrpc_sink *out, const pcrs_jrpc_found_hit *h);  /* 直前の found のヒット */
+
+/* JrpcApi::call。0 なら *out に応答の JSON、1 なら応答を書き出せなかった例外の what() */
+int pcrs_jrpc_call(const uint8_t *req, size_t n, const pcrs_jrpc_host *host, pcrs_buf *out);
+
+/* JSON の値の通知 (配列とオブジェクトは begin_* と end で囲む。オブジェクトの値の前に key) */
+typedef struct pcrs_json_builder {
+    void *ctx;
+    void (*null_value)(void *ctx);
+    void (*boolean)(void *ctx, bool v);
+    void (*integer)(void *ctx, int64_t v);
+    void (*unsigned_integer)(void *ctx, uint64_t v);
+    void (*number)(void *ctx, double v);
+    void (*string)(void *ctx, const uint8_t *s, size_t n);
+    void (*begin_array)(void *ctx);
+    void (*begin_object)(void *ctx);
+    void (*key)(void *ctx, const uint8_t *s, size_t n);
+    void (*end)(void *ctx);
+} pcrs_json_builder;
+
+/* メソッドを直接呼ぶ (JrpcApi::getChannels など)。args は位置引数の配列の JSON。0 なら結果を
+   builder に通知する。1 method_not_found、2 invalid_params、3 application_error (*code に番号)、
+   4 そのほかの例外。1〜4 は *what に what() (常に pcrs_buf_free で返す) */
+int pcrs_jrpc_invoke(const uint8_t *method, size_t method_len, const uint8_t *args, size_t args_len,
+                     const pcrs_jrpc_host *host, const pcrs_json_builder *builder, int32_t *code, pcrs_buf *what);
+
 #ifdef __cplusplus
 }
 #endif

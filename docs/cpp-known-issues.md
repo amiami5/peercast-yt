@@ -34,6 +34,13 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
 * `XML::Node::findAttr` は名前の先頭が一致すれば見つかったことにする (`port` で `port_open` も
   見つかる)。Rust 版も同じにした (段階 7c)。
 
+* `LogBuffer::write` は、途中までの UTF-8 (例えば `"a\xe3\x81"`) で終わる文字列を渡すと、99 バイトずつ
+  切り分けるループが進まなくなり、ログのロックを持ったまま終わらない。今はログを書くのが `ADDLOG`
+  だけで、不正な UTF-8 を先に置き換えるので起きない (段階 9)。
+* `PublicController::createChannelIndex` は `getChannels` の結果を `LOG_DEBUG` に出すために `dump()` する
+  ので、配信元の URL などに不正な UTF-8 があると `type_error` が飛び、index.txt を返さずに接続が切れる
+  (`GeneralException` でないので捕まえられない)。
+
 * `Channel::getBufferString` は、受信の速さが 0 のとき 0.0 / 0.0 を `%.2f` で書くので、x86 では
   `-nan`、ARM では `nan` になる。Rust 版は CPU によらず `-nan` にした (段階 7d)。
 
@@ -52,5 +59,8 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
 * 段階 7d: `Channel::checkReadDelay` は `info.bitrate * 1024` を int で計算するので、ビットレートが
   大きいと桁あふれ (未定義の動作) し、2^22 の倍数では 0 で割って落ちる。Rust 版は割る数が 0 なら
   待たない。
+* 段階 8a: JSON-RPC の要求に `1e400` のような `double` に収まらない数があると、nlohmann の
+  `out_of_range` を捕まえず (`parse_error` だけを捕まえている)、応答を返さずに接続を切る。Rust 版は
+  Parse error を返す。
 * 全体: `char` の符号や `double` から `int` への変換など、CPU によって結果が変わる箇所
   (Rust 版は CPU によらず x86 と同じ結果にしている)。

@@ -23,6 +23,8 @@ pub mod gnuid;
 pub mod hostgraph;
 pub mod http;
 pub mod inspect;
+pub mod jrpc;
+pub mod json;
 pub mod jis;
 mod jis_table;
 pub mod md5;

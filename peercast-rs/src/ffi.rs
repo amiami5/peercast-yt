@@ -3041,3 +3041,645 @@ mod tests_7b {
         }
     }
 }
+
+// ---- jrpc (core/common/jrpc.cpp の JrpcApi) ----
+
+use crate::jrpc;
+use crate::json;
+
+/// `pcrs_jrpc_host` の `call` に渡す引数 (C の `pcrs_jrpc_args`)
+#[repr(C)]
+pub struct CJrpcArgs {
+    pub id: [u8; 16],
+    pub i: i32,
+    pub j: i32,
+    pub a: CBytes,
+    pub b: CBytes,
+    /// `UPDATE_INFO` は 10 個、`FETCH` は url, name, desc, genre, contact, type の 6 個。ほかは NULL
+    pub fields: *const CBytes,
+}
+
+/// `Channel` (C の `pcrs_jrpc_channel`)。中身は呼び出しの間だけ有効。
+#[repr(C)]
+pub struct CJrpcChannel {
+    pub info: CChanInfo,
+    pub status: i32,
+    pub source_url: CBytes,
+    pub source_host: CBytes,
+    pub uptime: u32,
+    pub local_relays: i32,
+    pub local_directs: i32,
+    pub total_relays: i32,
+    pub total_directs: i32,
+    pub is_broadcasting: bool,
+    pub is_full: bool,
+    pub is_receiving: bool,
+    pub ip_version: i32,
+    pub has_sock: bool,
+    pub sock_host: CBytes,
+    pub source_rate: i32,
+    pub src_protocol: i32,
+    pub stream_pos: u32,
+}
+
+/// `Servent` (C の `pcrs_jrpc_servent`)
+#[repr(C)]
+pub struct CJrpcServent {
+    pub index: i32,
+    pub type_str: CBytes,
+    pub status_str: CBytes,
+    pub send_rate: u32,
+    pub recv_rate: u32,
+    pub protocol: i32,
+    pub agent: CBytes,
+    pub has_sock: bool,
+    pub sock_host: CBytes,
+}
+
+/// `ChannelEntry` (C の `pcrs_jrpc_yp`)
+#[repr(C)]
+pub struct CJrpcYp {
+    pub feed_url: CBytes,
+    pub name: CBytes,
+    pub id: [u8; 16],
+    pub tip: CBytes,
+    pub url: CBytes,
+    pub genre: CBytes,
+    pub desc: CBytes,
+    pub comment: CBytes,
+    pub bitrate: i32,
+    pub content_type: CBytes,
+    pub track_name: CBytes,
+    pub track_album: CBytes,
+    pub track_artist: CBytes,
+    pub track_contact: CBytes,
+    pub num_directs: i32,
+    pub num_relays: i32,
+}
+
+/// `ChanHitList` (C の `pcrs_jrpc_found`)
+#[repr(C)]
+pub struct CJrpcFound {
+    pub info: CChanInfo,
+    pub uptime: u32,
+    pub skips: u32,
+    pub age: u32,
+    pub bcflags: u8,
+    pub hosts: i32,
+    pub listeners: i32,
+    pub relays: i32,
+    pub firewalled: i32,
+    pub closest: i32,
+    pub furthest: i32,
+    pub newest: u32,
+}
+
+/// `ChanHit` (C の `pcrs_jrpc_found_hit`)
+#[repr(C)]
+pub struct CJrpcFoundHit {
+    pub ip: CBytes,
+    pub hops: u32,
+    pub listeners: u32,
+    pub relays: u32,
+    pub uptime: u32,
+    pub push: bool,
+    pub relay: bool,
+    pub direct: bool,
+    pub cin: bool,
+    pub stable: bool,
+    pub version: u32,
+    pub update: u32,
+    pub tracker: bool,
+}
+
+/// C++ 側の状態 (C の `pcrs_jrpc_host`)
+#[repr(C)]
+pub struct CJrpcHost {
+    pub ctx: *mut c_void,
+    pub log: unsafe extern "C" fn(ctx: *mut c_void, level: i32, msg: *const u8, len: usize),
+    /// 0 成功、1 例外、2 `std::domain_error` (どちらも `pcrs_jrpc_put_error` で `what()` を渡す)
+    pub call: unsafe extern "C" fn(ctx: *mut c_void, op: i32, args: *const CJrpcArgs, out: *mut JrpcSink) -> i32,
+}
+
+/// JSON の値を C++ に渡す (C の `pcrs_json_builder`)
+#[repr(C)]
+pub struct CJsonBuilder {
+    pub ctx: *mut c_void,
+    pub null_value: unsafe extern "C" fn(ctx: *mut c_void),
+    pub boolean: unsafe extern "C" fn(ctx: *mut c_void, v: bool),
+    pub integer: unsafe extern "C" fn(ctx: *mut c_void, v: i64),
+    pub unsigned_integer: unsafe extern "C" fn(ctx: *mut c_void, v: u64),
+    pub number: unsafe extern "C" fn(ctx: *mut c_void, v: f64),
+    pub string: unsafe extern "C" fn(ctx: *mut c_void, s: *const u8, n: usize),
+    pub begin_array: unsafe extern "C" fn(ctx: *mut c_void),
+    pub begin_object: unsafe extern "C" fn(ctx: *mut c_void),
+    pub key: unsafe extern "C" fn(ctx: *mut c_void, s: *const u8, n: usize),
+    pub end: unsafe extern "C" fn(ctx: *mut c_void),
+}
+
+
+const JRPC_AGENT: i32 = 0;
+const JRPC_LOG_LINES: i32 = 1;
+const JRPC_CLEAR_LOG: i32 = 2;
+const JRPC_LOG_LEVEL: i32 = 3;
+const JRPC_SET_LOG_LEVEL: i32 = 4;
+const JRPC_FETCH: i32 = 5;
+const JRPC_CHANNELS: i32 = 6;
+const JRPC_FIND_CHANNEL: i32 = 7;
+const JRPC_SERVENTS: i32 = 8;
+const JRPC_STOP_CONNECTION: i32 = 9;
+const JRPC_RELAY_TREE: i32 = 10;
+const JRPC_BUMP: i32 = 11;
+const JRPC_PLAY: i32 = 12;
+const JRPC_STOP_CHANNEL: i32 = 13;
+const JRPC_ROOT_HOST: i32 = 14;
+const JRPC_CLEAR_ROOT_HOST: i32 = 15;
+const JRPC_SETTINGS: i32 = 16;
+const JRPC_SET_SETTING: i32 = 17;
+const JRPC_STATUS: i32 = 18;
+const JRPC_STATE: i32 = 19;
+const JRPC_UPDATE_INFO: i32 = 20;
+const JRPC_YP_CHANNELS: i32 = 21;
+const JRPC_READ_STORAGE: i32 = 22;
+const JRPC_WRITE_STORAGE: i32 = 23;
+const JRPC_CHANNELS_FOUND: i32 = 24;
+
+/// C++ のコールバックが結果を入れる所 (C では中身の見えない `pcrs_jrpc_sink`)
+#[derive(Default)]
+pub struct JrpcSink {
+    bytes: Vec<Vec<u8>>,
+    ints: Vec<i64>,
+    channels: Vec<jrpc::ChannelData>,
+    servents: Vec<jrpc::ServentData>,
+    hits: Vec<(chanhit::Hit, Vec<u8>)>,
+    yps: Vec<jrpc::YpEntry>,
+    found: Vec<jrpc::FoundData>,
+    error: Vec<u8>,
+}
+
+impl JrpcSink {
+    fn int(&self, i: usize) -> i64 {
+        self.ints.get(i).copied().unwrap_or(0)
+    }
+    fn take_bytes(&mut self, i: usize) -> Vec<u8> {
+        self.bytes.get_mut(i).map(std::mem::take).unwrap_or_default()
+    }
+}
+
+/// # Safety
+/// `b` の中身は `b.len` バイト読めること。
+unsafe fn owned(b: &CBytes) -> Vec<u8> {
+    // SAFETY: 関数の Safety 節
+    unsafe { input(b.ptr, b.len) }.to_vec()
+}
+
+/// # Safety
+/// `c` の中のバイト列は読めること。
+unsafe fn info_data(c: &CChanInfo) -> jrpc::InfoData {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        jrpc::InfoData {
+            id: c.id,
+            name: owned(&c.name),
+            content_type: owned(&c.content_type),
+            mime: owned(&c.mime),
+            desc: owned(&c.desc),
+            genre: owned(&c.genre),
+            url: owned(&c.url),
+            comment: owned(&c.comment),
+            bitrate: c.bitrate,
+            track_contact: owned(&c.track_contact),
+            track_title: owned(&c.track_title),
+            track_artist: owned(&c.track_artist),
+            track_album: owned(&c.track_album),
+            track_genre: owned(&c.track_genre),
+        }
+    }
+}
+
+/// C++ のコールバックから、受け取り口を使う。
+///
+/// # Safety
+/// `out` は `pcrs_jrpc_host` の `call` に渡された有効な受け取り口であること。
+unsafe fn sink<'a>(out: *mut JrpcSink) -> &'a mut JrpcSink {
+    // SAFETY: 関数の Safety 節
+    unsafe { &mut *out }
+}
+
+/// # Safety
+/// `out` は `call` に渡された受け取り口、`s` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_bytes(out: *mut JrpcSink, s: *const u8, n: usize) {
+    // SAFETY: 関数の Safety 節
+    unsafe { sink(out).bytes.push(input(s, n).to_vec()) }
+}
+
+/// # Safety
+/// `out` は `call` に渡された受け取り口であること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_int(out: *mut JrpcSink, v: i64) {
+    // SAFETY: 関数の Safety 節
+    unsafe { sink(out).ints.push(v) }
+}
+
+/// # Safety
+/// `out` は `call` に渡された受け取り口、`s` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_error(out: *mut JrpcSink, s: *const u8, n: usize) {
+    // SAFETY: 関数の Safety 節
+    unsafe { sink(out).error = input(s, n).to_vec() }
+}
+
+/// # Safety
+/// `out` は `call` に渡された受け取り口、`c` は有効な `pcrs_jrpc_channel` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_channel(out: *mut JrpcSink, c: *const CJrpcChannel) {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let c = &*c;
+        sink(out).channels.push(jrpc::ChannelData {
+            info: info_data(&c.info),
+            status: c.status,
+            source_url: owned(&c.source_url),
+            source_host: owned(&c.source_host),
+            uptime: c.uptime,
+            local_relays: c.local_relays,
+            local_directs: c.local_directs,
+            total_relays: c.total_relays,
+            total_directs: c.total_directs,
+            is_broadcasting: c.is_broadcasting,
+            is_full: c.is_full,
+            is_receiving: c.is_receiving,
+            ip_version: c.ip_version,
+            sock_host: if c.has_sock { Some(owned(&c.sock_host)) } else { None },
+            source_rate: c.source_rate,
+            src_protocol: c.src_protocol,
+            stream_pos: c.stream_pos,
+        });
+    }
+}
+
+/// # Safety
+/// `out` は `call` に渡された受け取り口、`s` は有効な `pcrs_jrpc_servent` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_servent(out: *mut JrpcSink, s: *const CJrpcServent) {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let s = &*s;
+        sink(out).servents.push(jrpc::ServentData {
+            index: s.index,
+            type_str: owned(&s.type_str),
+            status_str: owned(&s.status_str),
+            send_rate: s.send_rate,
+            recv_rate: s.recv_rate,
+            protocol: s.protocol,
+            agent: owned(&s.agent),
+            sock_host: if s.has_sock { Some(owned(&s.sock_host)) } else { None },
+        });
+    }
+}
+
+/// # Safety
+/// `out` は `call` に渡された受け取り口、`h` は有効な `pcrs_hit`、`addr` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_hit(out: *mut JrpcSink, h: *const CHit, addr: *const u8, n: usize) {
+    // SAFETY: 関数の Safety 節
+    unsafe { sink(out).hits.push((hit_of(h), input(addr, n).to_vec())) }
+}
+
+/// # Safety
+/// `out` は `call` に渡された受け取り口、`y` は有効な `pcrs_jrpc_yp` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_yp(out: *mut JrpcSink, y: *const CJrpcYp) {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let y = &*y;
+        sink(out).yps.push(jrpc::YpEntry {
+            feed_url: owned(&y.feed_url),
+            name: owned(&y.name),
+            id: y.id,
+            tip: owned(&y.tip),
+            url: owned(&y.url),
+            genre: owned(&y.genre),
+            desc: owned(&y.desc),
+            comment: owned(&y.comment),
+            bitrate: y.bitrate,
+            content_type: owned(&y.content_type),
+            track_name: owned(&y.track_name),
+            track_album: owned(&y.track_album),
+            track_artist: owned(&y.track_artist),
+            track_contact: owned(&y.track_contact),
+            num_directs: y.num_directs,
+            num_relays: y.num_relays,
+        });
+    }
+}
+
+/// ヒットリストを 1 つ加える。続く `pcrs_jrpc_put_found_hit` は、このヒットリストのヒットになる。
+///
+/// # Safety
+/// `out` は `call` に渡された受け取り口、`f` は有効な `pcrs_jrpc_found` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_found(out: *mut JrpcSink, f: *const CJrpcFound) {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let f = &*f;
+        sink(out).found.push(jrpc::FoundData {
+            info: info_data(&f.info),
+            uptime: f.uptime,
+            skips: f.skips,
+            age: f.age,
+            bcflags: f.bcflags,
+            hosts: f.hosts,
+            listeners: f.listeners,
+            relays: f.relays,
+            firewalled: f.firewalled,
+            closest: f.closest,
+            furthest: f.furthest,
+            newest: f.newest,
+            hits: Vec::new(),
+        });
+    }
+}
+
+/// # Safety
+/// `out` は `call` に渡された受け取り口、`h` は有効な `pcrs_jrpc_found_hit` を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_put_found_hit(out: *mut JrpcSink, h: *const CJrpcFoundHit) {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let h = &*h;
+        let hit = jrpc::FoundHit {
+            ip: owned(&h.ip),
+            hops: h.hops,
+            listeners: h.listeners,
+            relays: h.relays,
+            uptime: h.uptime,
+            push: h.push,
+            relay: h.relay,
+            direct: h.direct,
+            cin: h.cin,
+            stable: h.stable,
+            version: h.version,
+            update: h.update,
+            tracker: h.tracker,
+        };
+        if let Some(f) = sink(out).found.last_mut() {
+            f.hits.push(hit);
+        }
+    }
+}
+
+struct FfiJrpcHost<'a>(&'a CJrpcHost);
+
+impl FfiJrpcHost<'_> {
+    fn call(&mut self, op: i32, id: &[u8; 16], i: i32, j: i32, a: &[u8], b: &[u8], fields: &[&[u8]]) -> jrpc::HostResult<JrpcSink> {
+        let cf: Vec<CBytes> = fields.iter().map(|f| CBytes::of(f)).collect();
+        let args = CJrpcArgs {
+            id: *id,
+            i,
+            j,
+            a: CBytes::of(a),
+            b: CBytes::of(b),
+            fields: if cf.is_empty() { std::ptr::null() } else { cf.as_ptr() },
+        };
+        let mut out = JrpcSink::default();
+        // SAFETY: ホストは C++ 側が有効なものを渡す (pcrs_jrpc_call の Safety 節)。args と out は
+        // この呼び出しの間だけ有効で、C++ はそれより長く持たない。
+        let r = unsafe { (self.0.call)(self.0.ctx, op, &args, &mut out) };
+        match r {
+            0 => Ok(out),
+            2 => Err(jrpc::HostError::DomainError(out.error)),
+            _ => Err(jrpc::HostError::Exception(out.error)),
+        }
+    }
+
+    fn op(&mut self, op: i32) -> jrpc::HostResult<JrpcSink> {
+        self.call(op, &[0; 16], 0, 0, &[], &[], &[])
+    }
+
+    fn op_id(&mut self, op: i32, id: &[u8; 16]) -> jrpc::HostResult<JrpcSink> {
+        self.call(op, id, 0, 0, &[], &[], &[])
+    }
+}
+
+impl jrpc::Host for FfiJrpcHost<'_> {
+    fn log(&mut self, level: jrpc::Level, msg: &[u8]) {
+        let l = match level {
+            jrpc::Level::Debug => 0,
+            jrpc::Level::Info => 1,
+            jrpc::Level::Warn => 2,
+            jrpc::Level::Error => 3,
+        };
+        // SAFETY: CJrpcHost::call と同じ
+        unsafe { (self.0.log)(self.0.ctx, l, msg.as_ptr(), msg.len()) }
+    }
+    fn agent(&mut self) -> Vec<u8> {
+        self.op(JRPC_AGENT).map(|mut s| s.take_bytes(0)).unwrap_or_default()
+    }
+    fn log_lines(&mut self) -> jrpc::HostResult<Vec<Vec<u8>>> {
+        Ok(self.op(JRPC_LOG_LINES)?.bytes)
+    }
+    fn clear_log(&mut self) -> jrpc::HostResult<()> {
+        self.op(JRPC_CLEAR_LOG).map(|_| ())
+    }
+    fn log_level(&mut self) -> jrpc::HostResult<i32> {
+        Ok(self.op(JRPC_LOG_LEVEL)?.int(0) as i32)
+    }
+    fn set_log_level(&mut self, level: i32) -> jrpc::HostResult<()> {
+        self.call(JRPC_SET_LOG_LEVEL, &[0; 16], level, 0, &[], &[], &[]).map(|_| ())
+    }
+    fn fetch(&mut self, req: &jrpc::FetchRequest) -> jrpc::HostResult<Option<[u8; 16]>> {
+        let fields: [&[u8]; 6] = [&req.url, &req.name, &req.desc, &req.genre, &req.contact, &req.type_str];
+        let mut s = self.call(JRPC_FETCH, &[0; 16], req.bitrate, req.ipv6 as i32, &[], &[], &fields)?;
+        Ok(match s.bytes.first() {
+            Some(b) if b.len() == 16 => {
+                let mut id = [0u8; 16];
+                id.copy_from_slice(&s.take_bytes(0));
+                Some(id)
+            }
+            _ => None,
+        })
+    }
+    fn channels(&mut self) -> jrpc::HostResult<Vec<jrpc::ChannelData>> {
+        Ok(self.op(JRPC_CHANNELS)?.channels)
+    }
+    fn find_channel(&mut self, id: &[u8; 16]) -> jrpc::HostResult<Option<jrpc::ChannelData>> {
+        Ok(self.op_id(JRPC_FIND_CHANNEL, id)?.channels.pop())
+    }
+    fn servents(&mut self, id: &[u8; 16]) -> jrpc::HostResult<Vec<jrpc::ServentData>> {
+        Ok(self.op_id(JRPC_SERVENTS, id)?.servents)
+    }
+    fn stop_connection(&mut self, id: &[u8; 16], connection_id: i32) -> jrpc::HostResult<bool> {
+        Ok(self.call(JRPC_STOP_CONNECTION, id, connection_id, 0, &[], &[], &[])?.int(0) != 0)
+    }
+    fn relay_tree(&mut self, id: &[u8; 16]) -> jrpc::HostResult<jrpc::RelayTreeData> {
+        let s = self.op_id(JRPC_RELAY_TREE, id)?;
+        Ok(match s.int(0) {
+            0 => jrpc::RelayTreeData::NoChannel,
+            1 => jrpc::RelayTreeData::NoHitList,
+            _ => jrpc::RelayTreeData::Hits(s.hits),
+        })
+    }
+    fn bump(&mut self, id: &[u8; 16]) -> jrpc::HostResult<bool> {
+        Ok(self.op_id(JRPC_BUMP, id)?.int(0) != 0)
+    }
+    fn play(&mut self, id: &[u8; 16]) -> jrpc::HostResult<()> {
+        self.op_id(JRPC_PLAY, id).map(|_| ())
+    }
+    fn stop_channel(&mut self, id: &[u8; 16]) -> jrpc::HostResult<()> {
+        self.op_id(JRPC_STOP_CHANNEL, id).map(|_| ())
+    }
+    fn root_host(&mut self) -> jrpc::HostResult<Vec<u8>> {
+        Ok(self.op(JRPC_ROOT_HOST)?.take_bytes(0))
+    }
+    fn clear_root_host(&mut self) -> jrpc::HostResult<()> {
+        self.op(JRPC_CLEAR_ROOT_HOST).map(|_| ())
+    }
+    fn settings(&mut self) -> jrpc::HostResult<jrpc::Settings> {
+        let s = self.op(JRPC_SETTINGS)?;
+        Ok(jrpc::Settings {
+            max_relays: s.int(0) as u32,
+            max_relays_per_channel: s.int(1) as i32,
+            max_direct: s.int(2) as u32,
+            max_bitrate_out: s.int(3) as u32,
+        })
+    }
+    fn set_setting(&mut self, key: jrpc::SettingKey, value: i32) -> jrpc::HostResult<()> {
+        let k = match key {
+            jrpc::SettingKey::MaxRelays => 0,
+            jrpc::SettingKey::MaxRelaysPerChannel => 1,
+            jrpc::SettingKey::MaxDirect => 2,
+            jrpc::SettingKey::MaxBitrateOut => 3,
+        };
+        self.call(JRPC_SET_SETTING, &[0; 16], k, value, &[], &[], &[]).map(|_| ())
+    }
+    fn status(&mut self) -> jrpc::HostResult<jrpc::Status> {
+        let mut s = self.op(JRPC_STATUS)?;
+        Ok(jrpc::Status {
+            uptime: s.int(0) as u32,
+            firewall: s.int(1) as i32,
+            port: s.int(2) as u16,
+            global_ip: s.take_bytes(0),
+            local_ip: s.take_bytes(1),
+        })
+    }
+    fn state(&mut self, which: usize) -> jrpc::HostResult<Vec<u8>> {
+        Ok(self.call(JRPC_STATE, &[0; 16], which as i32, 0, &[], &[], &[])?.take_bytes(0))
+    }
+    fn update_info(&mut self, id: &[u8; 16], fields: &[Vec<u8>; 10]) -> jrpc::HostResult<()> {
+        let f: Vec<&[u8]> = fields.iter().map(|v| v.as_slice()).collect();
+        self.call(JRPC_UPDATE_INFO, id, 0, 0, &[], &[], &f).map(|_| ())
+    }
+    fn yp_channels(&mut self) -> jrpc::HostResult<Vec<jrpc::YpEntry>> {
+        Ok(self.op(JRPC_YP_CHANNELS)?.yps)
+    }
+    fn read_storage(&mut self, key: &[u8]) -> jrpc::HostResult<Option<Vec<u8>>> {
+        let mut s = self.call(JRPC_READ_STORAGE, &[0; 16], 0, 0, key, &[], &[])?;
+        Ok(if s.int(0) != 0 { Some(s.take_bytes(0)) } else { None })
+    }
+    fn write_storage(&mut self, key: &[u8], value: &[u8]) -> jrpc::HostResult<()> {
+        self.call(JRPC_WRITE_STORAGE, &[0; 16], 0, 0, key, value, &[]).map(|_| ())
+    }
+    fn channels_found(&mut self) -> jrpc::HostResult<Vec<jrpc::FoundData>> {
+        Ok(self.op(JRPC_CHANNELS_FOUND)?.found)
+    }
+}
+
+/// `JrpcApi::call`。0 なら `out` に応答の JSON、1 なら応答を書き出せなかった例外の `what()`。
+///
+/// # Safety
+/// `req` は `n` バイト読めること。`host` は有効な `pcrs_jrpc_host` を指し、そのコールバックは
+/// 渡された受け取り口と引数をその呼び出しの間だけ使うこと。`out` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_call(req: *const u8, n: usize, host: *const CJrpcHost, out: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (req, host) = unsafe { (input(req, n), &*host) };
+    let (code, buf) = match jrpc::call(req, &mut FfiJrpcHost(host)) {
+        Ok(r) => (0, r),
+        Err(w) => (1, w),
+    };
+    // SAFETY: 関数の Safety 節
+    unsafe { *out = into_buf(buf) };
+    code
+}
+
+fn build_json(v: &json::Value, b: &CJsonBuilder) {
+    // SAFETY: pcrs_jrpc_invoke の Safety 節
+    unsafe {
+        match v {
+            json::Value::Null => (b.null_value)(b.ctx),
+            json::Value::Bool(x) => (b.boolean)(b.ctx, *x),
+            json::Value::Int(x) => (b.integer)(b.ctx, *x),
+            json::Value::UInt(x) => (b.unsigned_integer)(b.ctx, *x),
+            json::Value::Float(x) => (b.number)(b.ctx, *x),
+            json::Value::Str(s) => (b.string)(b.ctx, s.as_ptr(), s.len()),
+            json::Value::Array(a) => {
+                (b.begin_array)(b.ctx);
+                for e in a {
+                    build_json(e, b);
+                }
+                (b.end)(b.ctx);
+            }
+            json::Value::Object(o) => {
+                (b.begin_object)(b.ctx);
+                for (k, e) in o {
+                    (b.key)(b.ctx, k.as_ptr(), k.len());
+                    build_json(e, b);
+                }
+                (b.end)(b.ctx);
+            }
+        }
+    }
+}
+
+/// C++ から JrpcApi のメソッドを直接呼ぶ。`args` は位置引数の配列の JSON。
+/// 0 なら結果を `builder` に通知する。1 method_not_found、2 invalid_params、3 application_error
+/// (`code` に番号)、4 そのほかの例外。1〜4 は `what` に `what()` を入れる。
+///
+/// # Safety
+/// `method` と `args` はそれぞれの長さ読めること。`host` は `pcrs_jrpc_call` と同じ。
+/// `builder` は有効な `pcrs_json_builder` を指し、`code` と `what` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_jrpc_invoke(
+    method: *const u8,
+    method_len: usize,
+    args: *const u8,
+    args_len: usize,
+    host: *const CJrpcHost,
+    builder: *const CJsonBuilder,
+    code: *mut i32,
+    what: *mut PcrsBuf,
+) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (method, args, host, builder) = unsafe { (input(method, method_len), input(args, args_len), &*host, &*builder) };
+    let args = match json::parse(args) {
+        Ok(json::Value::Array(a)) => a,
+        Ok(_) => Vec::new(),
+        Err(e) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *what = into_buf(e.what().to_vec()) };
+            return 4;
+        }
+    };
+    let (r, c, mut w) = match jrpc::invoke(method, args, &mut FfiJrpcHost(host)) {
+        Ok(v) => {
+            build_json(&v, builder);
+            (0, 0, Vec::new())
+        }
+        Err(jrpc::CallError::MethodNotFound(w)) => (1, 0, w),
+        Err(jrpc::CallError::InvalidParams(w)) => (2, 0, w),
+        Err(jrpc::CallError::Application(c, w)) => (3, c, w),
+        Err(jrpc::CallError::Internal(w)) => (4, 0, w),
+    };
+    // what() は C の文字列なので NUL の手前まで
+    if let Some(n) = w.iter().position(|&b| b == 0) {
+        w.truncate(n);
+    }
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        *code = c;
+        *what = into_buf(w);
+    }
+    r
+}
