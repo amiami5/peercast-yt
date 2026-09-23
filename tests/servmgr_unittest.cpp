@@ -120,9 +120,6 @@ TEST_F(ServMgrFixture, initialState)
     // std::string         audioCodec;
     ASSERT_EQ("mp3", m.audioCodec);
 
-    // std::string         wmvProtocol;
-    ASSERT_EQ("http", m.wmvProtocol);
-
     // RTMPServerMonitor   rtmpServerMonitor;
     ASSERT_FALSE(m.rtmpServerMonitor.isEnabled());
 
@@ -438,8 +435,7 @@ TEST_F(ServMgrFixture, getSettings)
            {"maxPushHops", "8"},
            {"transcodingEnabled", "No"},
            {"preset", "veryfast"},
-           {"audioCodec", "mp3"},
-           {"wmvProtocol", "http"}}},
+           {"audioCodec", "mp3"}}},
          {"Privacy", {{"password", ""}, {"maxUptime", "0"}}},
          {"Filter",
           {{"ip", "255.255.255.255"},

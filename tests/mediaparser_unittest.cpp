@@ -5,7 +5,6 @@
 #include "mp4.h"
 #include "mkv.h"
 #include "mp3.h"
-#include "nsv.h"
 #include "ogg.h"
 #include <new>
 #include <memory>
@@ -158,21 +157,6 @@ TEST(MediaParserSecurity, mp3UnterminatedIcyMetadata)
 
     StringStream in(data);
     MP3Stream stream;
-    ASSERT_NO_THROW(stream.readPacket(in, ch));
-}
-
-TEST(MediaParserSecurity, nsvUnterminatedIcyMetadata)
-{
-    auto ch = std::make_shared<Channel>();
-    ch->icyMetaInterval = 16;
-
-    std::string data(16, 'x');
-    data += (char) 64;
-    data += std::string(1024, 'A');
-    data += std::string(4096, 'B');
-
-    StringStream in(data);
-    NSVStream stream;
     ASSERT_NO_THROW(stream.readPacket(in, ch));
 }
 

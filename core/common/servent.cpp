@@ -237,7 +237,6 @@ void Servent::reset()
     allow = ALLOW_ALL;
     syncPos = 0;
     addMetadata = false;
-    nsSwitchNum = 0;
     lastConnect = lastPing = lastPacket = 0;
 
     loginPassword.clear();
@@ -543,9 +542,9 @@ bool    Servent::pingHost(Host &rhost, const GnuID &rsid)
 }
 
 // -----------------------------------
-// HTTP ヘッダーを読み込み、gotPCP, reqPos, nsSwitchNum, this->addMetaData,
+// HTTP ヘッダーを読み込み、gotPCP, reqPos, this->addMetaData,
 // this->agent を設定する。
-void Servent::handshakeStream_readHeaders(bool& gotPCP, unsigned int& reqPos, int& nsSwitchNum)
+void Servent::handshakeStream_readHeaders(bool& gotPCP, unsigned int& reqPos)
 {
     HTTP http(*sock);
 
@@ -563,37 +562,11 @@ void Servent::handshakeStream_readHeaders(bool& gotPCP, unsigned int& reqPos, in
             addMetadata = atoi(arg) > 0;
         else if (http.isHeader(HTTP_HS_AGENT))
             agent = arg;
-        else if (http.isHeader("Pragma"))
-        {
-            char *ssc = stristr(arg, "stream-switch-count=");
-
-            if (ssc)
-            {
-                nsSwitchNum = 1;
-                //nsSwitchNum = atoi(ssc+20);
-            }
-        }
 
         LOG_DEBUG("Stream: %s", http.cmdLine);
     }
 }
 
-
-// -----------------------------------
-// 状況に応じて this->outputProtocol を設定する。
-void Servent::handshakeStream_changeOutputProtocol(bool gotPCP, const ChanInfo& chanInfo)
-{
-    // WMV ならば MMS(MMSH)
-    if (outputProtocol == ChanInfo::SP_HTTP)
-    {
-        if  ( (chanInfo.srcProtocol == ChanInfo::SP_MMS)
-              || (chanInfo.contentType == ChanInfo::T_WMA)
-              || (chanInfo.contentType == ChanInfo::T_WMV)
-              || (chanInfo.contentType == ChanInfo::T_ASX)
-            )
-        outputProtocol = ChanInfo::SP_MMS;
-    }
-}
 
 // -----------------------------------
 // ストリームできる時の応答のヘッダー部分を送信する。
@@ -621,21 +594,16 @@ void Servent::handshakeStream_returnStreamHeaders(AtomStream& atom,
     {
         sock->writeLine(HTTP_SC_OK);
 
-        if ((chanInfo.contentType != ChanInfo::T_ASX) &&
-            (chanInfo.contentType != ChanInfo::T_WMV) &&
-            (chanInfo.contentType != ChanInfo::T_WMA))
-        {
-            sock->writeLineF("%s %s", HTTP_HS_SERVER, PCX_AGENT);
+        sock->writeLineF("%s %s", HTTP_HS_SERVER, PCX_AGENT);
 
-            sock->writeLine("Accept-Ranges: none");
+        sock->writeLine("Accept-Ranges: none");
 
-            sock->writeLineF("x-audiocast-name: %s", chanInfo.name.c_str());
-            sock->writeLineF("x-audiocast-bitrate: %d", chanInfo.bitrate);
-            sock->writeLineF("x-audiocast-genre: %s", chanInfo.genre.c_str());
-            sock->writeLineF("x-audiocast-description: %s", chanInfo.desc.c_str());
-            sock->writeLineF("x-audiocast-url: %s", chanInfo.url.c_str());
-            sock->writeLineF("%s %s", PCX_HS_CHANNELID, chanInfo.id.str().c_str());
-        }
+        sock->writeLineF("x-audiocast-name: %s", chanInfo.name.c_str());
+        sock->writeLineF("x-audiocast-bitrate: %d", chanInfo.bitrate);
+        sock->writeLineF("x-audiocast-genre: %s", chanInfo.genre.c_str());
+        sock->writeLineF("x-audiocast-description: %s", chanInfo.desc.c_str());
+        sock->writeLineF("x-audiocast-url: %s", chanInfo.url.c_str());
+        sock->writeLineF("%s %s", PCX_HS_CHANNELID, chanInfo.id.str().c_str());
 
         if (outputProtocol == ChanInfo::SP_HTTP)
         {
@@ -646,24 +614,6 @@ void Servent::handshakeStream_returnStreamHeaders(AtomStream& atom,
             }
             sock->writeLine("Access-Control-Allow-Origin: *");
             sock->writeLineF("%s %s", HTTP_HS_CONTENT, chanInfo.getMIMEType());
-        }else if (outputProtocol == ChanInfo::SP_MMS)
-        {
-            sock->writeLine("Server: Rex/9.0.0.2980");
-            sock->writeLine("Cache-Control: no-cache");
-            sock->writeLine("Pragma: no-cache");
-            sock->writeLine("Pragma: client-id=3587303426");
-            sock->writeLine("Pragma: features=\"broadcast, playlist\"");
-
-            if (nsSwitchNum)
-            {
-                sock->writeLineF("%s %s", HTTP_HS_CONTENT, MIME_MMS);
-            }else
-            {
-                sock->writeLine("Content-Type: application/vnd.ms.wms-hdr.asfv1");
-                if (ch)
-                    sock->writeLineF("Content-Length: %d", ch->headPack.len);
-                sock->writeLine("Connection: Keep-Alive");
-            }
         }else if (outputProtocol == ChanInfo::SP_PCP)
         {
             sock->writeLineF("%s %d", PCX_HS_POS, streamPos);
@@ -877,10 +827,8 @@ bool Servent::handshakeStream(ChanInfo &chanInfo)
 {
     bool gotPCP = false;
     unsigned int reqPos = 0;
-    nsSwitchNum = 0;
 
-    handshakeStream_readHeaders(gotPCP, reqPos, nsSwitchNum);
-    handshakeStream_changeOutputProtocol(gotPCP, chanInfo);
+    handshakeStream_readHeaders(gotPCP, reqPos);
 
     bool chanReady = false;
 
@@ -1735,15 +1683,6 @@ void Servent::processStream(ChanInfo &chanInfo)
                 sendRawMetaChannel(chanMgr->icyMetaInterval);
             else
                 sendRawChannel(true, true);
-        }else if (outputProtocol == ChanInfo::SP_MMS)
-        {
-            if (nsSwitchNum)
-            {
-                sendRawChannel(true, true);
-            }else
-            {
-                sendRawChannel(true, false);
-            }
         }else if (outputProtocol  == ChanInfo::SP_PCP)
         {
             sendPCPChannel();

@@ -22,7 +22,6 @@
 #include "sys.h"
 #include "stream.h"
 #include "xml.h"
-#include "asf.h"
 #include "cstream.h"
 #include "chanpacket.h"
 #include "varwriter.h"
@@ -163,7 +162,6 @@ public:
     void    startICY(std::shared_ptr<ClientSocket>, SRC_TYPE);
     void    startURL(const char *);
     void    startHTTPPush(std::shared_ptr<ClientSocket>, bool isChunked);
-    void    startWMHTTPPush(std::shared_ptr<ClientSocket> cs);
 
     std::shared_ptr<ChannelStream> createSource();
 

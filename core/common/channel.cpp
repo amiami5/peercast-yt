@@ -39,11 +39,8 @@
 
 #include "mp3.h"
 #include "ogg.h"
-#include "mms.h"
-#include "nsv.h"
 #include "flv.h"
 #include "mkv.h"
-#include "wmhttp.h"
 #include "mp4.h"
 
 #include "icy.h"
@@ -847,19 +844,6 @@ void    Channel::startHTTPPush(std::shared_ptr<ClientSocket> cs, bool isChunked)
 }
 
 // -----------------------------------
-void    Channel::startWMHTTPPush(std::shared_ptr<ClientSocket> cs)
-{
-    srcType = SRC_HTTPPUSH;
-    type    = T_BROADCAST;
-
-    sock = cs;
-    info.srcProtocol = ChanInfo::SP_WMHTTP;
-
-    sourceData = std::make_shared<HTTPPushSource>(false);
-    startStream();
-}
-
-// -----------------------------------
 void    Channel::startICY(std::shared_ptr<ClientSocket> cs, SRC_TYPE st)
 {
     srcType = st;
@@ -1159,35 +1143,11 @@ std::shared_ptr<ChannelStream> Channel::createSource()
         LOG_INFO("Channel is PCP");
         return std::make_shared<PCPStream>(remoteID);
     }
-    else if (info.srcProtocol == ChanInfo::SP_MMS)
-    {
-        LOG_INFO("Channel is MMS");
-        return std::make_shared<MMSStream>();
-    }else if (info.srcProtocol == ChanInfo::SP_WMHTTP)
-    {
-        if (info.contentType == ChanInfo::T_WMA ||
-            info.contentType == ChanInfo::T_WMV)
-        {
-            LOG_INFO("Channel is WMHTTP");
-            return std::make_shared<WMHTTPStream>();
-        }else
-        {
-            throw StreamException("Channel is WMHTTP - but not WMA/WMV");
-        }
-    }else{
+    else{
         if (info.contentType == ChanInfo::T_MP3)
         {
             LOG_INFO("Channel is MP3 - meta: %d", icyMetaInterval);
             return std::make_shared<MP3Stream>();
-        }else if (info.contentType == ChanInfo::T_NSV)
-        {
-            LOG_INFO("Channel is NSV");
-            return std::make_shared<NSVStream>();
-        }else if (info.contentType == ChanInfo::T_WMA ||
-                  info.contentType == ChanInfo::T_WMV)
-        {
-            LOG_INFO("Channel is MMS");
-            return std::make_shared<MMSStream>();
         }else if (info.contentType == ChanInfo::T_FLV)
         {
             LOG_INFO("Channel is FLV");

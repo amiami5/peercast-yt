@@ -42,7 +42,7 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 | 1 | 基盤 (Cargo ワークスペース、静的ライブラリ、Makefile と gtest からの呼び出し) と、境界が単純な関数 (エスケープ、URL エンコード、パス検証、UTF-8 検証) | 〜1,000 行 |
 | 2 | 文字列・文字コード・ハッシュ (`str`, `_string`, `jis`, `md5`, `sha1`, `base64`, `gnuid`) | 3,000 行 |
 | 3 | 入力パーサー (`cgi`, `url`, `uri`, `xml`, `http`, `amf0`, `dechunker`)。`atom` は段階 6 で `pcp` と一緒に扱う | 3,800 行 |
-| 4 | メディアコンテナの解析 (`flv`, `mkv`, `ogg`, `asf`, `mp3`, `nsv`, `mp4`) | 2,600 行 |
+| 4 | メディアコンテナの解析 (`flv`, `mkv`, `ogg`, `mp3`, `mp4`)。NSV と Windows Media 系 (`asf`, `mms`, `wmhttp`) は Rust 化せずにサポートをやめた | 1,600 行 |
 | 5 | テンプレートエンジン、HTML、管理画面コマンド (`template`, `html`, `commands`, `public`) | 3,300 行 |
 | 6 | PCP プロトコル (`pcp`, `chanpacket`, `atom`) | 1,400 行 |
 | 7 | チャンネルとホストの管理 (`channel`, `chanmgr`, `chaninfo`, `chanhit`, `chandir`, `hostgraph`, `uptest`) | 5,600 行 |
@@ -71,7 +71,7 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 | 1 | 完了 (peercast-rs: cgi/str の一部関数、C ABI 境界、Makefile 統合)。差分テストは長さ 0〜3 バイトの入力を全網羅 (1,677 万通り) して確認 |
 | 2 | 完了 (str の残り、jis、md5、gnuid の純粋な部分、`String` の変換関数)。`String` クラス自体と `setFromTime`、`GnuID::generate` など状態や OS に依存する部分は C++ に残る。差分テストは String だけで約 980 万件、違いなし |
 | 3 | 完了。3a (HTTP の行の解析、`parseHttpDate`)、3b (AMF0、chunked 転送)、3c (XML)、3d (URL)。`atom` は段階 6 に回した。`cgi::Query` と `HTTP::parseRequestLine` は、Rust 化済みの `str::split` などを呼ぶだけなので C++ のまま |
-| 4 | 着手前にメディアコンテナの扱い (使われていないものを残すか) を相談する |
+| 4 | 準備完了。相談の結果、NSV と Windows Media 系 (WMA/WMV、ASF、MMS、WMHTTP、ASX) のサポートを削除した。残る FLV、MKV/WebM、MP4、OGG、MP3 を Rust 化する |
 | 5 以降 | 未着手 |
 
 ### 確認環境についての注記

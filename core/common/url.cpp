@@ -70,11 +70,6 @@ ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
         fileName += 7;
         return ChanInfo::SP_HTTP;
     }
-    else if (Sys::strnicmp(fileName, "mms://", 6)==0)
-    {
-        fileName += 6;
-        return ChanInfo::SP_MMS;
-    }
     else if (Sys::strnicmp(fileName, "pcp://", 6)==0)
     {
         fileName += 6;
@@ -135,13 +130,8 @@ ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
         ch->setStatus(Channel::S_CONNECTING);
 
         if ((ch->info.srcProtocol == ChanInfo::SP_HTTP) ||
-            (ch->info.srcProtocol == ChanInfo::SP_PCP) ||
-            (ch->info.srcProtocol == ChanInfo::SP_MMS))
+            (ch->info.srcProtocol == ChanInfo::SP_PCP))
         {
-            if ((ch->info.contentType == ChanInfo::T_WMA) ||
-                (ch->info.contentType == ChanInfo::T_WMV))
-                ch->info.srcProtocol = ChanInfo::SP_MMS;
-
             LOG_INFO("Channel source is HTTP");
 
             std::shared_ptr<ClientSocket> inputSocket(sys->createSocket());
@@ -171,21 +161,9 @@ ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
             http.writeLineF("%s %s", HTTP_HS_CONNECTION, "close");
             http.writeLineF("%s %s", HTTP_HS_ACCEPT, "*/*");
 
-            if (ch->info.srcProtocol == ChanInfo::SP_MMS)
-            {
-                http.writeLineF("%s %s", HTTP_HS_AGENT, "NSPlayer/4.1.0.3856");
-                http.writeLine("Pragma: no-cache, rate=1.000000, request-context=1");
-                //http.writeLine("Pragma: no-cache, rate=1.000000, stream-time=0, stream-offset=4294967295:4294967295, request-context=22605256, max-duration=0");
-                http.writeLine("Pragma: xPlayStrm=1");
-                http.writeLine("Pragma: xClientGUID={c77e7400-738a-11d2-9add-0020af0a3278}");
-                http.writeLine("Pragma: stream-switch-count=2");
-                http.writeLine("Pragma: stream-switch-entry=ffff:1:0 ffff:2:0");
-            }else
-            {
-                http.writeLineF("%s %s", HTTP_HS_AGENT, PCX_AGENT);
-                http.writeLineF("%s %d", PCX_HS_PCP, 1);
-                http.writeLine("Icy-MetaData:1");               // fix by ravon
-            }
+            http.writeLineF("%s %s", HTTP_HS_AGENT, PCX_AGENT);
+            http.writeLineF("%s %d", PCX_HS_PCP, 1);
+            http.writeLine("Icy-MetaData:1");               // fix by ravon
 
             http.writeLine("");
 
@@ -230,10 +208,6 @@ ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
                             pls = std::make_shared<PlayList>(PlayList::T_PLS, 1000);
                         else if (stristr(arg, MIME_TEXT))
                             pls = std::make_shared<PlayList>(PlayList::T_PLS, 1000);
-                        else if (stristr(arg, MIME_ASX))
-                            pls = std::make_shared<PlayList>(PlayList::T_ASX, 1000);
-                        else if (stristr(arg, MIME_MMS))
-                            ch->info.srcProtocol = ChanInfo::SP_MMS;
                     }
                 }
             }
@@ -285,8 +259,6 @@ ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
 
             if (fileType == ChanInfo::T_PLS)
                 pls = std::make_shared<PlayList>(PlayList::T_PLS, 1000);
-            else if (fileType == ChanInfo::T_ASX)
-                pls = std::make_shared<PlayList>(PlayList::T_ASX, 1000);
             else
                 ch->info.setContentType(fileType);
         }else if (ch->info.srcProtocol == ChanInfo::SP_PIPE)
@@ -348,9 +320,6 @@ ChanInfo::PROTOCOL URLSource::getSourceProtocol(char*& fileName)
                 ch->info.id = chanMgr->broadcastID;
                 ch->info.id.encode(nullptr, ch->info.name.cstr(), ch->info.genre, ch->info.bitrate);
             }
-
-            if (ch->info.contentType == ChanInfo::T_ASX)
-                ch->info.contentType = ChanInfo::T_WMV;
 
             ch->setStatus(Channel::S_BROADCASTING);
 

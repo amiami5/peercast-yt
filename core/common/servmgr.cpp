@@ -164,7 +164,6 @@ ServMgr::ServMgr()
     preset = "veryfast";
     audioCodec = "mp3";
 
-    wmvProtocol = "http";
 
     rtmpPort = 1935;
 
@@ -1180,7 +1179,6 @@ ini::Document ServMgr::getSettings()
             {"transcodingEnabled", this->transcodingEnabled},
             {"preset", this->preset},
             {"audioCodec", this->audioCodec},
-            {"wmvProtocol", this->wmvProtocol},
             {"preferredTheme", this->preferredTheme},
             {"accentColor", this->accentColor},
         }
@@ -1485,8 +1483,6 @@ void ServMgr::loadSettings(const char *fn)
                 this->preset = iniFile.getStrValue();
             else if (iniFile.isName("audioCodec"))
                 this->audioCodec = iniFile.getStrValue();
-            else if (iniFile.isName("wmvProtocol"))
-                this->wmvProtocol = iniFile.getStrValue();
             else if (iniFile.isName("preferredTheme"))
                 this->preferredTheme = iniFile.getStrValue();
             else if (iniFile.isName("accentColor"))
@@ -2283,7 +2279,6 @@ amf0::Value ServMgr::getState()
             {"transcodingEnabled", to_string(this->transcodingEnabled)},
             {"preset", this->preset},
             {"audioCodec", this->audioCodec},
-            {"wmvProtocol", this->wmvProtocol},
             {"defaultChannelInfo", this->defaultChannelInfo.getState()},
             {"rtmpServerMonitor", this->rtmpServerMonitor.getState()},
             {"rtmpPort", std::to_string(this->rtmpPort)},

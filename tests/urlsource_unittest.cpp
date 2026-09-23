@@ -29,9 +29,10 @@ TEST_F(URLSourceFixture, getSourceProtocol)
     ASSERT_EQ(ChanInfo::SP_HTTP, URLSource::getSourceProtocol(p));
     ASSERT_STREQ("example.com/source", p);
 
+    // mms:// はサポートをやめたので、ファイル名として扱われる (読み飛ばさない)
     p = (char*)"mms://example.com/source";
-    ASSERT_EQ(ChanInfo::SP_MMS, URLSource::getSourceProtocol(p));
-    ASSERT_STREQ("example.com/source", p);
+    ASSERT_EQ(ChanInfo::SP_FILE, URLSource::getSourceProtocol(p));
+    ASSERT_STREQ("mms://example.com/source", p);
 
     p = (char*)"pcp://example.com/source";
     ASSERT_EQ(ChanInfo::SP_PCP, URLSource::getSourceProtocol(p));

@@ -289,7 +289,6 @@
     "x264 Preset"             : "x264プリセット",
     "Audio Codec"             : "オーディオ・コーデック",
     "AAC (Experimental)"      : "AAC (実験的)",
-    "WMV Protocol"            : "WMVプロトコル",
 
     "Level"                   : "レベル",
     "TRACE"                   : "トレース",
@@ -349,8 +348,6 @@
                               : "お使いのブラウザは FLV 動画の再生に対応していないようです。",
     "Try the playlist link below."
                               : "プレイリストから再生してください。",
-    "Your browser doesn't seem to support playback of WMV videos."
-                              : "お使いのブラウザは WMV 動画の再生に対応していないようです。",
     "Your browser doesn't seem to support playback of MP3 audio."
                               : "お使いのブラウザは MP3 音声の再生に対応していないようです。",
     "Your browser doesn't seem to support playback of MKV videos."

@@ -333,7 +333,6 @@ public:
     std::string         preset;
     std::string         audioCodec;
 
-    std::string         wmvProtocol;
 
     RTMPServerMonitor   rtmpServerMonitor;
     uint16_t            rtmpPort;

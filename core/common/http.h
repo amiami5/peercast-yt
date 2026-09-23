@@ -72,16 +72,9 @@ public:
 #define MIME_XOGG            "application/x-ogg"
 #define MIME_MOV             "video/quicktime"
 #define MIME_MPG             "video/mpeg"
-#define MIME_NSV             "video/nsv"
-#define MIME_ASF             "video/x-ms-asf"
-#define MIME_ASX             "video/x-ms-asf"
-// same as ASF
-#define MIME_MMS             "application/x-mms-framed"
 
 #define MIME_RAM             "audio/x-pn-realaudio"
 
-#define MIME_WMA             "audio/x-ms-wma"
-#define MIME_WMV             "video/x-ms-wmv"
 #define MIME_FLV             "video/x-flv"
 #define MIME_MKV             "video/x-matroska"
 #define MIME_WEBM            "video/webm"

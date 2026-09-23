@@ -34,9 +34,27 @@ Linux の `ui/linux` の Makefile では、これが既定です。C++ 版に戻
 * 入力の検証: HTTP・チャンネル情報の URL は http(s) のみ許可 (SSRF 対策)、HTTP ヘッダー数と
   チャンクサイズの上限、JSON・AMF0・atom のネストの深さと値の数の上限
 * メモリ安全: `strcpy` / `sprintf` によるバッファオーバーフローの修正、FLV・MP4・OGG・MKV・
-  MP3・NSV の各パーサーの長さ検査と未初期化バッファの修正
+  MP3 の各パーサーの長さ検査と未初期化バッファの修正
 * TLS: SNI の送信と証明書のホスト名検証 (Unix 系ビルドのみ)
 * HTML テンプレート: JavaScript 文字列内の `<` `>` `&` をエスケープ
+
+**3. 使われなくなった形式のサポートを外しました**
+
+ここ数年使われていない次の形式は、配信・視聴ともにサポートをやめ、コードを削除しました。
+
+* NSV (Nullsoft Streaming Video)
+* Windows Media 系: WMA / WMV (ASF)、MMS (MMSH) での視聴、Windows Media HTTP Push 配信、
+  ASX プレイリスト、`mms://` の配信元、設定の「WMV プロトコル」(`wmvProtocol`)
+
+これらの形式のチャンネルを他のノードから受け取った場合、種類は UNKNOWN として扱われ、
+中身は解析せずにそのまま流れます。古い `peercast.ini` に `wmvProtocol` が残っていても、
+読み飛ばされるだけで問題ありません。
+
+**4. コアを少しずつ Rust に置き換えています**
+
+ネットワークからの入力を解釈する部分から順に、C++ のコアを Rust
+([`peercast-rs/`](peercast-rs/)) に置き換えています。計画と進み具合は
+[`docs/rust-migration.md`](docs/rust-migration.md) にあります。
 
 個々の変更は `git log` で確認できます。ライセンスは本家と同じ GPL です。
 
@@ -52,14 +70,10 @@ Linux の `ui/linux` の Makefile では、これが既定です。C++ 版に戻
   →[RTMPプロトコル対応エンコーダーでの配信のやり方](https://github.com/plonk/peercast-yt/wiki/RTMP%E3%83%97%E3%83%AD%E3%83%88%E3%82%B3%E3%83%AB%E5%AF%BE%E5%BF%9C%E3%82%A8%E3%83%B3%E3%82%B3%E3%83%BC%E3%83%80%E3%83%BC%E3%81%A7%E3%81%AE%E9%85%8D%E4%BF%A1%E3%81%AE%E3%82%84%E3%82%8A%E6%96%B9)
 * HTTP Push に対応しており、ffmpeg で配信できます。
   →[HTTP Push 配信のやり方](https://github.com/plonk/peercast-yt/wiki/HTTP-Push-%E9%85%8D%E4%BF%A1%E3%81%AE%E3%82%84%E3%82%8A%E6%96%B9)
-* Windows Media HTTP Push 配信プロトコルに対応しており、WME、
-  Expression Encoder、KotoEncoder からプッシュ配信できます。(エンコー
-  ダーを動かす PC はポートが開いている必要がありません。)
-  →[Windows Media HTTP Push 配信のやり方](https://github.com/plonk/peercast-yt/wiki/Windows-Media-HTTP-Push-%E9%85%8D%E4%BF%A1%E3%81%AE%E3%82%84%E3%82%8A%E6%96%B9)
-
 ## 多種の動画フォーマットに対応
 
-* 従来のフォーマットに加え、FLV、MKV、WebM の配信に対応しています。
+* FLV、MKV、WebM、MP4、OGG、MP3 の配信に対応しています (それ以外は RAW として、中身を
+  解析せずにそのまま流します)。
 
 ## その他
 

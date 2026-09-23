@@ -68,24 +68,18 @@ public:
         T_OGM,
         T_MOV,
         T_MPG,
-        T_NSV,
         T_FLV,
         T_MKV,
         T_WEBM,
         T_MP4,
-        T_WMA,
-        T_WMV,
-        T_PLS,
-        T_ASX;
+        T_PLS;
 
     enum PROTOCOL
     {
         SP_UNKNOWN,
         SP_HTTP,
         SP_FILE,
-        SP_MMS,
         SP_PCP,
-        SP_WMHTTP,
         SP_RTMP,
         SP_PIPE,
     };

@@ -717,13 +717,7 @@ void ChanMgr::playChannel(ChanInfo &info)
     std::string fname;
     PlayList::TYPE type;
 
-    if ((info.contentType == ChanInfo::T_WMA) || (info.contentType == ChanInfo::T_WMV))
-    {
-        type = PlayList::T_ASX;
-        // WMP seems to have a bug where it doesn`t re-read asx files if they have the same name
-        // so we prepend the channel id to make it unique - NOTE: should be deleted afterwards.
-        fname = str::format("%s/%s.asx", peercastApp->getCacheDirPath(), info.id.str().c_str());
-    }else if (info.contentType == ChanInfo::T_OGM)
+    if (info.contentType == ChanInfo::T_OGM)
     {
         type = PlayList::T_RAM;
         fname = str::format("%s/play.ram", peercastApp->getCacheDirPath());

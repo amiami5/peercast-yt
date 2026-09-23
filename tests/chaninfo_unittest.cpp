@@ -74,14 +74,10 @@ TEST_F(ChanInfoFixture, static_getTypeStr)
     ASSERT_STREQ("MP3", ChanInfo::getTypeStr(ChanInfo::T_MP3));
     ASSERT_STREQ("OGG", ChanInfo::getTypeStr(ChanInfo::T_OGG));
     ASSERT_STREQ("OGM", ChanInfo::getTypeStr(ChanInfo::T_OGM));
-    ASSERT_STREQ("WMA", ChanInfo::getTypeStr(ChanInfo::T_WMA));
     ASSERT_STREQ("MOV", ChanInfo::getTypeStr(ChanInfo::T_MOV));
     ASSERT_STREQ("MPG", ChanInfo::getTypeStr(ChanInfo::T_MPG));
-    ASSERT_STREQ("NSV", ChanInfo::getTypeStr(ChanInfo::T_NSV));
-    ASSERT_STREQ("WMV", ChanInfo::getTypeStr(ChanInfo::T_WMV));
     ASSERT_STREQ("FLV", ChanInfo::getTypeStr(ChanInfo::T_FLV));
     ASSERT_STREQ("PLS", ChanInfo::getTypeStr(ChanInfo::T_PLS));
-    ASSERT_STREQ("ASX", ChanInfo::getTypeStr(ChanInfo::T_ASX));
     ASSERT_STREQ("UNKNOWN", ChanInfo::getTypeStr(ChanInfo::T_UNKNOWN));
 }
 
@@ -89,9 +85,7 @@ TEST_F(ChanInfoFixture, static_getProtocolStr)
 {
     ASSERT_STREQ("HTTP", ChanInfo::getProtocolStr(ChanInfo::SP_HTTP));
     ASSERT_STREQ("FILE", ChanInfo::getProtocolStr(ChanInfo::SP_FILE));
-    ASSERT_STREQ("MMS", ChanInfo::getProtocolStr(ChanInfo::SP_MMS));
     ASSERT_STREQ("PCP", ChanInfo::getProtocolStr(ChanInfo::SP_PCP));
-    ASSERT_STREQ("WMHTTP", ChanInfo::getProtocolStr(ChanInfo::SP_WMHTTP));
     ASSERT_STREQ("UNKNOWN", ChanInfo::getProtocolStr(ChanInfo::SP_UNKNOWN));
 }
 
@@ -101,9 +95,6 @@ TEST_F(ChanInfoFixture, static_getTypeExt)
     ASSERT_STREQ(".ogg", ChanInfo::getTypeExt(ChanInfo::T_OGG));
     ASSERT_STREQ(".mp3", ChanInfo::getTypeExt(ChanInfo::T_MP3));
     ASSERT_STREQ(".mov", ChanInfo::getTypeExt(ChanInfo::T_MOV));
-    ASSERT_STREQ(".nsv", ChanInfo::getTypeExt(ChanInfo::T_NSV));
-    ASSERT_STREQ(".wmv", ChanInfo::getTypeExt(ChanInfo::T_WMV));
-    ASSERT_STREQ(".wma", ChanInfo::getTypeExt(ChanInfo::T_WMA));
     ASSERT_STREQ(".flv", ChanInfo::getTypeExt(ChanInfo::T_FLV));
     ASSERT_STREQ("", ChanInfo::getTypeExt(ChanInfo::T_UNKNOWN));
 }
@@ -115,10 +106,6 @@ TEST_F(ChanInfoFixture, static_getMIMEStr)
     ASSERT_STREQ("audio/mpeg", ChanInfo::getMIMEType(ChanInfo::T_MP3));
     ASSERT_STREQ("video/quicktime", ChanInfo::getMIMEType(ChanInfo::T_MOV));
     ASSERT_STREQ("video/mpeg", ChanInfo::getMIMEType(ChanInfo::T_MPG));
-    ASSERT_STREQ("video/nsv", ChanInfo::getMIMEType(ChanInfo::T_NSV));
-    ASSERT_STREQ("video/x-ms-asf", ChanInfo::getMIMEType(ChanInfo::T_ASX));
-    ASSERT_STREQ("audio/x-ms-wma", ChanInfo::getMIMEType(ChanInfo::T_WMA));
-    ASSERT_STREQ("video/x-ms-wmv", ChanInfo::getMIMEType(ChanInfo::T_WMV));
     ASSERT_STREQ("video/x-flv", ChanInfo::getMIMEType(ChanInfo::T_FLV));
 }
 
@@ -128,13 +115,15 @@ TEST_F(ChanInfoFixture, static_getTypeFromStr)
     ASSERT_EQ(ChanInfo::T_OGG, ChanInfo::getTypeFromStr("OGG"));
     ASSERT_EQ(ChanInfo::T_OGM, ChanInfo::getTypeFromStr("OGM"));
     ASSERT_EQ(ChanInfo::T_RAW, ChanInfo::getTypeFromStr("RAW"));
-    ASSERT_EQ(ChanInfo::T_NSV, ChanInfo::getTypeFromStr("NSV"));
-    ASSERT_EQ(ChanInfo::T_WMA, ChanInfo::getTypeFromStr("WMA"));
-    ASSERT_EQ(ChanInfo::T_WMV, ChanInfo::getTypeFromStr("WMV"));
     ASSERT_EQ(ChanInfo::T_FLV, ChanInfo::getTypeFromStr("FLV"));
     ASSERT_EQ(ChanInfo::T_PLS, ChanInfo::getTypeFromStr("PLS"));
     ASSERT_EQ(ChanInfo::T_PLS, ChanInfo::getTypeFromStr("M3U"));
-    ASSERT_EQ(ChanInfo::T_ASX, ChanInfo::getTypeFromStr("ASX"));
+
+    // サポートをやめた形式は UNKNOWN になる
+    ASSERT_EQ(ChanInfo::T_UNKNOWN, ChanInfo::getTypeFromStr("NSV"));
+    ASSERT_EQ(ChanInfo::T_UNKNOWN, ChanInfo::getTypeFromStr("WMA"));
+    ASSERT_EQ(ChanInfo::T_UNKNOWN, ChanInfo::getTypeFromStr("WMV"));
+    ASSERT_EQ(ChanInfo::T_UNKNOWN, ChanInfo::getTypeFromStr("ASX"));
 
     ASSERT_EQ(ChanInfo::T_MP3, ChanInfo::getTypeFromStr("mp3")); // type str. is case-insensitive
     ASSERT_EQ(ChanInfo::T_UNKNOWN, ChanInfo::getTypeFromStr("mp345"));
@@ -144,9 +133,9 @@ TEST_F(ChanInfoFixture, static_getProtocolFromStr)
 {
     ASSERT_EQ(ChanInfo::SP_HTTP, ChanInfo::getProtocolFromStr("HTTP"));
     ASSERT_EQ(ChanInfo::SP_FILE, ChanInfo::getProtocolFromStr("FILE"));
-    ASSERT_EQ(ChanInfo::SP_MMS, ChanInfo::getProtocolFromStr("MMS"));
     ASSERT_EQ(ChanInfo::SP_PCP, ChanInfo::getProtocolFromStr("PCP"));
-    ASSERT_EQ(ChanInfo::SP_WMHTTP, ChanInfo::getProtocolFromStr("WMHTTP"));
+    ASSERT_EQ(ChanInfo::SP_UNKNOWN, ChanInfo::getProtocolFromStr("MMS"));
+    ASSERT_EQ(ChanInfo::SP_UNKNOWN, ChanInfo::getProtocolFromStr("WMHTTP"));
 
     ASSERT_EQ(ChanInfo::SP_RTMP, ChanInfo::getProtocolFromStr("RTMP"));
     ASSERT_EQ(ChanInfo::SP_UNKNOWN, ChanInfo::getProtocolFromStr("Hoge2.0"));
@@ -172,9 +161,6 @@ TEST_F(ChanInfoFixture, getPlayListExt)
 
     info.setContentType(ChanInfo::T_OGM);
     ASSERT_STREQ(".ram", info.getPlayListExt());
-
-    info.setContentType(ChanInfo::T_WMV);
-    ASSERT_STREQ(".asx", info.getPlayListExt());
 
     info.setContentType(ChanInfo::T_FLV);
     ASSERT_STREQ(".m3u", info.getPlayListExt());

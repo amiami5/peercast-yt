@@ -200,23 +200,6 @@
         </tr>
       </table>
 
-      <table class="table-panel" width="100%" align="center" border="0">
-        <tr align="middle">
-          <td colspan="2"><b>{#Playlist}</b></td>
-        </tr>
-        <tr>
-          <th class="left-heading" width="35%">{#WMV Protocol}</th>
-          <td>
-            <select name="wmvProtocol">
-              <option {@if servMgr.wmvProtocol == "http"}selected{@end}>http</option>
-              <option {@if servMgr.wmvProtocol == "httpt"}selected{@end}>httpt</option>
-              <option {@if servMgr.wmvProtocol == "httpu"}selected{@end}>httpu</option>
-              <option {@if servMgr.wmvProtocol == "mms"}selected{@end}>mms</option>
-              <option {@if servMgr.wmvProtocol == "mmsh"}selected{@end}>mmsh</option>
-            </select>
-          </td>
-        </tr>
-      </table>
       {@if servMgr.isRoot}
       <table class="table-panel" width="100%" align="center" border="0">
         <tr align="middle">

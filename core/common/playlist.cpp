@@ -22,40 +22,6 @@
 #include "chanmgr.h"
 
 // -----------------------------------
-void PlayList::readASX(Stream &in)
-{
-    LOG_DEBUG("Reading ASX");
-    XML xml;
-
-    try
-    {
-        xml.read(in);
-    }catch (StreamException &) {} // TODO: eof is NOT handled properly in sockets - always get error at end
-
-    if (xml.root)
-    {
-        XML::Node *n = xml.root->child;
-        while (n)
-        {
-            if (Sys::stricmp("entry", n->getName())==0)
-            {
-                XML::Node *rf = n->findNode("ref");
-                if (rf)
-                {
-                    char *hr = rf->findAttr("href");
-                    if (hr)
-                    {
-                        addURL(hr, "");
-                        //LOG("asx url %s", hr);
-                    }
-                }
-            }
-            n=n->sibling;
-        }
-    }
-}
-
-// -----------------------------------
 void PlayList::readSCPLS(Stream &in)
 {
     char tmp[256];
@@ -112,20 +78,6 @@ void PlayList::writeRAM(Stream &out)
 }
 
 // -----------------------------------
-void PlayList::writeASX(Stream &out)
-{
-    out.writeLine("<ASX Version=\"3.0\">");
-    for (int i=0; i<numURLs; i++)
-    {
-        auto url = str::replace_prefix(urls[i].cstr(), "http", wmvProtocol);
-        out.writeLine("<ENTRY>");
-        out.writeLineF("<REF href=\"%s\" />", url.c_str());
-        out.writeLine("</ENTRY>");
-    }
-    out.writeLine("</ASX>");
-}
-
-// -----------------------------------
 void PlayList::addChannel(const char *path, ChanInfo &info)
 {
     std::string url;
@@ -142,9 +94,7 @@ void PlayList::addChannel(const char *path, ChanInfo &info)
 // -----------------------------------
 PlayList::TYPE PlayList::getPlayListType(ChanInfo::TYPE chanType)
 {
-    if ((chanType == ChanInfo::T_WMA) || (chanType == ChanInfo::T_WMV))
-        return PlayList::T_ASX;
-    else if (chanType == ChanInfo::T_OGM)
+    if (chanType == ChanInfo::T_OGM)
         return PlayList::T_RAM;
     else
         return PlayList::T_PLS;

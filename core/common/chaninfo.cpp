@@ -31,15 +31,11 @@ const ::String ChanInfo::T_OGG = "OGG";
 const ::String ChanInfo::T_OGM = "OGM";
 const ::String ChanInfo::T_MOV = "MOV";
 const ::String ChanInfo::T_MPG = "MPG";
-const ::String ChanInfo::T_NSV = "NSV";
 const ::String ChanInfo::T_FLV = "FLV";
 const ::String ChanInfo::T_MKV = "MKV";
 const ::String ChanInfo::T_WEBM = "WEBM";
 const ::String ChanInfo::T_MP4 = "MP4";
-const ::String ChanInfo::T_WMA = "WMA";
-const ::String ChanInfo::T_WMV = "WMV";
 const ::String ChanInfo::T_PLS = "PLS";
-const ::String ChanInfo::T_ASX = "ASX";
 
 // -----------------------------------
 const char *ChanInfo::getTypeStr()
@@ -96,9 +92,7 @@ const char *ChanInfo::getProtocolStr(PROTOCOL t)
     {
         case SP_HTTP: return "HTTP";
         case SP_FILE: return "FILE";
-        case SP_MMS: return "MMS";
         case SP_PCP: return "PCP";
-        case SP_WMHTTP: return "WMHTTP";
         case SP_RTMP: return "RTMP";
         case SP_PIPE: return "PIPE";
         default: return "UNKNOWN";
@@ -112,12 +106,8 @@ ChanInfo::PROTOCOL ChanInfo::getProtocolFromStr(const char *str)
         return SP_HTTP;
     else if (Sys::stricmp(str, "FILE")==0)
         return SP_FILE;
-    else if (Sys::stricmp(str, "MMS")==0)
-        return SP_MMS;
     else if (Sys::stricmp(str, "PCP")==0)
         return SP_PCP;
-    else if (Sys::stricmp(str, "WMHTTP")==0)
-        return SP_WMHTTP;
     else if (Sys::stricmp(str, "RTMP")==0)
         return SP_RTMP;
     else
@@ -133,12 +123,6 @@ const char *ChanInfo::getTypeExt(TYPE t)
         return ".mp3";
     else if (t == ChanInfo::T_MOV)
         return ".mov";
-    else if (t == ChanInfo::T_NSV)
-        return ".nsv";
-    else if (t == ChanInfo::T_WMV)
-        return ".wmv";
-    else if (t == ChanInfo::T_WMA)
-        return ".wma";
     else if (t == ChanInfo::T_FLV)
         return ".flv";
     else if (t == ChanInfo::T_MKV)
@@ -164,14 +148,6 @@ const char *ChanInfo::getMIMEType(TYPE t)
         return MIME_MOV;
     else if (t == ChanInfo::T_MPG)
         return MIME_MPG;
-    else if (t == ChanInfo::T_NSV)
-        return MIME_NSV;
-    else if (t == ChanInfo::T_ASX)
-        return MIME_ASX;
-    else if (t == ChanInfo::T_WMA)
-        return MIME_WMA;
-    else if (t == ChanInfo::T_WMV)
-        return MIME_WMV;
     else if (t == ChanInfo::T_FLV)
         return MIME_FLV;
     else if (t == ChanInfo::T_MKV)
@@ -197,14 +173,6 @@ ChanInfo::TYPE ChanInfo::getTypeFromMIME(const std::string& mediaType)
         return T_MOV;
     else if (mediaType == MIME_MPG)
         return T_MPG;
-    else if (mediaType == MIME_NSV)
-        return T_NSV;
-    else if (mediaType == MIME_ASX)
-        return T_ASX;
-    else if (mediaType == MIME_WMA)
-        return T_WMA;
-    else if (mediaType == MIME_WMV)
-        return T_WMV;
     else if (mediaType == MIME_FLV)
         return T_FLV;
     else if (mediaType == MIME_MKV)
@@ -226,12 +194,6 @@ ChanInfo::TYPE ChanInfo::getTypeFromStr(const char *str)
         return T_OGM;
     else if (Sys::stricmp(str, "RAW")==0)
         return T_RAW;
-    else if (Sys::stricmp(str, "NSV")==0)
-        return T_NSV;
-    else if (Sys::stricmp(str, "WMA")==0)
-        return T_WMA;
-    else if (Sys::stricmp(str, "WMV")==0)
-        return T_WMV;
     else if (Sys::stricmp(str, "FLV")==0)
         return T_FLV;
     else if (Sys::stricmp(str, "MKV")==0)
@@ -244,8 +206,6 @@ ChanInfo::TYPE ChanInfo::getTypeFromStr(const char *str)
         return T_PLS;
     else if (Sys::stricmp(str, "M3U")==0)
         return T_PLS;
-    else if (Sys::stricmp(str, "ASX")==0)
-        return T_ASX;
     else
         return T_UNKNOWN;
 }
@@ -692,8 +652,6 @@ const char* ChanInfo::getPlayListExt()
 {
     switch (PlayList::getPlayListType(contentType))
     {
-    case PlayList::T_ASX:
-        return ".asx";
     case PlayList::T_RAM:
         return ".ram";
     case PlayList::T_PLS:

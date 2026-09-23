@@ -189,8 +189,7 @@ public:
     bool    handshakeHTTPBasicAuth(HTTP &http);
 
     bool    handshakeStream(ChanInfo &);
-    void    handshakeStream_readHeaders(bool& gotPCP, unsigned int& reqPos, int& nsSwitchNum);
-    void    handshakeStream_changeOutputProtocol(bool gotPCP, const ChanInfo& chanInfo);
+    void    handshakeStream_readHeaders(bool& gotPCP, unsigned int& reqPos);
     bool    handshakeStream_returnResponse(bool gotPCP, bool chanReady,
                                            std::shared_ptr<Channel> ch, ChanHitList* chl,
                                            const ChanInfo& chanInfo);
@@ -208,7 +207,6 @@ public:
     void    handshakeSOURCE(char * in, bool isHTTP);
 
     void    handshakeHTTPPush(const std::string& args);
-    void    handshakeWMHTTPPush(HTTP& http, const std::string& path);
 
     void    handshakeJRPC(HTTP &http);
 
@@ -287,7 +285,6 @@ public:
 
     bool                priorityConnect;
     bool                addMetadata;
-    int                 nsSwitchNum;
 
     std::atomic<unsigned int> allow;
 

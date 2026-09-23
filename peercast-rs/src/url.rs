@@ -154,19 +154,17 @@ pub fn port_number(port: &[u8]) -> Option<u16> {
 pub enum SourceProtocol {
     Http = 1,
     File = 2,
-    Mms = 3,
-    Pcp = 4,
-    Rtmp = 6,
-    Pipe = 7,
+    Pcp = 3,
+    Rtmp = 4,
+    Pipe = 5,
 }
 
 /// `URLSource::getSourceProtocol`: 入力元の URL の先頭 (大文字小文字は問わない) から種類を決め、
 /// その後ろ (読み飛ばす長さ) を返す。どれでもなければファイルとみなす (読み飛ばさない)。
 pub fn source_protocol(url: &[u8]) -> (SourceProtocol, usize) {
     let url = until_nul(url);
-    let prefixes: [(&[u8], SourceProtocol); 6] = [
+    let prefixes: [(&[u8], SourceProtocol); 5] = [
         (b"http://", SourceProtocol::Http),
-        (b"mms://", SourceProtocol::Mms),
         (b"pcp://", SourceProtocol::Pcp),
         (b"file://", SourceProtocol::File),
         (b"rtmp://", SourceProtocol::Rtmp),
@@ -263,5 +261,7 @@ mod tests {
         assert_eq!(source_protocol(b"pipe:ffmpeg -i x"), (SourceProtocol::Pipe, 5));
         assert_eq!(source_protocol(b"/tmp/a.flv"), (SourceProtocol::File, 0));
         assert_eq!(source_protocol(b"file:///tmp/a"), (SourceProtocol::File, 7));
+        // mms:// はサポートをやめたので、ファイル名として扱う (読み飛ばさない)
+        assert_eq!(source_protocol(b"mms://host/x"), (SourceProtocol::File, 0));
     }
 }

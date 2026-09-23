@@ -38,10 +38,7 @@ if __name__ == "__main__":
     # 正常なビットレートが渡されなかった場合は 500Kbps にする。
     r = 500
 
-  if form["type"].value == "WMV":
-    protocol = "mmsh"
-  else:
-    protocol = "http"
+  protocol = "http"
 
   print("Content-Type: video/x-flv\n", flush=True)
   subprocess.call(["ffmpeg",

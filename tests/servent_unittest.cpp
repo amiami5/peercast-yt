@@ -60,7 +60,6 @@ TEST_F(ServentFixture, initialState)
     ASSERT_EQ(false, s.priorityConnect);
     ASSERT_EQ(false, s.addMetadata);
 
-    ASSERT_EQ(0, s.nsSwitchNum);
 
     ASSERT_EQ(Servent::ALLOW_ALL, s.allow);
 

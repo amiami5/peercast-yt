@@ -688,25 +688,9 @@ void Servent::handshakePOST(HTTP &http)
 #endif
     }else
     {
+        // POST マッチなし
         http.readHeaders();
-        auto contentType = http.headers.get("Content-Type");
-        if (contentType == "application/x-wms-pushsetup")
-        {
-            // WMHTTP
-
-            if (!isAllowed(ALLOW_BROADCAST))
-                throw HTTPException(HTTP_SC_FORBIDDEN, 403);
-
-            if (!isPrivate())
-                throw HTTPException(HTTP_SC_FORBIDDEN, 403);
-
-            handshakeWMHTTPPush(http, path);
-        }else
-        {
-            // POST マッチなし
-
-            throw HTTPException(HTTP_SC_BADREQUEST, 400);
-        }
+        throw HTTPException(HTTP_SC_BADREQUEST, 400);
     }
 }
 
@@ -904,9 +888,6 @@ void writePLSHeader(Stream &s, PlayList::TYPE type)
         case PlayList::T_PLS:
             content = MIME_XM3U;
             break;
-        case PlayList::T_ASX:
-            content = MIME_ASX;
-            break;
         case PlayList::T_RAM:
             content = MIME_RAM;
             break;
@@ -934,7 +915,6 @@ void Servent::handshakePLS(ChanInfo &info, HTTP& http)
     writePLSHeader(*sock, type);
 
     PlayList pls(type, 1);
-    pls.wmvProtocol = servMgr->wmvProtocol;
     pls.addChannel(url.c_str(), info);
     pls.write(*sock);
 }
@@ -1430,8 +1410,6 @@ void Servent::CMD_apply(const char* cmd, HTTP& http, String& jumpStr)
             servMgr->preset = arg;
         else if (strcmp(curr, "audio_codec") == 0)
             servMgr->audioCodec = arg;
-        else if (strcmp(curr, "wmvProtocol") == 0)
-            servMgr->wmvProtocol = arg;
         else if (strcmp(curr, "preferredTheme") == 0)
             servMgr->preferredTheme = arg;
         else if (strcmp(curr, "accentColor") == 0)
@@ -2357,20 +2335,9 @@ void Servent::readICYHeader(HTTP &http, ChanInfo &info, char *pwd, size_t plen)
         else if (stristr(arg, MIME_XMP3))
             info.contentType = ChanInfo::T_MP3;
 
-        else if (stristr(arg, MIME_WMA))
-            info.contentType = ChanInfo::T_WMA;
-        else if (stristr(arg, MIME_WMV))
-            info.contentType = ChanInfo::T_WMV;
-        else if (stristr(arg, MIME_ASX))
-            info.contentType = ChanInfo::T_ASX;
-
-        else if (stristr(arg, MIME_NSV))
-            info.contentType = ChanInfo::T_NSV;
         else if (stristr(arg, MIME_RAW))
             info.contentType = ChanInfo::T_RAW;
 
-        else if (stristr(arg, MIME_MMS))
-            info.srcProtocol = ChanInfo::SP_MMS;
         else if (stristr(arg, MIME_XPCP))
             info.srcProtocol = ChanInfo::SP_PCP;
 
@@ -2387,91 +2354,6 @@ void Servent::readICYHeader(HTTP &http, ChanInfo &info, char *pwd, size_t plen)
         else if (stristr(arg, MIME_TEXT))
             info.contentType = ChanInfo::T_PLS;
     }
-}
-
-// -----------------------------------
-// Windows Media HTTP Push Distribution Protocol
-void Servent::handshakeWMHTTPPush(HTTP& http, const std::string& path)
-{
-    // At this point, http has read all the headers.
-
-    ASSERT(http.headers.get("CONTENT-TYPE") == "application/x-wms-pushsetup");
-    LOG_DEBUG("%s", nlohmann::json(http.headers.m_headers).dump().c_str());
-
-    int size = std::atoi(http.headers.get("Content-Length").c_str());
-    if (size < 0)
-        throw HTTPException(HTTP_SC_BADREQUEST, 400);
-    if (size > HTTP::MAX_REQUEST_BODY)
-        throw HTTPException("HTTP/1.0 413 Request Entity Too Large", 413);
-
-    // エンコーダーの設定要求を読む。0 バイトの空の設定要求も合法。
-    std::string setup = http.Stream::read(size);
-    LOG_DEBUG("setup: %s", str::inspect(setup).c_str());
-
-    // わかったふりをする
-    http.writeLine("HTTP/1.1 204 No Content"); // これってちゃんと CRLF 出る？
-    std::vector< std::pair<const char*,const char*> > headers =
-        {
-            { "Server"         , "Cougar/9.01.01.3814" },
-            { "Cache-Control"  , "no-cache" },
-            { "Supported"      , "com.microsoft.wm.srvppair, "
-              "com.microsoft.wm.sswitch, "
-              "com.microsoft.wm.predstrm, "
-              "com.microsoft.wm.fastcache, "
-              "com.microsoft.wm.startupprofile" },
-            { "Content-Length" , "0" },
-            { "Connection"     , "Keep-Alive" },
-        };
-    for (auto hline : headers)
-    {
-        http.writeLineF("%s: %s", hline.first, hline.second);
-    }
-    http.writeLine("");
-
-    // -----------------------------------------
-    http.reset();
-    http.readRequest();
-    LOG_DEBUG("Request line: %s", http.cmdLine);
-
-    http.readHeaders();
-    LOG_DEBUG("Setup: %s", nlohmann::json(http.headers.m_headers).dump().c_str());
-
-    ASSERT(http.headers.get("CONTENT-TYPE") == "application/x-wms-pushstart");
-
-    // -----------------------------------------
-
-    // User-Agent ヘッダーがあれば agent をセット
-    if (http.headers.get("User-Agent") != "")
-        this->agent = http.headers.get("User-Agent");
-
-    auto vec = str::split(cgi::unescape(path.substr(1)), ";");
-    if (vec.size() == 0)
-        throw HTTPException(HTTP_SC_BADREQUEST, 400);
-
-    ChanInfo info;
-    info.setContentType(ChanInfo::getTypeFromStr("WMV"));
-    info.name = vec[0];
-    if (vec.size() > 1) info.genre = vec[1];
-    if (vec.size() > 2) info.desc  = vec[2];
-    if (vec.size() > 3) info.url   = vec[3];
-
-    setBroadcastIdChannelId(info, chanMgr->broadcastID);
-
-    auto c = chanMgr->findChannelByID(info.id);
-    if (c)
-    {
-        LOG_INFO("WMHTTP Push channel already active, closing old one");
-        c->thread.shutdown();
-    }
-
-    info.comment = chanMgr->broadcastMsg;
-
-    c = chanMgr->createChannel(info);
-    if (!c)
-        throw HTTPException(HTTP_SC_SERVERERROR, 500);
-
-    c->startWMHTTPPush(sock);
-    sock = nullptr;    // socket is taken over by channel, so don`t close it
 }
 
 // -----------------------------------

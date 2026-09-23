@@ -45,7 +45,6 @@ queryTTL = 7
 transcodingEnabled = No
 preset = veryfast
 audioCodec = mp3
-wmvProtocol = http
 
 [Privacy]
 password = 
