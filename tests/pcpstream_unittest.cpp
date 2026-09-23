@@ -27,6 +27,9 @@ public:
     PCPStream m_pcp;
 };
 
+#ifndef WITH_RUST_CORE
+// readPktAtoms は C++ 版にだけある。Rust 版 (WITH_RUST_CORE) のテストは peercast-rs の
+// src/pcp/tests.rs (pkt_data_size)。
 TEST_F(PCPStreamFixture, smallDataPacket)
 {
     auto ch = std::make_shared<Channel>();
@@ -52,3 +55,4 @@ TEST_F(PCPStreamFixture, bigDataPacket)
 
     ASSERT_THROW(m_pcp.readPktAtoms(ch, atom, numc, bcs), StreamException);
 }
+#endif // WITH_RUST_CORE

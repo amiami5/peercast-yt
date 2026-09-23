@@ -408,7 +408,9 @@ unsigned int ChanInfo::getAge()
     return sys->getTime()-createdTime;
 }
 
+#ifndef WITH_RUST_CORE
 // ------------------------------------------
+// WITH_RUST_CORE のビルドでは peercast-rs (src/pcp) が読む
 void ChanInfo::readTrackAtoms(AtomStream &atom, int numc)
 {
     for (int i=0; i<numc; i++)
@@ -476,6 +478,7 @@ void ChanInfo::readInfoAtoms(AtomStream &atom, int numc)
             atom.skip(c, d);
     }
 }
+#endif
 
 // -----------------------------------
 void ChanInfo::writeInfoAtoms(AtomStream &atom)

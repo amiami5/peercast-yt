@@ -169,6 +169,7 @@ TEST_F(ChanInfoFixture, getPlayListExt)
     ASSERT_STREQ(".m3u", info.getPlayListExt());
 }
 
+#ifndef WITH_RUST_CORE
 // 他のノードから届いたチャンネルの URL は UI でリンクとして表示されるので、
 // "javascript:" などの http(s) 以外は捨てる。
 TEST_F(ChanInfoFixture, readInfoAtomsKeepsHttpUrl)
@@ -234,3 +235,62 @@ TEST_F(ChanInfoFixture, readTrackAtomsDropsNonHttpContact)
     other2.readTrackAtoms(r2, c);
     ASSERT_STREQ("http://example.com/", other2.track.contact.cstr());
 }
+#else // WITH_RUST_CORE
+// Rust 版 (WITH_RUST_CORE) では、chan atom の中身は peercast-rs (src/pcp) が読む。他のノードから
+// chan atom を受け取ったときに、ヒットリストに入る URL で確かめる。
+
+#include "rustpcp.h"
+
+// info の info atom (track なら track atom) を、PCP のパケットとして受け取る
+static ChanInfo receiveChanAtom(ChanInfo& info, bool track)
+{
+    GnuID id;
+    id.fromStr("0123456789ABCDEF0123456789ABCDEF");
+    char buf[ChanPacket::MAX_DATALEN] = {};
+    MemoryStream mem(buf, sizeof(buf));
+    AtomStream w(mem);
+    w.writeParent(PCP_CHAN, 2);
+    w.writeBytes(PCP_CHAN_ID, id.id, 16);
+    if (track)
+        info.writeTrackAtoms(w);
+    else
+        info.writeInfoAtoms(w);
+
+    GnuID remoteID;
+    PCPStream pcp(remoteID);
+    BroadcastState bcs;
+    rustbridge::PcpHost(pcp).procPacket(buf, sizeof(buf), bcs);
+
+    auto chl = chanMgr->findHitListByID(id);
+    EXPECT_TRUE(chl != nullptr);
+    ChanInfo res = chl ? chl->info : ChanInfo();
+    chanMgr->clearHitLists();
+    return res;
+}
+
+TEST_F(ChanInfoFixture, readInfoAtomsKeepsHttpUrl)
+{
+    info.url.set("https://example.com/path?x=1");
+    ASSERT_STREQ("https://example.com/path?x=1", receiveChanAtom(info, false).url.cstr());
+}
+
+TEST_F(ChanInfoFixture, readInfoAtomsDropsNonHttpUrl)
+{
+    const char* bad[] = { "javascript:alert(document.cookie)", "JaVaScRiPt:alert(1)",
+                          " http://example.com/", "data:text/html,<script>1</script>",
+                          "vbscript:x", "//example.com/", "example.com" };
+    for (const char* url : bad) {
+        info.url.set(url);
+        ASSERT_STREQ("", receiveChanAtom(info, false).url.cstr()) << url;
+    }
+}
+
+TEST_F(ChanInfoFixture, readTrackAtomsDropsNonHttpContact)
+{
+    info.track.contact.set("javascript:alert(1)");
+    ASSERT_STREQ("", receiveChanAtom(info, true).track.contact.cstr());
+
+    info.track.contact.set("http://example.com/");
+    ASSERT_STREQ("http://example.com/", receiveChanAtom(info, true).track.contact.cstr());
+}
+#endif // WITH_RUST_CORE

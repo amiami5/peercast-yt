@@ -330,6 +330,104 @@ int pcrs_commands_parse_options(const uint8_t *args_joined, size_t args_joined_l
  * 形式が壊れていれば 2 (理由を *err に書く) */
 int pcrs_flv_read_meta_data(const uint8_t *data, size_t n, int32_t *bitrate, pcrs_buf *err);
 
+/* PCP の受け取ったパケットの処理 (core/common/pcp.cpp の PCPStream::procAtom 以下と、
+ * ChanInfo::readInfoAtoms / readTrackAtoms)。解析と判断は Rust、チャンネルやサーバーの状態
+ * (chanMgr、servMgr、Channel) は C++ に残り、pcrs_pcp_host のコールバックで読み書きする */
+typedef struct pcrs_pcp_ip {
+    uint8_t kind;               /* 0 なし、4 (v4 を IP(unsigned int) に)、16 (v6 を in6_addr に) */
+    uint32_t v4;
+    uint8_t v6[16];
+} pcrs_pcp_ip;
+
+/* pcrs_pcp_hit の set のビット (立っているメンバーだけ ChanHit に入れる) */
+enum {
+    PCRS_PCP_HIT_NUML = 1 << 0, PCRS_PCP_HIT_NUMR = 1 << 1, PCRS_PCP_HIT_UPTIME = 1 << 2,
+    PCRS_PCP_HIT_OLDPOS = 1 << 3, PCRS_PCP_HIT_NEWPOS = 1 << 4, PCRS_PCP_HIT_VERSION = 1 << 5,
+    PCRS_PCP_HIT_VERSION_VP = 1 << 6, PCRS_PCP_HIT_VEX_PREFIX = 1 << 7, PCRS_PCP_HIT_VEX_NUMBER = 1 << 8,
+    PCRS_PCP_HIT_FLAGS1 = 1 << 9, PCRS_PCP_HIT_SESSION_ID = 1 << 10, PCRS_PCP_HIT_UPHOST_PORT = 1 << 11,
+    PCRS_PCP_HIT_UPHOST_HOPS = 1 << 12
+};
+
+/* readHostAtoms が読んだ ChanHit の値。rhost_ip と uphost_ip は kind が 0 でなければ入れる */
+typedef struct pcrs_pcp_hit {
+    uint32_t set;
+    pcrs_pcp_ip rhost_ip[2];
+    bool rhost_port_set[2];
+    int32_t rhost_port[2];
+    int32_t num_listeners, num_relays, up_time, oldest_pos, newest_pos, version, version_vp,
+            version_ex_number, flags1, uphost_port, uphost_hops;
+    uint8_t version_ex_prefix[2];
+    uint8_t session_id[16];
+    pcrs_pcp_ip uphost_ip;
+    uint8_t chan_id[16];        /* 常に入れる */
+    int32_t num_hops;           /* 常に入れる */
+} pcrs_pcp_hit;
+
+/* BroadcastState と PCPStream::nextRootPacket */
+typedef struct pcrs_pcp_state {
+    uint8_t chan_id[16];
+    uint8_t bc_id[16];
+    int32_t num_hops;
+    bool for_me;
+    uint32_t stream_pos;
+    int32_t group;
+    uint32_t next_root_packet;
+} pcrs_pcp_state;
+
+/* pcrs_pcp_host の event の op */
+enum {
+    PCRS_PCP_EV_ROUTE_ADD = 1,          /* routeList.add(data 16 バイト) */
+    PCRS_PCP_EV_UPDATE_INTERVAL = 2,    /* chanMgr->setUpdateInterval(arg) */
+    PCRS_PCP_EV_UPGRADE = 3,            /* servMgr->downloadURL に data を入れて NT_UPGRADE を通知 */
+    PCRS_PCP_EV_TRACKER_UPDATE = 4,     /* chanMgr->broadcastTrackerUpdate(remoteID, true) */
+    PCRS_PCP_EV_ROOT_MESSAGE = 5,       /* ルートからのメッセージ data (servMgr->rootMsg と違えば入れ替えて通知) */
+    PCRS_PCP_EV_CHAN_BEGIN = 6,         /* readChanAtoms の始め。data (16 バイト) のチャンネルとヒットリストを探す */
+    PCRS_PCP_EV_CHAN_INFO_STRING = 7,   /* newInfo の文字列 arg (PCRS_PCP_INFO_*) に readString のとおり data を写す */
+    PCRS_PCP_EV_CHAN_INFO_BITRATE = 8,  /* newInfo.bitrate = arg */
+    PCRS_PCP_EV_CHAN_BCID = 9,          /* newInfo.bcID = data (16 バイト) */
+    PCRS_PCP_EV_CHAN_ID = 10,           /* newInfo.id = data (16 バイト) にして、チャンネルとヒットリストを探し直す */
+    PCRS_PCP_EV_CHAN_END = 11           /* readChanAtoms の終わり (ヒットリストの更新、チャンネルのログ、updateInfo) */
+};
+
+/* PCRS_PCP_EV_CHAN_INFO_STRING の arg */
+enum {
+    PCRS_PCP_INFO_NAME = 0, PCRS_PCP_INFO_GENRE = 1, PCRS_PCP_INFO_URL = 2, PCRS_PCP_INFO_DESC = 3,
+    PCRS_PCP_INFO_COMMENT = 4, PCRS_PCP_INFO_TYPE = 5, PCRS_PCP_INFO_STREAMTYPE = 6, PCRS_PCP_INFO_STREAMEXT = 7,
+    PCRS_PCP_TRACK_TITLE = 8, PCRS_PCP_TRACK_CREATOR = 9, PCRS_PCP_TRACK_URL = 10, PCRS_PCP_TRACK_ALBUM = 11
+};
+
+/* pcrs_pcp_host の broadcast の target */
+enum {
+    PCRS_PCP_BCAST_UP = 0,      /* chanMgr->broadcastPacketUp */
+    PCRS_PCP_BCAST_COUT = 1,    /* servMgr->broadcastPacket(..., Servent::T_COUT) */
+    PCRS_PCP_BCAST_CIN = 2,     /* 同 T_CIN */
+    PCRS_PCP_BCAST_RELAY = 3    /* 同 T_RELAY */
+};
+
+/* int を返すコールバックは、成功で 0、C++ の例外で中断したら -1 */
+typedef struct pcrs_pcp_host {
+    void *ctx;
+    void (*session_id)(void *ctx, uint8_t *out16);                  /* servMgr->sessionID */
+    bool (*is_root)(void *ctx);                                     /* servMgr->isRoot */
+    uint32_t (*time)(void *ctx);                                    /* sys->getTime() */
+    void (*log)(void *ctx, int level, const uint8_t *msg, size_t len); /* 0 DEBUG、1 INFO、2 ERROR */
+    int (*event)(void *ctx, int op, int32_t arg, const uint8_t *data, size_t len); /* PCRS_PCP_EV_* */
+    int (*hit)(void *ctx, const pcrs_pcp_hit *hit, bool add);      /* add なら chanMgr->addHit、でなければ delHit */
+    /* 自分宛ての push。ip->kind が 0 なら ip、port_set が false なら port は Host の初期値のまま */
+    int (*push)(void *ctx, const pcrs_pcp_ip *ip, bool port_set, int32_t port, const uint8_t *chan_id16);
+    bool (*chan_has_channel)(void *ctx);                            /* readChanAtoms の ch が NULL でないか */
+    /* readPktAtoms のチャンネル側 (rawData への書き込みなど)。kind は ChanPacket::TYPE */
+    int (*chan_packet)(void *ctx, int32_t kind, uint32_t pos, bool cont, const uint8_t *data, size_t len);
+    int (*broadcast)(void *ctx, int target, const uint8_t *pack, size_t len, const uint8_t *chan_id16, const uint8_t *dest_id16);
+} pcrs_pcp_host;
+
+/* PCPStream::readPacket の、受け取ったパケットの処理 (mem.rewind() から procAtom まで)。buf は
+ * ChanPacket::data 全体 (len バイト。helo への返事をここに書く)。0 成功 (*result に procAtom の値)、
+ * 1 コールバックの中断、2 StreamException (*err にメッセージ。pcrs_buf_free で返す)。
+ * *st は途中で中断しても書き戻す */
+int pcrs_pcp_proc_packet(const pcrs_pcp_host *host, uint8_t *buf, size_t len, pcrs_pcp_state *st,
+                         int32_t *result, pcrs_buf *err);
+
 #ifdef __cplusplus
 }
 #endif

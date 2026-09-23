@@ -352,6 +352,47 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   Rust 版は個数によらず同じ挿入ソートで、同じ q 値は書かれた順になる。
 * NUL を含むヘッダーや引数は、段階1 の `str::split` の違い (C++ 版は NUL で切れる) のとおり。
 
+## 段階6a で追加したもの (PCP の受け取ったパケットの処理)
+
+`src/pcp/` に、ほかのノードから受け取った PCP のパケットの処理 (`core/common/pcp.cpp` の
+`PCPStream::procAtom` 以下と、`chaninfo.cpp` の `ChanInfo::readInfoAtoms` / `readTrackAtoms`) を
+移した。`chan` (チャンネルの情報とストリームのパケット)、`host` (ヒット)、`root`、`bcst` (中継)、
+`push`、`helo`、`mesg`、`ok`、`quit`、`atom` を扱う。
+
+### 設計
+
+* atom の読み書き (`AtomStream`) は、C++ 版と同じく 16KB のバッファ (`ChanPacket::data`) の上で
+  行う (`src/pcp/atom.rs`)。バッファの終わりを越える読み出しは 0 を返して位置を進めない、4096
+  バイトずつ読み飛ばす、といった `MemoryStream` と `Stream` の振る舞いも同じにした。`helo` への
+  返事 (`oleh`) を受け取ったパケットのバッファに書き込む (送られず、後ろの atom を上書きする)
+  ことや、中継する `bcst` のパケットを別のバッファに組み立てることも同じ。
+* チャンネル、ヒットリスト、サーバーの状態 (`chanMgr`、`servMgr`、`Channel`) は C++ に残り、
+  `Host` トレイト (C の型は `pcrs_pcp_host`) で読み書きする。C++ 側の実装
+  (`core/common/rustpcp.h` の `rustbridge::PcpHost`) は、C++ 版の同じ箇所をそのまま写したもの。
+  `PCPStream::readPacket` のソケットの読み書きは C++ のまま (段階 9)。
+* `readInfoAtoms` などの C++ 版のメソッドはなくなるので、それを呼んでいた gtest
+  (`pcpstream_unittest.cpp` の 2 件) は C++ 版のビルドでだけ動く。同じ内容のテストは
+  `src/pcp/tests.rs` にある。`chaninfo_unittest.cpp` の URL のテスト 3 件は、Rust 版のビルドでは
+  PCP のパケットとして受け取り、ヒットリストに入る値で確かめる。
+
+### C++ 版との違い
+
+* **入れ子の深さ**: C++ 版は `atom` の子や `bcst` の中の atom の入れ子に上限がなく、`bcst` の
+  入れ子ごとに 16KB のバッファをスタックに取るので、数百段の入れ子でスタックを使い果たして
+  落ちた (ネットワークから届くパケットで起きる)。Rust 版は 64 段を超えると `StreamException`
+  ("PCP: atom nesting too deep") にする。
+* **NUL で終わらない文字列の atom**: C++ 版は、文字列を読んだ `String` のまだ書いていない部分
+  (初期化されていないスタックのメモリ) を文字列の続きとして使い、チャンネルの情報に入れて
+  ほかのノードへ中継することもあった。Rust 版はそこを 0 とみなし、文字列は atom の中身で終わる
+  (ChanInfo の newInfo は、0 で埋めた記憶領域の上に作る)。
+* **バッファの終わりでの空回り**: 子の数を大きく偽った atom があると、C++ 版はバッファの終わりに
+  着いたあとも子の数だけ (最大約 21 億回) ループし、ID 0 の atom を読み飛ばし続けた (`host`
+  などでは毎回ログを出す)。空回りの間は何も変わらないので、Rust 版はそこでループを終える
+  (ログは 1 回)。
+* **`char` の符号**: `ttl`、`hops`、`grp` などの 1 バイトの値は、C++ 版では CPU によって符号が
+  違った (x86 は符号付き、ARM の Linux は符号なし。例えば `ttl` が 0 の中継の扱いが変わる)。
+  Rust 版は CPU によらず x86 と同じ符号付き。
+
 ## 差分テスト
 
 ```sh
@@ -372,6 +413,7 @@ make
 ./diff_template 20000 $(find ../../../ui/html -name "*.html")
                              # テンプレート: UI の実際のテンプレート、生成したもの、その変異
 ./diff_public                  # Accept-Language、formatUptime、コンソールの引数 (約80万件)
+./diff_pcp                     # PCP の受け取ったパケット: 生成した atom の木とその変異 (10万件)
 ```
 
 `diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした
@@ -383,6 +425,13 @@ C++ のコア一式 (`cxxcore.a`、`make` が自動で作る) にリンクしま
 時刻を読む回数と順序も比べることになります。C++ 版が初期化していないメモリを読む箇所を
 比べられるように、差分テストの C++ はスタックを 0 で初期化し (`-ftrivial-auto-var-init=zero`)、
 ヒープも 0 で埋めます (`diff_media.cpp` の `operator new`)。
+
+`diff_pcp` は、同じパケットのバッファと同じ状態の `chanMgr`、`servMgr`、`PCPStream` で C++ 版の
+`procAtom` と Rust 版を動かし、ログ、中継、通知、ヒットの追加と削除、`Channel::updateInfo`
+(`--wrap` で横取りする) と、処理のあとのバッファ、ヒットリスト、チャンネルの状態などを比べます。
+C++ 版は深い入れ子で 8MB のスタックを使い果たすので、512MB のスタックのスレッドで動かします。
+C++ 版がバッファの終わりで空回りしたもの (ログが 10 万行を超えるか 0.2 秒を超えたもの) は、
+比べずに数えます。
 
 C++ 版の関数をそのままコンパイルしたもの (`WITH_RUST_CORE` を定義しない `cgi.cpp` / `str.cpp`) と、
 `libpeercast_rs.a` に、1 バイトずつ変えた入力を大量に与えて比較します。上に挙げた既知の違いは

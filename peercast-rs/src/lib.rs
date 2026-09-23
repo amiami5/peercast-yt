@@ -21,6 +21,7 @@ pub mod jis;
 mod jis_table;
 pub mod md5;
 pub mod media;
+pub mod pcp;
 pub mod pcstring;
 pub mod public;
 pub mod reader;

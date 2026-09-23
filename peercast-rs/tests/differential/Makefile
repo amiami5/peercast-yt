@@ -21,7 +21,7 @@ $(RUST)/target/release/libpeercast_rs.a: $(wildcard $(RUST)/src/*.rs $(RUST)/src
 	cargo build --release --manifest-path $(RUST)/Cargo.toml
 
 clean:
-	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public *.o cxxcore.a
+	rm -f diff diff_strutil diff_md5_gnuid diff_jis diff_string diff_http diff_amf0_dechunk diff_xml diff_url diff_media diff_template diff_public diff_pcp *.o cxxcore.a
 
 diff_strutil: diff_strutil.cpp cgi.o str.o regexp.o common.o $(RUST)/target/release/libpeercast_rs.a
 	$(CXX) $(CXXFLAGS) $^ -o $@ -pthread -ldl
@@ -73,3 +73,17 @@ diff_template: diff_template.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs
 
 diff_public: diff_public.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustbridge.h
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(CXXCORE_LIBS)
+
+# ログ (記録する)、中継、通知、GIV、トラッカーへの更新、delHit、Channel::updateInfo を横取りする。
+# ChanMgr::addHit は仮想関数なので、横取りせずに派生クラスで記録する。
+PCP_WRAP = -Wl,--wrap=_Z9LOG_TRACEPKcz -Wl,--wrap=_Z9LOG_DEBUGPKcz -Wl,--wrap=_Z8LOG_INFOPKcz \
+           -Wl,--wrap=_Z8LOG_WARNPKcz -Wl,--wrap=_Z9LOG_ERRORPKcz \
+           -Wl,--wrap=_ZN7ChanMgr17broadcastPacketUpER10ChanPacketRK5GnuIDS4_S4_ \
+           -Wl,--wrap=_ZN7ServMgr15broadcastPacketER10ChanPacketRK5GnuIDS4_S4_N7Servent4TYPEE \
+           -Wl,--wrap=_ZN7ServMgr12allocServentEv \
+           -Wl,--wrap=_ZN8peercast13notifyMessageEN7ServMgr11NOTIFY_TYPEERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE \
+           -Wl,--wrap=_ZN7ChanMgr22broadcastTrackerUpdateERK5GnuIDb -Wl,--wrap=_ZN7ChanMgr6delHitER7ChanHit \
+           -Wl,--wrap=_ZN7Channel10updateInfoERK8ChanInfo -Wl,--wrap=_ZN6String5clearEv
+
+diff_pcp: diff_pcp.cpp cxxcore.a $(RUST)/target/release/libpeercast_rs.a $(CORE)/rustpcp.h $(CORE)/rustbridge.h
+	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(PCP_WRAP) $(CXXCORE_LIBS)

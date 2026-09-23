@@ -1541,3 +1541,291 @@ pub unsafe extern "C" fn pcrs_commands_parse_options(
         }
     }
 }
+
+// ---------------------------------------------------------------- PCP (src/pcp)
+
+use crate::pcp::{self, InfoField, Ip, Level as PcpLevel, Target};
+
+/// アドレスの atom の値 (C の `pcrs_pcp_ip`)。`kind` は 0 (なし)、4 (`v4`)、16 (`v6`)。
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CPcpIp {
+    pub kind: u8,
+    pub v4: u32,
+    pub v6: [u8; 16],
+}
+
+fn c_ip(ip: Option<Ip>) -> CPcpIp {
+    match ip {
+        None => CPcpIp { kind: 0, v4: 0, v6: [0; 16] },
+        Some(Ip::V4(v)) => CPcpIp { kind: 4, v4: v, v6: [0; 16] },
+        Some(Ip::V6(a)) => CPcpIp { kind: 16, v4: 0, v6: a },
+    }
+}
+
+/// `readHostAtoms` が読んだ `ChanHit` の値 (C の `pcrs_pcp_hit`)。`set` のビットが立っている
+/// メンバーだけ `ChanHit` に入れる (ほかは `ChanHit::init()` の値のまま)。
+#[repr(C)]
+pub struct CPcpHit {
+    pub set: u32,
+    pub rhost_ip: [CPcpIp; 2],
+    pub rhost_port_set: [bool; 2],
+    pub rhost_port: [i32; 2],
+    pub num_listeners: i32,
+    pub num_relays: i32,
+    pub up_time: i32,
+    pub oldest_pos: i32,
+    pub newest_pos: i32,
+    pub version: i32,
+    pub version_vp: i32,
+    pub version_ex_number: i32,
+    pub flags1: i32,
+    pub uphost_port: i32,
+    pub uphost_hops: i32,
+    pub version_ex_prefix: [u8; 2],
+    pub session_id: [u8; 16],
+    pub uphost_ip: CPcpIp,
+    pub chan_id: [u8; 16],
+    pub num_hops: i32,
+}
+
+fn c_hit(h: &pcp::Hit) -> CPcpHit {
+    let mut set = 0u32;
+    let mut take = |bit: u32, v: Option<i32>| -> i32 {
+        match v {
+            Some(x) => {
+                set |= 1 << bit;
+                x
+            }
+            None => 0,
+        }
+    };
+    let num_listeners = take(0, h.num_listeners);
+    let num_relays = take(1, h.num_relays);
+    let up_time = take(2, h.up_time);
+    let oldest_pos = take(3, h.oldest_pos);
+    let newest_pos = take(4, h.newest_pos);
+    let version = take(5, h.version);
+    let version_vp = take(6, h.version_vp);
+    let version_ex_number = take(8, h.version_ex_number);
+    let flags1 = take(9, h.flags1);
+    let uphost_port = take(11, h.uphost_port);
+    let uphost_hops = take(12, h.uphost_hops);
+    if h.version_ex_prefix.is_some() {
+        set |= 1 << 7;
+    }
+    if h.session_id.is_some() {
+        set |= 1 << 10;
+    }
+    CPcpHit {
+        set,
+        rhost_ip: [c_ip(h.rhost_ip[0]), c_ip(h.rhost_ip[1])],
+        rhost_port_set: [h.rhost_port[0].is_some(), h.rhost_port[1].is_some()],
+        rhost_port: [h.rhost_port[0].unwrap_or(0), h.rhost_port[1].unwrap_or(0)],
+        num_listeners,
+        num_relays,
+        up_time,
+        oldest_pos,
+        newest_pos,
+        version,
+        version_vp,
+        version_ex_number,
+        flags1,
+        uphost_port,
+        uphost_hops,
+        version_ex_prefix: h.version_ex_prefix.unwrap_or([0; 2]),
+        session_id: h.session_id.unwrap_or([0; 16]),
+        uphost_ip: c_ip(h.uphost_ip),
+        chan_id: h.chan_id,
+        num_hops: h.num_hops,
+    }
+}
+
+/// PCP の処理の状態 (C の `pcrs_pcp_state`。`BroadcastState` と `PCPStream::nextRootPacket`)
+#[repr(C)]
+pub struct CPcpState {
+    pub chan_id: [u8; 16],
+    pub bc_id: [u8; 16],
+    pub num_hops: i32,
+    pub for_me: bool,
+    pub stream_pos: u32,
+    pub group: i32,
+    pub next_root_packet: u32,
+}
+
+const PCP_EV_ROUTE_ADD: i32 = 1;
+const PCP_EV_UPDATE_INTERVAL: i32 = 2;
+const PCP_EV_UPGRADE: i32 = 3;
+const PCP_EV_TRACKER_UPDATE: i32 = 4;
+const PCP_EV_ROOT_MESSAGE: i32 = 5;
+const PCP_EV_CHAN_BEGIN: i32 = 6;
+const PCP_EV_CHAN_INFO_STRING: i32 = 7;
+const PCP_EV_CHAN_INFO_BITRATE: i32 = 8;
+const PCP_EV_CHAN_BCID: i32 = 9;
+const PCP_EV_CHAN_ID: i32 = 10;
+const PCP_EV_CHAN_END: i32 = 11;
+
+/// PCP の処理から見た C++ 側 (C の `pcrs_pcp_host`)。int を返すものは、成功で 0、C++ の例外で
+/// 中断したら -1。
+#[repr(C)]
+pub struct CPcpHost {
+    pub ctx: *mut c_void,
+    pub session_id: unsafe extern "C" fn(ctx: *mut c_void, out: *mut u8),
+    pub is_root: unsafe extern "C" fn(ctx: *mut c_void) -> bool,
+    pub time: unsafe extern "C" fn(ctx: *mut c_void) -> u32,
+    pub log: unsafe extern "C" fn(ctx: *mut c_void, level: i32, msg: *const u8, len: usize),
+    pub event: unsafe extern "C" fn(ctx: *mut c_void, op: i32, arg: i32, data: *const u8, len: usize) -> i32,
+    pub hit: unsafe extern "C" fn(ctx: *mut c_void, hit: *const CPcpHit, add: bool) -> i32,
+    pub push: unsafe extern "C" fn(ctx: *mut c_void, ip: *const CPcpIp, port_set: bool, port: i32, chan_id: *const u8) -> i32,
+    pub chan_has_channel: unsafe extern "C" fn(ctx: *mut c_void) -> bool,
+    pub chan_packet: unsafe extern "C" fn(ctx: *mut c_void, kind: i32, pos: u32, cont: bool, data: *const u8, len: usize) -> i32,
+    pub broadcast: unsafe extern "C" fn(ctx: *mut c_void, target: i32, pack: *const u8, len: usize, chan_id: *const u8, dest_id: *const u8) -> i32,
+}
+
+struct CPcpHostRef<'a>(&'a CPcpHost);
+
+impl CPcpHostRef<'_> {
+    fn event(&mut self, op: i32, arg: i32, data: &[u8]) -> Result<(), Abort> {
+        // SAFETY: 下の impl の説明のとおり
+        status(unsafe { (self.0.event)(self.0.ctx, op, arg, data.as_ptr(), data.len()) })
+    }
+}
+
+// 以下の unsafe ブロックはどれも、CPcpHost を渡した C++ 側が関数ポインタと ctx の有効性を
+// 保証していることに頼る。渡すポインタは呼び出しの間だけ有効。
+impl pcp::Host for CPcpHostRef<'_> {
+    fn session_id(&mut self) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        // SAFETY: 上記。out は 16 バイト書ける
+        unsafe { (self.0.session_id)(self.0.ctx, out.as_mut_ptr()) };
+        out
+    }
+    fn is_root(&mut self) -> bool {
+        // SAFETY: 上記
+        unsafe { (self.0.is_root)(self.0.ctx) }
+    }
+    fn time(&mut self) -> u32 {
+        // SAFETY: 上記
+        unsafe { (self.0.time)(self.0.ctx) }
+    }
+    fn log(&mut self, level: PcpLevel, msg: &[u8]) {
+        // SAFETY: 上記
+        unsafe { (self.0.log)(self.0.ctx, level as i32, msg.as_ptr(), msg.len()) }
+    }
+    fn route_add(&mut self, id: &[u8; 16]) -> Result<(), Abort> {
+        self.event(PCP_EV_ROUTE_ADD, 0, id)
+    }
+    fn set_update_interval(&mut self, si: i32) -> Result<(), Abort> {
+        self.event(PCP_EV_UPDATE_INTERVAL, si, &[])
+    }
+    fn upgrade(&mut self, url: &[u8]) -> Result<(), Abort> {
+        self.event(PCP_EV_UPGRADE, 0, url)
+    }
+    fn tracker_update(&mut self) -> Result<(), Abort> {
+        self.event(PCP_EV_TRACKER_UPDATE, 0, &[])
+    }
+    fn root_message(&mut self, msg: &[u8]) -> Result<(), Abort> {
+        self.event(PCP_EV_ROOT_MESSAGE, 0, msg)
+    }
+    fn hit(&mut self, hit: &pcp::Hit, add: bool) -> Result<(), Abort> {
+        let h = c_hit(hit);
+        // SAFETY: 上記
+        status(unsafe { (self.0.hit)(self.0.ctx, &h, add) })
+    }
+    fn push(&mut self, ip: Option<Ip>, port: Option<i32>, chan_id: &[u8; 16]) -> Result<(), Abort> {
+        let ip = c_ip(ip);
+        // SAFETY: 上記
+        status(unsafe { (self.0.push)(self.0.ctx, &ip, port.is_some(), port.unwrap_or(0), chan_id.as_ptr()) })
+    }
+    fn chan_begin(&mut self, chan_id: &[u8; 16]) -> Result<(), Abort> {
+        self.event(PCP_EV_CHAN_BEGIN, 0, chan_id)
+    }
+    fn chan_has_channel(&mut self) -> bool {
+        // SAFETY: 上記
+        unsafe { (self.0.chan_has_channel)(self.0.ctx) }
+    }
+    fn chan_packet(&mut self, pkt: &pcp::Packet) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe { (self.0.chan_packet)(self.0.ctx, pkt.kind, pkt.pos, pkt.cont, pkt.data.as_ptr(), pkt.data.len()) })
+    }
+    fn chan_info_string(&mut self, field: InfoField, bytes: &[u8]) -> Result<(), Abort> {
+        self.event(PCP_EV_CHAN_INFO_STRING, field as i32, bytes)
+    }
+    fn chan_info_bitrate(&mut self, bitrate: i32) -> Result<(), Abort> {
+        self.event(PCP_EV_CHAN_INFO_BITRATE, bitrate, &[])
+    }
+    fn chan_bcid(&mut self, id: &[u8; 16]) -> Result<(), Abort> {
+        self.event(PCP_EV_CHAN_BCID, 0, id)
+    }
+    fn chan_id(&mut self, id: &[u8; 16]) -> Result<(), Abort> {
+        self.event(PCP_EV_CHAN_ID, 0, id)
+    }
+    fn chan_end(&mut self) -> Result<(), Abort> {
+        self.event(PCP_EV_CHAN_END, 0, &[])
+    }
+    fn broadcast(&mut self, target: Target, pack: &[u8], chan_id: &[u8; 16], dest_id: &[u8; 16]) -> Result<(), Abort> {
+        // SAFETY: 上記
+        status(unsafe {
+            (self.0.broadcast)(self.0.ctx, target as i32, pack.as_ptr(), pack.len(), chan_id.as_ptr(), dest_id.as_ptr())
+        })
+    }
+}
+
+/// `PCPStream::readPacket` の、受け取ったパケットを処理する部分。`buf` はパケットのバッファ全体
+/// (`ChanPacket::data`、`len` バイト)。返り値は 0 成功 (`*result` に `procAtom` の値)、
+/// 1 コールバックの中断、2 `StreamException` (メッセージを `*err` に書く)。
+///
+/// # Safety
+/// `host` は有効な `CPcpHost`、`buf` は `len` バイト読み書きでき、`st`、`result`、`err` は
+/// 読み書きできること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_pcp_proc_packet(
+    host: *const CPcpHost,
+    buf: *mut u8,
+    len: usize,
+    st: *mut CPcpState,
+    result: *mut i32,
+    err: *mut PcrsBuf,
+) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (h, st) = unsafe { (&*host, &mut *st) };
+    let buf: &mut [u8] = if len == 0 || buf.is_null() {
+        &mut []
+    } else {
+        // SAFETY: 関数の Safety 節
+        unsafe { std::slice::from_raw_parts_mut(buf, len) }
+    };
+    let mut state = pcp::State {
+        bcs: pcp::BroadcastState {
+            chan_id: st.chan_id,
+            bc_id: st.bc_id,
+            num_hops: st.num_hops,
+            for_me: st.for_me,
+            stream_pos: st.stream_pos,
+            group: st.group,
+        },
+        next_root_packet: st.next_root_packet,
+    };
+    let r = pcp::proc_packet(&mut CPcpHostRef(h), buf, &mut state);
+    // 途中で中断しても、それまでに変えた状態は C++ 版と同じく残す
+    st.chan_id = state.bcs.chan_id;
+    st.bc_id = state.bcs.bc_id;
+    st.num_hops = state.bcs.num_hops;
+    st.for_me = state.bcs.for_me;
+    st.stream_pos = state.bcs.stream_pos;
+    st.group = state.bcs.group;
+    st.next_root_packet = state.next_root_packet;
+    match r {
+        Ok(v) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *result = v };
+            0
+        }
+        Err(pcp::Error::Abort) => 1,
+        Err(pcp::Error::Stream(msg)) => {
+            // SAFETY: 関数の Safety 節
+            unsafe { *err = into_buf(msg.as_bytes().to_vec()) };
+            2
+        }
+    }
+}

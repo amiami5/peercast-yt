@@ -233,6 +233,8 @@ public:
     void            flushOutput(Stream &in, BroadcastState &);
     static void     readVersion(Stream &);
 
+#ifndef WITH_RUST_CORE
+    // 受け取ったパケットの処理。WITH_RUST_CORE のビルドでは peercast-rs (src/pcp、core/common/rustpcp.h)
     int             procAtom(AtomStream &, ID4, int, int, BroadcastState &);
     int             readAtom(AtomStream &, BroadcastState &);
     void            readChanAtoms(AtomStream &, int, BroadcastState &);
@@ -243,6 +245,7 @@ public:
     void            readRootAtoms(AtomStream &, int, BroadcastState &);
 
     int             readBroadcastAtoms(AtomStream &, int, BroadcastState &);
+#endif
 
     ChanPacketBuffer inData, outData;
     unsigned int    lastPacketTime;

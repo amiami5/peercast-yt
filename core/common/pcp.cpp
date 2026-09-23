@@ -23,6 +23,9 @@
 #include "pcp.h"
 #include "peercast.h"
 #include "version2.h"
+#ifdef WITH_RUST_CORE
+#include "rustpcp.h"
+#endif
 
 // ------------------------------------------
 void PCPStream::init(const GnuID &rid)
@@ -143,12 +146,17 @@ int PCPStream::readPacket(Stream &in, BroadcastState &bcs)
         {
             inData.readPacket(pack);
 
+#ifdef WITH_RUST_CORE
+            // 受け取ったパケットの処理は peercast-rs (src/pcp)
+            error = rustbridge::PcpHost(*this).procPacket(pack.data, sizeof(pack.data), bcs);
+#else
             mem.rewind();
 
             int numc, numd;
             ID4 id = patom.read(numc, numd);
 
             error = PCPStream::procAtom(patom, id, numc, numd, bcs);
+#endif
 
             if (error)
                 throw StreamException("PCP exception");
@@ -168,6 +176,7 @@ void PCPStream::readEnd(Stream &, std::shared_ptr<Channel>)
 {
 }
 
+#ifndef WITH_RUST_CORE
 // ------------------------------------------
 void PCPStream::readPushAtoms(AtomStream &atom, int numc, BroadcastState &bcs)
 {
@@ -728,3 +737,4 @@ int PCPStream::readAtom(AtomStream &atom, BroadcastState &bcs)
 
     return  procAtom(atom, id, numc, dlen, bcs);
 }
+#endif // WITH_RUST_CORE

@@ -108,8 +108,10 @@ public:
     void    writeInfoAtoms(AtomStream &atom);
     void    writeTrackAtoms(AtomStream &atom);
 
+#ifndef WITH_RUST_CORE
     void    readInfoAtoms(AtomStream &, int);
     void    readTrackAtoms(AtomStream &, int);
+#endif
 
     amf0::Value getState() override;
 
