@@ -13,6 +13,7 @@
 #include "amf0.h"
 #include "peercast_rs.h"
 #include "stream.h"
+#include "xml.h"
 
 namespace rustbridge
 {
@@ -49,6 +50,7 @@ public:
         m_reader.read_char = readChar;
         m_reader.read_exact = readExact;
         m_reader.read_some = readSome;
+        m_reader.eof = eof;
     }
 
     const pcrs_reader* get() const { return &m_reader; }
@@ -91,6 +93,18 @@ private:
         try {
             int r = self->m_in.read(buf, static_cast<int>(n));
             *got = r > 0 ? static_cast<size_t>(r) : 0;
+            return 0;
+        } catch (...) {
+            self->m_ex = std::current_exception();
+            return -1;
+        }
+    }
+
+    static int eof(void* ctx, bool* out)
+    {
+        auto self = static_cast<StreamReader*>(ctx);
+        try {
+            *out = self->m_in.eof();
             return 0;
         } catch (...) {
             self->m_ex = std::current_exception();
@@ -238,6 +252,115 @@ inline void nextChunk(Stream& in, size_t maxChunkSize, std::deque<char>& buffer,
     default: throw StreamException("Premature end");
     }
 }
+
+// ------------------------------------------------ XML
+
+// XML::Node::setAttributes の本体。attrData (malloc したもの)、attr (new[] したもの)、numAttr を作る。
+// C++ 版と同じ例外 (StreamException) を投げる。
+inline void parseXmlAttributes(const char* n, char*& attrData, XML::Node::Attribute*& attr, int& numAttr)
+{
+    size_t len = strlen(n);
+    std::vector<size_t> positions(2 * (len + 1));
+    size_t count = 0;
+    pcrs_buf data = {nullptr, 0};
+    int code = pcrs_xml_parse_attributes(reinterpret_cast<const uint8_t*>(n), len, &data, positions.data(), &count);
+    if (code == 1)
+        throw StreamException("Too many attributes");
+    if (code != 0)
+        throw StreamException("Bad tag value");
+
+    RustBuf owner(data);
+    std::string s = owner.str();
+    char* d = static_cast<char*>(malloc(s.size() + 1)); // ~Node が free() で解放する
+    if (!d)
+        throw std::bad_alloc();
+    memcpy(d, s.data(), s.size());
+    d[s.size()] = '\0';
+
+    attr = new XML::Node::Attribute[count];
+    for (size_t i = 0; i < count; i++)
+    {
+        attr[i].namePos = static_cast<int>(positions[2 * i]);
+        attr[i].valuePos = static_cast<int>(positions[2 * i + 1]);
+    }
+    attrData = d;
+    numAttr = static_cast<int>(count);
+}
+
+// XML::read の本体。Rust が読んだ要素を受け取り、C++ 版と同じ形の木を組み立てる。
+class XmlReader
+{
+public:
+    explicit XmlReader(XML& xml) : m_xml(xml)
+    {
+        m_builder.ctx = this;
+        m_builder.content = content;
+        m_builder.start_tag = startTag;
+        m_builder.end_tag = endTag;
+    }
+
+    void read(Stream& in)
+    {
+        StreamReader reader(in);
+        int code = pcrs_xml_read(reader.get(), &m_builder);
+        switch (code)
+        {
+        case 0: return;
+        case 1: reader.rethrowIfAborted(); throw StreamException("XML: read aborted");
+        case 2: std::rethrow_exception(m_ex);
+        case 3: throw StreamException("Tag too long");
+        case 4: throw StreamException("Content too big");
+        case 5: throw StreamException("Not XML document");
+        default: throw StreamException("Unexpected end tag");
+        }
+    }
+
+private:
+    template <typename F>
+    static int guard(void* ctx, F f)
+    {
+        auto self = static_cast<XmlReader*>(ctx);
+        try {
+            f(*self);
+            return 0;
+        } catch (...) {
+            self->m_ex = std::current_exception();
+            return -1;
+        }
+    }
+
+    // Rust 側は、開いているノードがあるときだけ内容と閉じタグを通知する。
+    static int content(void* ctx, const uint8_t* s, size_t n)
+    {
+        return guard(ctx, [&](XmlReader& self) {
+            self.m_curr->setContent(std::string(reinterpret_cast<const char*>(s), n).c_str());
+        });
+    }
+
+    static int startTag(void* ctx, const uint8_t* s, size_t n, bool single)
+    {
+        return guard(ctx, [&](XmlReader& self) {
+            std::string tag(reinterpret_cast<const char*>(s), n);
+            XML::Node* node = new XML::Node("%s", tag.c_str());
+            if (self.m_curr)
+                self.m_curr->add(node);
+            else
+                self.m_xml.setRoot(node);
+            if (!single)
+                self.m_curr = node;
+        });
+    }
+
+    static int endTag(void* ctx)
+    {
+        return guard(ctx, [&](XmlReader& self) { self.m_curr = self.m_curr->parent; });
+    }
+
+    XML& m_xml;
+    XML::Node* m_curr = nullptr;
+    pcrs_xml_builder m_builder;
+    std::exception_ptr m_ex;
+};
 
 } // namespace rustbridge
 

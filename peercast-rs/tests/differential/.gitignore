@@ -6,4 +6,5 @@ diff_strutil
 diff_string
 diff_http
 diff_amf0_dechunk
+diff_xml
 cxxcore.a

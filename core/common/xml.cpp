@@ -61,6 +61,7 @@ void XML::Node::add(Node *n)
     }
 }
 
+#ifndef WITH_RUST_CORE
 // ---------------------------------
 inline char nibsToByte(char n1, char n2)
 {
@@ -95,6 +96,8 @@ int XML::Node::getBinaryContent(void *ptr, int size)
     return i;
 }
 
+#endif // WITH_RUST_CORE
+
 // ----------------------------------
 void XML::Node::setBinaryContent(void *ptr, int size)
 {
@@ -125,6 +128,7 @@ void XML::Node::setContent(const char *n)
     contData = Sys::strdup(n);
 }
 
+#ifndef WITH_RUST_CORE
 // ----------------------------------
 void XML::Node::setAttributes(const char *n)
 {
@@ -221,6 +225,8 @@ void XML::Node::setAttributes(const char *n)
         }
     }
 }
+
+#endif // WITH_RUST_CORE
 
 // ----------------------------------
 XML::Node::Node(const char *fmt, ...)
@@ -420,6 +426,8 @@ XML::Node *XML::Node::findNode(const char *name)
     return nullptr;
 }
 
+#ifndef WITH_RUST_CORE
+// WITH_RUST_CORE のときは rustcore.cpp (peercast-rs の src/xml.rs) を使う。
 // ----------------------------------
 void XML::read(Stream &in)
 {
@@ -504,4 +512,4 @@ void XML::read(Stream &in)
         }
     }
 }
-
+#endif // WITH_RUST_CORE

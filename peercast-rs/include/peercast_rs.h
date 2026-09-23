@@ -126,6 +126,7 @@ typedef struct pcrs_reader {
     int (*read_char)(void *ctx, uint8_t *out);                      /* Stream::readChar */
     int (*read_exact)(void *ctx, uint8_t *buf, size_t n);           /* Stream::read(int) */
     int (*read_some)(void *ctx, uint8_t *buf, size_t n, size_t *got); /* Stream::read(void*, int) */
+    int (*eof)(void *ctx, bool *out);                               /* Stream::eof */
 } pcrs_reader;
 
 /* amf0 (core/common/amf0.cpp)。読んだ値をコールバックで通知する。コールバックも例外を外に出さない。 */
@@ -157,6 +158,22 @@ int pcrs_amf0_read_string(const pcrs_reader *r, pcrs_buf *out);
  * 0 なし、1 読み出しの中断、2 "Protocol error"、3 "Chunk size too large"、
  * 4 最後のチャンク ("Closed on read")、5 "Premature end" */
 int pcrs_dechunk_next(const pcrs_reader *r, size_t max_chunk_size, pcrs_buf *data);
+
+/* xml (core/common/xml.cpp)。要素をコールバックで通知する。どれも成功で 0、例外で中断したら -1。 */
+typedef struct pcrs_xml_builder {
+    void *ctx;
+    int (*content)(void *ctx, const uint8_t *s, size_t n);
+    int (*start_tag)(void *ctx, const uint8_t *s, size_t n, bool single);
+    int (*end_tag)(void *ctx);
+} pcrs_xml_builder;
+
+/* 0 成功、1 読み出しの中断、2 通知先の中断、3 "Tag too long"、4 "Content too big"、
+ * 5 "Not XML document"、6 "Unexpected end tag" */
+int pcrs_xml_read(const pcrs_reader *r, const pcrs_xml_builder *b);
+/* 0 成功、1 "Too many attributes"、2 "Bad tag value"。positions は 2 * (n + 1) 個書けること */
+int pcrs_xml_parse_attributes(const uint8_t *s, size_t n, pcrs_buf *data, size_t *positions, size_t *count);
+/* 0 成功、-1 "Too much binary data" */
+int pcrs_xml_binary_content(const uint8_t *s, size_t n, size_t size, pcrs_buf *out);
 
 #ifdef __cplusplus
 }

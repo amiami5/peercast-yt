@@ -18,6 +18,8 @@ pub trait Reader {
     fn read_exact(&mut self, n: usize) -> Result<Vec<u8>, Abort>;
     /// `Stream::read(void*, int)`: 最大 `n` バイト読み、読めた分を返す。
     fn read_some(&mut self, n: usize) -> Result<Vec<u8>, Abort>;
+    /// `Stream::eof`
+    fn eof(&mut self) -> Result<bool, Abort>;
 }
 
 /// テスト用: バイト列から読む。C++ の `MemoryStream` と同じく、データが尽きると
@@ -59,5 +61,9 @@ impl Reader for SliceReader<'_> {
         let v = self.data[self.pos..self.pos + n].to_vec();
         self.pos += n;
         Ok(v)
+    }
+
+    fn eof(&mut self) -> Result<bool, Abort> {
+        Ok(self.pos >= self.data.len())
     }
 }

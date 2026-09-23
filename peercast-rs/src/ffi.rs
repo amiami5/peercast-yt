@@ -613,6 +613,8 @@ pub struct CReader {
     pub read_exact: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, buf: *mut u8, n: usize) -> i32,
     /// `Stream::read(void*, int)`: 最大 n バイト。読めたバイト数を *got に書く
     pub read_some: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, buf: *mut u8, n: usize, got: *mut usize) -> i32,
+    /// `Stream::eof`
+    pub eof: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, out: *mut bool) -> i32,
 }
 
 /// `CReader` を `Reader` として使う。
@@ -646,6 +648,15 @@ impl Reader for CReaderRef<'_> {
                 v.truncate(got.min(n));
                 Ok(v)
             }
+            _ => Err(Abort),
+        }
+    }
+
+    fn eof(&mut self) -> Result<bool, Abort> {
+        let mut e = false;
+        // SAFETY: CReader を渡した C++ 側が、関数ポインタと ctx の有効性を保証する
+        match unsafe { (self.0.eof)(self.0.ctx, &mut e) } {
+            0 => Ok(e),
             _ => Err(Abort),
         }
     }
@@ -777,6 +788,101 @@ pub unsafe extern "C" fn pcrs_amf0_read_string(r: *const CReader, out: *mut Pcrs
         Ok(v) => { unsafe { *out = into_buf(v) }; 0 }
         Err(Abort) => -1,
     }
+}
+
+// ---------------------------------------------------------------- xml (core/common/xml.cpp)
+
+use crate::xml;
+
+/// XML の要素を受け取る C++ 側のコールバック。どれも成功で 0、C++ の例外で中断したら -1。
+#[repr(C)]
+pub struct CXmlBuilder {
+    pub ctx: *mut std::ffi::c_void,
+    pub content: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, s: *const u8, n: usize) -> i32,
+    pub start_tag: unsafe extern "C" fn(ctx: *mut std::ffi::c_void, s: *const u8, n: usize, single: bool) -> i32,
+    pub end_tag: unsafe extern "C" fn(ctx: *mut std::ffi::c_void) -> i32,
+}
+
+struct CXmlBuilderRef<'a>(&'a CXmlBuilder);
+
+fn ok_if_zero(r: i32) -> Result<(), ()> {
+    if r == 0 { Ok(()) } else { Err(()) }
+}
+
+// SAFETY (この impl のすべての unsafe): CXmlBuilder を渡した C++ 側が、関数ポインタと ctx の
+// 有効性を保証する。文字列は呼び出しの間だけ有効なスライスを渡す。
+impl xml::Builder for CXmlBuilderRef<'_> {
+    fn content(&mut self, s: &[u8]) -> Result<(), ()> {
+        ok_if_zero(unsafe { (self.0.content)(self.0.ctx, s.as_ptr(), s.len()) })
+    }
+    fn start_tag(&mut self, s: &[u8], single: bool) -> Result<(), ()> {
+        ok_if_zero(unsafe { (self.0.start_tag)(self.0.ctx, s.as_ptr(), s.len(), single) })
+    }
+    fn end_tag(&mut self) -> Result<(), ()> {
+        ok_if_zero(unsafe { (self.0.end_tag)(self.0.ctx) })
+    }
+}
+
+/// `XML::read`。0 成功、1 読み出しの中断、2 通知先の中断、3 "Tag too long"、
+/// 4 "Content too big"、5 "Not XML document"、6 "Unexpected end tag"。
+///
+/// # Safety
+/// `r`, `b` は有効な構造体を指すこと。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_xml_read(r: *const CReader, b: *const CXmlBuilder) -> i32 {
+    // SAFETY: 関数の Safety 節
+    let (mut rd, mut bd) = unsafe { (reader(r), CXmlBuilderRef(&*b)) };
+    match xml::read(&mut rd, &mut bd) {
+        Ok(()) => 0,
+        Err(xml::Error::Abort) => 1,
+        Err(xml::Error::Callback) => 2,
+        Err(xml::Error::TagTooLong) => 3,
+        Err(xml::Error::ContentTooBig) => 4,
+        Err(xml::Error::NotXml) => 5,
+        Err(xml::Error::UnexpectedEndTag) => 6,
+    }
+}
+
+/// `XML::Node::setAttributes`。0 成功、1 "Too many attributes"、2 "Bad tag value"。
+///
+/// 成功したら、`*data` に C++ 版の `attrData` の中身 (終端の NUL を含まない) を、`positions` に
+/// (名前の位置, 値の位置) を属性の数だけ並べて書き、属性の数 (タグ名を含む) を `*count` に書く。
+///
+/// # Safety
+/// `s` は `n` バイト読めること。`positions` は `2 * (n + 1)` 個の `size_t` を書き込めること
+/// (属性の数は `n + 1` を超えない)。`data`, `count` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_xml_parse_attributes(
+    s: *const u8, n: usize, data: *mut PcrsBuf, positions: *mut usize, count: *mut usize,
+) -> i32 {
+    // SAFETY: 関数の Safety 節
+    match xml::parse_attributes(unsafe { input(s, n) }) {
+        Ok(a) => {
+            debug_assert!(a.attrs.len() <= n + 1);
+            // SAFETY: 関数の Safety 節 (positions は 2 * (n + 1) 個書ける)
+            unsafe {
+                for (i, &(name, value)) in a.attrs.iter().enumerate() {
+                    *positions.add(2 * i) = name;
+                    *positions.add(2 * i + 1) = value;
+                }
+                *count = a.attrs.len();
+                *data = into_buf(a.data);
+            }
+            0
+        }
+        Err(xml::AttrError::TooMany) => 1,
+        Err(xml::AttrError::BadValue) => 2,
+    }
+}
+
+/// `XML::Node::getBinaryContent`。0 成功 (`*out` に中身)、-1 "Too much binary data"。
+///
+/// # Safety
+/// `s` は `n` バイト読めること。`out` は書き込めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_xml_binary_content(s: *const u8, n: usize, size: usize, out: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    store(out, xml::binary_content(unsafe { input(s, n) }, size))
 }
 
 // ---------------------------------------------------------------- dechunker (core/common/dechunker.cpp)

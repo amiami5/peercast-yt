@@ -24,3 +24,4 @@ pub mod reader;
 pub mod strutil;
 pub mod url;
 pub mod utf8;
+pub mod xml;

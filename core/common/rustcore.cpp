@@ -512,6 +512,30 @@ void Dechunker::getNextChunk()
     rustbridge::nextChunk(m_stream, MAX_CHUNK_SIZE, m_buffer, m_eof);
 }
 
+void XML::read(Stream &in)
+{
+    rustbridge::XmlReader(*this).read(in);
+}
+
+void XML::Node::setAttributes(const char *n)
+{
+    rustbridge::parseXmlAttributes(n, attrData, attr, numAttr);
+}
+
+int XML::Node::getBinaryContent(void *ptr, int size)
+{
+    // C++ 版は内容がない (contData が NULL) と NULL を読んで落ちていた。Rust 版では空として扱う。
+    const char* in = contData ? contData : "";
+    pcrs_buf out = {nullptr, 0};
+    if (pcrs_xml_binary_content(reinterpret_cast<const uint8_t*>(in), strlen(in),
+                                size > 0 ? static_cast<size_t>(size) : 0, &out) != 0)
+        throw StreamException("Too much binary data");
+    RustBuf owner(out);
+    if (out.len)
+        memcpy(ptr, out.ptr, out.len);
+    return static_cast<int>(out.len);
+}
+
 #endif // WITH_RUST_CORE
 
 #ifdef WITH_RUST_CORE
