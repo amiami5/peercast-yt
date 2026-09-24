@@ -10,6 +10,7 @@
 #![deny(unsafe_code)]
 
 pub mod amf0;
+pub mod bbs;
 pub mod chandir;
 pub mod channel;
 pub mod chanhit;
