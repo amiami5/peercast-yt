@@ -4,16 +4,24 @@ WITH_RTMP = yes
 # Use the Rust implementation (needs cargo).  See docs/rust-migration.md.
 #   make WITH_RUST=no    : build everything from the original C++ code
 # The parts can also be switched individually:
+#   WITH_RUST_SERVER     : peercast itself (the Rust server in ../../peercast-rs, src/bin/peercast.rs)
 #   WITH_RUST_RTMP       : rtmp-server (../../rtmp-server-rs instead of ../../rtmp-server)
-#   WITH_RUST_CORE       : parts of the core library (../../peercast-rs, linked into peercast)
+#   WITH_RUST_CORE       : parts of the core library (../../peercast-rs, linked into libpeercast.a,
+#                          which the C++ build of peercast and the unit tests use)
 # Change them on the command line or in Makefile.local.  Run "make clean"
 # when switching, since the output file names are the same.
 WITH_RUST = yes
+WITH_RUST_SERVER = $(WITH_RUST)
 WITH_RUST_RTMP = $(WITH_RUST)
 WITH_RUST_CORE = $(WITH_RUST)
 RUST_RTMP = ../../rtmp-server-rs
 RUST_CORE = ../../peercast-rs
 RUST_CORE_LIB = $(RUST_CORE)/target/release/libpeercast_rs.a
+RUST_SERVER_BIN = $(RUST_CORE)/target/release/peercast
+ifeq ($(WITH_RTMP),yes)
+  RUST_SERVER_FEATURES = --features rtmp
+endif
+RUST_CORE_SOURCES = $(RUST_CORE)/Cargo.toml $(RUST_CORE)/build.rs $(wildcard $(RUST_CORE)/src/*.rs $(RUST_CORE)/src/*/*.rs $(RUST_CORE)/src/*/*/*.rs)
 CARGO ?= cargo
 
 CPPFLAGS = -g -Wall -std=c++11 -D_UNIX -D_REENTRANT -DADD_BACKTRACE $(INCLUDES) $(shell pkg-config openssl --cflags)
@@ -166,8 +174,16 @@ $(LINUXOBJ): %.o : %.cpp
 $(LIBOBJSTATIC): $(COREOBJ) $(SYSOBJ)
 	$(AR) rcs $(LIBOBJSTATIC) $(COREOBJ) $(SYSOBJ)
 
+ifeq ($(WITH_RUST_SERVER),yes)
+# Rust のサーバー (C++ のコードを使わない)
+$(TARGET): $(RUST_CORE_SOURCES)
+	$(CHECK_CARGO)
+	$(CARGO) build --release --manifest-path $(RUST_CORE)/Cargo.toml --bin peercast $(RUST_SERVER_FEATURES)
+	cp $(RUST_SERVER_BIN) $@
+else
 $(TARGET): $(LINUXOBJ) $(LIBOBJSTATIC) $(RUST_CORE_DEP)
 	$(CXX) $(LDFLAGS) -o $@ $(LINUXOBJ) $(LIBOBJSTATIC) $(LIBS)
+endif
 
 define CHECK_CARGO
 	@command -v $(CARGO) >/dev/null 2>&1 || { \
@@ -176,7 +192,7 @@ define CHECK_CARGO
 	  exit 1; }
 endef
 
-$(RUST_CORE_LIB): $(RUST_CORE)/Cargo.toml $(wildcard $(RUST_CORE)/src/*.rs $(RUST_CORE)/src/*/*.rs) $(wildcard $(RUST_CORE)/include/*.h)
+$(RUST_CORE_LIB): $(RUST_CORE_SOURCES) $(wildcard $(RUST_CORE)/include/*.h)
 	$(CHECK_CARGO)
 	$(CARGO) build --release --manifest-path $(RUST_CORE)/Cargo.toml
 

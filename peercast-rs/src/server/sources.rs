@@ -529,11 +529,13 @@ fn icy_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
     match sock {
         None => crate::log_error!("Channel aborted: ICY channel has no socket"),
         Some(mut sock) => {
+            ch.st().src_sock = Some(sock.host);
             ch.reset_play_time();
             ch.set_status(pc, chn::S_BROADCASTING);
             let mut source = SourceStream::create(ch);
             run_read_stream(pc, ch, &mut sock, &mut source);
             sock.close();
+            ch.st().src_sock = None;
         }
     }
     ch.set_status(pc, chn::S_CLOSING);
@@ -546,6 +548,7 @@ fn http_push_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>, chunked: bool) {
         None => crate::log_error!("Channel aborted: HTTP Push channel has no socket"),
         Some(mut sock) => {
             set_src_stat(ch, sock.stat().map(|_| sock.shared_stat()));
+            ch.st().src_sock = Some(sock.host);
             ch.reset_play_time();
             ch.set_status(pc, chn::S_BROADCASTING);
             let mut source = SourceStream::create(ch);
@@ -557,6 +560,7 @@ fn http_push_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>, chunked: bool) {
             }
             set_src_stat(ch, None);
             sock.close();
+            ch.st().src_sock = None;
         }
     }
     ch.set_status(pc, chn::S_CLOSING);
@@ -770,6 +774,7 @@ fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
             }
             let s = sock.as_mut().ok_or_else(|| Error::stream("no socket"))?;
             set_src_stat(ch, Some(s.shared_stat()));
+            ch.st().src_sock = Some(s.host);
             error = handshake_fetch(pc, ch, s)?;
             if error != 0 {
                 return Err(Error::stream("Handshake error"));
@@ -819,6 +824,7 @@ fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
             s.close();
         }
         set_src_stat(ch, None);
+        ch.st().src_sock = None;
 
         if error == 404 {
             crate::log_error!("Channel not found");

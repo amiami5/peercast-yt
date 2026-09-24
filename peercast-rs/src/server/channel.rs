@@ -87,6 +87,8 @@ pub struct ChanState {
     pub root_host: Vec<u8>,
     /// 受け取ったソケットのホスト (HTTP Push の `getSourceString` で使う)
     pub sock_host: Host,
+    /// 配信元から読んでいるソケットの相手 (C++ 版の `sock` があるとき。JSON-RPC の接続の一覧で使う)
+    pub src_sock: Option<Host>,
 }
 
 impl ChanState {
@@ -164,6 +166,7 @@ impl Channel {
             ip_version: IP_V4,
             root_host: Vec::new(),
             sock_host: Host::none(),
+            src_sock: None,
         };
         st.reset();
         let raw_data = PacketBuffer::new();
@@ -896,6 +899,7 @@ impl Clone for ChanState {
             ip_version: self.ip_version,
             root_host: self.root_host.clone(),
             sock_host: self.sock_host,
+            src_sock: self.src_sock,
         }
     }
 }

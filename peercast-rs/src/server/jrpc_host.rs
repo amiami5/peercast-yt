@@ -45,11 +45,14 @@ fn host_str(h: &Host) -> Vec<u8> {
 impl JrpcHost<'_> {
     fn channel_data(&self, c: &Arc<Channel>) -> ChannelData {
         let pc = self.pc;
-        let (info, status, source_url, source_host, ip_version, stream_pos) = {
+        let (info, status, source_url, source_host, ip_version, stream_pos, src_sock) = {
             let st = c.st();
-            (st.info.clone(), st.status, st.source_url.data.clone(), st.source_host.host, st.ip_version, st.stream_pos)
+            (st.info.clone(), st.status, st.source_url.data.clone(), st.source_host.host, st.ip_version, st.stream_pos, st.src_sock)
         };
-        let sock_host = c.sock.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| host_str(&s.host));
+        // 配信元のスレッドが持っているソケットか、まだ渡していないソケット
+        let sock_host = src_sock
+            .map(|h| host_str(&h))
+            .or_else(|| c.sock.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| host_str(&s.host)));
         ChannelData {
             uptime: info.uptime(pc.chanmgr.max_uptime()),
             src_protocol: info.src_protocol,
