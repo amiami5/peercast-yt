@@ -719,6 +719,24 @@ pub fn flv_ffmpeg_args(query: &[u8], server_port: u16) -> Option<Vec<String>> {
     Some(args.to_vec())
 }
 
+/// flv.cgi の `auth` が `id` のチャンネルのトークン (`/stream/` の `?auth=` と同じもの) か。
+/// トークンは管理画面 (パスワードで守られている) のプレーヤーにだけ出るので、private でない
+/// ホストからでも、それを持っていれば使えるようにする。
+pub fn flv_valid_auth_token(request_filename: &[u8], broadcast_id: &[u8; 16]) -> bool {
+    let q = match request_filename.iter().position(|&c| c == b'?') {
+        Some(p) => &request_filename[p + 1..],
+        None => return false,
+    };
+    let form = crate::bbs::Form::parse(q);
+    match (form.get("id"), form.get("auth")) {
+        (Some(id), Some(token)) if id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()) => {
+            let id = gnuid::from_str(&strutil::upcase(id.as_bytes()));
+            channel::auth_token(broadcast_id, &id) == token.as_bytes()
+        }
+        _ => false,
+    }
+}
+
 /// `handshakeJRPC` の本体の長さ。`Err` は返す状態の行と番号 (411、400、413)。
 pub fn jrpc_body_length(content_length: &[u8], max: i32) -> Result<i32, (&'static str, i32)> {
     if content_length.is_empty() {

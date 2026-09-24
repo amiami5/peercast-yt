@@ -218,6 +218,21 @@ fn flv() {
     }
 }
 
+#[test]
+fn flv_auth_token() {
+    let bcid = [7u8; 16];
+    let id = "0123456789abcdef0123456789ABCDEF";
+    let token = String::from_utf8(channel::auth_token(&bcid, &gnuid::from_str(id.to_uppercase().as_bytes()))).unwrap();
+    let req = |q: String| [&b"/cgi-bin/flv.cgi?"[..], q.as_bytes()].concat();
+    assert!(flv_valid_auth_token(&req(format!("id={}&type=MKV&auth={}", id, token)), &bcid));
+    assert!(flv_valid_auth_token(&req(format!("auth={}&id={}", token, id.to_lowercase())), &bcid));
+    assert!(!flv_valid_auth_token(&req(format!("id={}&auth={}", id, token)), &[8; 16]));
+    assert!(!flv_valid_auth_token(&req(format!("id={}&auth=", id)), &bcid));
+    assert!(!flv_valid_auth_token(&req(format!("id={}", id)), &bcid));
+    assert!(!flv_valid_auth_token(&req(format!("id={}0&auth={}", id, token)), &bcid));
+    assert!(!flv_valid_auth_token(format!("/cgi-bin/flv.cgi&id={}&auth={}", id, token).as_bytes(), &bcid));
+}
+
 /// 乱数の入力でパニックしない
 #[test]
 fn fuzz() {
@@ -239,6 +254,7 @@ fn fuzz() {
         let _ = giv_id(&s);
         let _ = source(&s);
         let _ = valid_auth_token(&s, &[1; 16]);
+        let _ = flv_valid_auth_token(&s, &[1; 16]);
         let _ = cookie_id(&s, 7144);
         let _ = apply_ops(&s);
         let _ = redirect_url(&s);

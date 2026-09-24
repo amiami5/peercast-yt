@@ -53,7 +53,7 @@
        var flvPlayer = flvjs.createPlayer({
          type: 'flv',
          isLive: true,
-         url: '/stream/{$channel.id}.flv'
+         url: '/stream/{$channel.id}.flv?auth={$channel.authToken}'
        });
        {^SETUP_flvPlayer}
      }
@@ -83,7 +83,7 @@
             var flvPlayer = flvjs.createPlayer({
                 type: 'flv',
                 isLive: true,
-                url: '/cgi-bin/flv.cgi?id={$channel.id}&type={$channel.type}&bitrate={$channel.bitrate}&preset={$servMgr.preset}&audio_codec={$servMgr.audioCodec}'
+                url: '/cgi-bin/flv.cgi?id={$channel.id}&type={$channel.type}&bitrate={$channel.bitrate}&preset={$servMgr.preset}&audio_codec={$servMgr.audioCodec}&auth={$channel.authToken}'
             });
             {^SETUP_flvPlayer}
         }

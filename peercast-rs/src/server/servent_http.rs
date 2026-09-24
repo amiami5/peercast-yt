@@ -294,7 +294,8 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                 return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
             }
             if kind == K::CgiBinFlv {
-                if !ctx.sv.is_private(ctx.pc) || !ctx.filtered(sf::F_DIRECT) {
+                let authorized = ctx.sv.is_private(ctx.pc) || servhs::flv_valid_auth_token(fn_, &ctx.pc.chanmgr.broadcast_id());
+                if !authorized || !ctx.filtered(sf::F_DIRECT) {
                     return Err(http_error(HTTP_SC_FORBIDDEN, 403));
                 }
                 http.read_headers()?;
