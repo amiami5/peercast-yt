@@ -10,8 +10,8 @@ use super::stream::{Stream, StreamExt};
 use super::sys;
 use crate::strutil;
 
-pub const PCX_AGENT: &str = "PeerCast/0.1218 (YT50-rs1)";
-pub const PCX_VERSTRING: &str = "v0.1218 YT50-rs1";
+pub const PCX_AGENT: &str = "PeerCast/0.1218 (YT50-rs2)";
+pub const PCX_VERSTRING: &str = "v0.1218 YT50-rs2";
 
 pub const HTTP_SC_OK: &str = "HTTP/1.0 200 OK";
 pub const HTTP_SC_NOTFOUND: &str = "HTTP/1.0 404 Not Found";
@@ -676,7 +676,7 @@ mod tests {
         assert!(out.starts_with("HTTP/1.0 200 OK\r\n"));
         assert!(out.contains("Content-Length: 2\r\n"));
         assert!(out.contains("Content-Type: text/plain\r\n"));
-        assert!(out.contains("Server: PeerCast/0.1218 (YT50-rs1)\r\n"));
+        assert!(out.contains("Server: PeerCast/0.1218 (YT50-rs2)\r\n"));
         assert!(out.ends_with("\r\n\r\nhi"));
 
         // Content-Length のある応答
