@@ -27,6 +27,7 @@ pub mod jrpc;
 pub mod json;
 pub mod jis;
 mod jis_table;
+pub mod mapper;
 pub mod md5;
 pub mod media;
 pub mod pcp;

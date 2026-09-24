@@ -10,6 +10,10 @@
 // 数バイト変えたもの。id には乱数の JSON を使い、応答で書き出される値 (浮動小数点数など) も比べる。
 // getState が読む inspect() の結果も横取りして乱数の JSON (とその変異) を返し、nlohmann の構文解析の
 // 例外の文言も比べる。
+//
+// 段階8c: 同じ状態から、PublicController::createChannelIndex (index.txt) と、Rust 版の
+// pcrs_public_channel_index の結果 (か例外)、ログ、あとの状態も比べる。
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +32,7 @@
 #include "jrpc.h"
 #include "logbuf.h"
 #include "peercast_rs.h"
+#include "public.h"
 #include "rustjrpc.h"
 #include "servent.h"
 #include "servmgr.h"
@@ -878,6 +883,52 @@ static void directCase()
                show(out[0].substr(0, 3000)).c_str(), show(out[1].substr(0, 3000)).c_str());
 }
 
+// ---------------------------------------------------------------- index.txt (段階8c)
+
+static long g_indexCases = 0, g_indexLines = 0, g_indexExceptions = 0;
+
+static void indexCase()
+{
+    unsigned seed = rng();
+    std::string out[2];
+    for (int side = 0; side < 2; side++)
+    {
+        build(seed);
+        g_rec.clear();
+        std::string res;
+        if (side == 0)
+        {
+            try {
+                PublicController pc("/tmp");
+                res = "ok:" + pc.createChannelIndex();
+            } catch (std::exception& e) {
+                res = std::string("exception:") + e.what();
+            }
+        }
+        else
+        {
+            // public.cpp の WITH_RUST_CORE の createChannelIndex と同じ
+            rustbridge::JrpcHost host;
+            auto tip = servMgr->serverHost.str();
+            rustbridge::RustBuf o;
+            int r = pcrs_public_channel_index(host.get(), reinterpret_cast<const uint8_t*>(tip.data()), tip.size(), o.out());
+            res = (r == 0 ? "ok:" : "exception:") + o.str();
+        }
+        if (side == 0)
+        {
+            if (res.compare(0, 10, "exception:") == 0) g_indexExceptions++;
+            else g_indexLines += std::count(res.begin(), res.end(), '\n');
+        }
+        out[side] = res + "\n---\n" + g_rec + "---\n" + snapshot();
+        teardown();
+    }
+    g_cases++;
+    g_indexCases++;
+    if (out[0] != out[1] && g_bad++ < 20)
+        printf("  [違い] createChannelIndex\n    C++ =%s\n    Rust=%s\n",
+               show(out[0].substr(0, 3000)).c_str(), show(out[1].substr(0, 3000)).c_str());
+}
+
 int main(int argc, char** argv)
 {
     long n = argc > 1 ? atol(argv[1]) : 100000;
@@ -898,6 +949,8 @@ int main(int argc, char** argv)
         oneCase();
         if (i % 4 == 0)
             directCase();
+        if (i % 4 == 2)
+            indexCase();
     }
 
     unlink("channelFilters.json");
@@ -913,6 +966,7 @@ int main(int argc, char** argv)
         }
     }
     printf("メソッドを直接呼んだもの %ld\n", g_directCases);
+    printf("index.txt を作ったもの %ld (行 %ld、例外 %ld)\n", g_indexCases, g_indexLines, g_indexExceptions);
     printf("有限でない数で C++ 版が例外を投げたもの (既知の違い) %ld\n", g_overflow);
     printf("比較件数 %ld、説明のつかない違い %ld\n", g_cases, g_bad);
     return g_bad ? 1 : 0;

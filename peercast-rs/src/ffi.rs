@@ -2292,6 +2292,8 @@ static C_STRS: &[&[u8]] = &[
     // servhs
     b"text/html\0", b"text/css\0", b"image/jpeg\0", b"image/gif\0", b"image/png\0",
     b"application/javascript; charset=utf-8\0", b"image/vnd.microsoft.icon\0",
+    // assets
+    b"image/svg+xml\0",
     b"HTTP/1.0 411 Length required\0", b"HTTP/1.0 400 Bad Request\0", b"HTTP/1.0 413 Request Entity Too Large\0",
 ];
 
@@ -3059,6 +3061,14 @@ mod tests_7b {
             if let Err((line, _)) = servhs::jrpc_body_length(s, 1 << 20) {
                 c_static(line.as_bytes());
             }
+        }
+    }
+
+    #[test]
+    fn public_strings_are_static() {
+        for f in [&b"a.htm"[..], b"a.html", b"a.css", b"a.jpg", b"a.gif", b"a.png", b"a.js", b"a.svg", b"a.ico", b"a"] {
+            c_static(public::mime_type(f));
+            c_static(public::assets_mime_type(f));
         }
     }
 }
@@ -4067,5 +4077,132 @@ pub unsafe extern "C" fn pcrs_servhs_jrpc_body_length(
                 -code
             }
         }
+    }
+}
+
+// ---- 段階 8c: mapper、assets、public、HTTPRequest ----
+
+use crate::mapper;
+
+/// `FileSystemMapper::toLocalFilePath` の前半。`vpath` が `virtual_path` の下でなければ false。
+///
+/// # Safety
+/// 各入力はそれぞれの長さ読め、`out` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_mapper_local_path(
+    virtual_path: *const u8,
+    vn: usize,
+    document_root: *const u8,
+    dn: usize,
+    vpath: *const u8,
+    n: usize,
+    out: *mut PcrsBuf,
+) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let r = mapper::local_path(bytes(virtual_path, vn), bytes(document_root, dn), bytes(vpath, n));
+        let ok = r.is_some();
+        put(out, r.unwrap_or_default());
+        ok
+    }
+}
+
+/// `FileSystemMapper::resolvePath` で試すパスと言語を、(パス, 言語) の順に並べる。
+///
+/// # Safety
+/// `raw` は `n` バイト読めること。`langs_*` は `pcrs_str_join` の引数と同じく読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_mapper_candidates(
+    raw: *const u8,
+    n: usize,
+    langs_joined: *const u8,
+    langs_joined_len: usize,
+    langs_lens: *const usize,
+    langs_count: usize,
+) -> PcrsVec {
+    // SAFETY: 関数の Safety 節
+    let (raw, langs) = unsafe { (bytes(raw, n), input_parts(langs_joined, langs_joined_len, langs_lens, langs_count)) };
+    let langs = langs.unwrap_or_default();
+    into_vec(mapper::candidates(raw, &langs).into_iter().flat_map(|(p, l)| [p, l]).collect())
+}
+
+/// 解決したパスが文書のディレクトリの中にあるか
+///
+/// # Safety
+/// 各入力はそれぞれの長さ読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_mapper_inside(document_root: *const u8, dn: usize, resolved: *const u8, n: usize) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe { mapper::inside(bytes(document_root, dn), bytes(resolved, n)) }
+}
+
+/// `PublicController::operator()` の振り分け (`public::Route` の番号)
+///
+/// # Safety
+/// `path` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_public_route(path: *const u8, n: usize) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe { public::route(bytes(path, n)) as i32 }
+}
+
+/// public.cpp の `MIMEType`
+///
+/// # Safety
+/// `path` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_public_mime_type(path: *const u8, n: usize) -> *const std::ffi::c_char {
+    // SAFETY: 関数の Safety 節
+    c_static(public::mime_type(unsafe { bytes(path, n) }))
+}
+
+/// assets.cpp の `MIMEType`
+///
+/// # Safety
+/// `path` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_assets_mime_type(path: *const u8, n: usize) -> *const std::ffi::c_char {
+    // SAFETY: 関数の Safety 節
+    c_static(public::assets_mime_type(unsafe { bytes(path, n) }))
+}
+
+/// `AssetsController::operator()` で 304 を返すか
+///
+/// # Safety
+/// `ims` は `n` バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_assets_not_modified(last_modified: i64, ims: *const u8, n: usize) -> bool {
+    // SAFETY: 関数の Safety 節
+    public::not_modified(last_modified, unsafe { bytes(ims, n) })
+}
+
+/// `HTTPRequest` のコンストラクターの、URL のパスとクエリーへの分割
+///
+/// # Safety
+/// `url` は `n` バイト読め、`path` と `query` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_http_split_url(url: *const u8, n: usize, path: *mut PcrsBuf, query: *mut PcrsBuf) {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let (p, q) = crate::http::split_request_url(bytes(url, n));
+        put(path, p);
+        put(query, q);
+    }
+}
+
+/// `PublicController::createChannelIndex`。0 なら `out` に index.txt、1 なら例外の `what()`。
+///
+/// # Safety
+/// `host` は `pcrs_jrpc_call` と同じ。`tip` は `n` バイト読め、`out` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_public_channel_index(host: *const CJrpcHost, tip: *const u8, n: usize, out: *mut PcrsBuf) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let (code, buf) = match jrpc::channel_index(&mut FfiJrpcHost(&*host), bytes(tip, n)) {
+            Ok(r) => (0, r),
+            Err(w) => (1, w),
+        };
+        put(out, buf);
+        code
     }
 }

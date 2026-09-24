@@ -826,6 +826,28 @@ bool pcrs_servhs_cgi_header_line(const uint8_t *line, size_t n, pcrs_buf *name, 
 /* handshakeJRPC の本体の長さ。だめなら負の数 (-411、-400、-413) で、*status_line に状態の行 */
 int32_t pcrs_servhs_jrpc_body_length(const uint8_t *s, size_t n, int32_t max, const char **status_line);
 
+/* ---- 段階 8c: mapper、assets、public、HTTPRequest ---- */
+
+/* FileSystemMapper::toLocalFilePath の前半。vpath が virtual_path の下でなければ false */
+bool pcrs_mapper_local_path(const uint8_t *virtual_path, size_t vn, const uint8_t *document_root, size_t dn,
+                            const uint8_t *vpath, size_t n, pcrs_buf *out);
+/* resolvePath で試すパスと言語を (パス, 言語) の順に並べる。langs は pcrs_str_join の引数と同じ形 */
+pcrs_vec pcrs_mapper_candidates(const uint8_t *raw, size_t n, const uint8_t *langs_joined, size_t langs_joined_len,
+                                const size_t *langs_lens, size_t langs_count);
+/* 解決したパスが文書のディレクトリの中 (そのものではない) にあるか。続きが区切りであることも見る */
+bool pcrs_mapper_inside(const uint8_t *document_root, size_t dn, const uint8_t *resolved, size_t n);
+/* PublicController::operator() の振り分け: 0 /public、1 /public/、2 index.txt、3 play.html、4 ほか */
+int32_t pcrs_public_route(const uint8_t *path, size_t n);
+/* public.cpp と assets.cpp の MIMEType (静的な文字列) */
+const char *pcrs_public_mime_type(const uint8_t *path, size_t n);
+const char *pcrs_assets_mime_type(const uint8_t *path, size_t n);
+/* AssetsController で 304 を返すか。last_modified はわからなければ -1 */
+bool pcrs_assets_not_modified(int64_t last_modified, const uint8_t *ims, size_t n);
+/* HTTPRequest のコンストラクターの URL の分割 */
+void pcrs_http_split_url(const uint8_t *url, size_t n, pcrs_buf *path, pcrs_buf *query);
+/* PublicController::createChannelIndex。0 なら out に index.txt、1 なら例外の what() */
+int pcrs_public_channel_index(const pcrs_jrpc_host *host, const uint8_t *tip, size_t n, pcrs_buf *out);
+
 #ifdef __cplusplus
 }
 #endif

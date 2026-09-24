@@ -49,6 +49,69 @@ fn insertion_sort_desc(v: &mut [(Vec<u8>, f64)]) {
     }
 }
 
+/// `PublicController::operator()` の振り分け (段階 8c)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// `/public` を `/public/` へ
+    RedirectSlash = 0,
+    /// `/public/` を `/public/index.html` へ
+    RedirectIndex = 1,
+    /// チャンネルの一覧 (index.txt)
+    IndexTxt = 2,
+    /// 視聴ページ
+    Play = 3,
+    /// ほかのファイル
+    File = 4,
+}
+
+pub fn route(path: &[u8]) -> Route {
+    match path {
+        b"/public" => Route::RedirectSlash,
+        b"/public/" => Route::RedirectIndex,
+        b"/public/index.txt" => Route::IndexTxt,
+        b"/public/play.html" => Route::Play,
+        _ => Route::File,
+    }
+}
+
+const OCTET_STREAM: &[u8] = b"application/octet-stream";
+
+/// public.cpp の `MIMEType`: パスのどこかに拡張子が含まれるか (大文字小文字を区別する)
+pub fn mime_type(path: &[u8]) -> &'static [u8] {
+    const TABLE: [(&[u8], &[u8]); 6] = [
+        (b".htm", b"text/html"),
+        (b".css", b"text/css"),
+        (b".jpg", b"image/jpeg"),
+        (b".gif", b"image/gif"),
+        (b".png", b"image/png"),
+        (b".js", b"application/javascript; charset=utf-8"),
+    ];
+    TABLE.iter().find(|(ext, _)| crate::strutil::contains(path, ext)).map_or(OCTET_STREAM, |&(_, m)| m)
+}
+
+/// assets.cpp の `MIMEType`: パスの終わりの拡張子
+pub fn assets_mime_type(path: &[u8]) -> &'static [u8] {
+    const TABLE: [(&[u8], &[u8]); 9] = [
+        (b".htm", b"text/html"),
+        (b".html", b"text/html"),
+        (b".css", b"text/css"),
+        (b".jpg", b"image/jpeg"),
+        (b".gif", b"image/gif"),
+        (b".png", b"image/png"),
+        (b".js", b"application/javascript; charset=utf-8"),
+        (b".svg", b"image/svg+xml"),
+        (b".ico", b"image/vnd.microsoft.icon"),
+    ];
+    TABLE.iter().find(|(ext, _)| path.ends_with(ext)).map_or(OCTET_STREAM, |&(_, m)| m)
+}
+
+/// `AssetsController::operator()` で 304 を返すか。`last_modified` はファイルの更新時刻 (わからなければ -1)、
+/// `if_modified_since` は If-Modified-Since ヘッダー (なければ空)。
+pub fn not_modified(last_modified: i64, if_modified_since: &[u8]) -> bool {
+    let since = if if_modified_since.is_empty() { -1 } else { crate::http::parse_http_date(if_modified_since) };
+    last_modified != -1 && since != -1 && last_modified <= since
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,5 +146,55 @@ mod tests {
         assert_eq!(langs("a;q=0.1,b;q=nan,c;q=1"), ["c", "a", "b"]);
         let many: Vec<String> = (0..40).map(|i| format!("l{};q=nan", i)).collect();
         assert_eq!(langs(&many.join(",")).len(), 40);
+    }
+
+    #[test]
+    fn routes_and_mime() {
+        assert_eq!(route(b"/public"), Route::RedirectSlash);
+        assert_eq!(route(b"/public/"), Route::RedirectIndex);
+        assert_eq!(route(b"/public/index.txt"), Route::IndexTxt);
+        assert_eq!(route(b"/public/play.html"), Route::Play);
+        assert_eq!(route(b"/public/x"), Route::File);
+        assert_eq!(mime_type(b"/r/a.html.ja"), b"text/html");
+        assert_eq!(mime_type(b"/r/a.HTM"), b"application/octet-stream");
+        assert_eq!(mime_type(b"/r/a.json"), b"application/javascript; charset=utf-8");
+        assert_eq!(assets_mime_type(b"/r/a.svg"), b"image/svg+xml");
+        assert_eq!(assets_mime_type(b"/r/a.js.map"), b"application/octet-stream");
+        assert_eq!(assets_mime_type(b"/r/a.html"), b"text/html");
+    }
+
+    #[test]
+    fn modified_since() {
+        let t = crate::http::parse_http_date(b"Sun, 06 Nov 1994 08:49:37 GMT");
+        assert!(t > 0);
+        assert!(not_modified(t, b"Sun, 06 Nov 1994 08:49:37 GMT"));
+        assert!(!not_modified(t + 1, b"Sun, 06 Nov 1994 08:49:37 GMT"));
+        assert!(!not_modified(-1, b"Sun, 06 Nov 1994 08:49:37 GMT"));
+        assert!(!not_modified(t, b""));
+        assert!(!not_modified(t, b"yesterday"));
+    }
+
+    /// 乱数の入力でパニックしない
+    #[test]
+    fn fuzz() {
+        let mut x: u32 = 8080;
+        let mut rnd = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        const ALPHA: &[u8] = b"/?.htmljscsvgpubi ,:0123GMTSunNov";
+        for _ in 0..100_000 {
+            let n = (rnd() % 32) as usize;
+            let s: Vec<u8> = (0..n).map(|_| if rnd() % 6 == 0 { rnd() as u8 } else { ALPHA[(rnd() as usize) % ALPHA.len()] }).collect();
+            let _ = route(&s);
+            let _ = mime_type(&s);
+            let _ = assets_mime_type(&s);
+            let _ = not_modified(rnd() as i64 - 1, &s);
+            let (p, q) = crate::http::split_request_url(&s);
+            assert!(p.len() + q.len() <= s.len());
+            let _ = acceptable_languages(&s);
+        }
     }
 }

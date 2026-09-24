@@ -1,9 +1,19 @@
 #include "sstream.h"
 #include "assets.h"
+#ifdef WITH_RUST_CORE
+#include "peercast_rs.h"
+#endif
 
 using namespace std;
 
 // ------------------------------------------------------------
+#ifdef WITH_RUST_CORE
+// 拡張子から決めるのは Rust (peercast-rs の src/public.rs)。
+static string MIMEType(const string& path)
+{
+    return pcrs_assets_mime_type(reinterpret_cast<const uint8_t*>(path.data()), path.size());
+}
+#else
 static string MIMEType(const string& path)
 {
     using namespace str;
@@ -37,6 +47,7 @@ static string MIMEType(const string& path)
         return "application/octet-stream";
     }
 }
+#endif // WITH_RUST_CORE
 
 // ------------------------------------------------------------
 AssetsController::AssetsController(const std::string& documentRoot)
@@ -71,6 +82,12 @@ HTTPResponse AssetsController::operator()(const HTTPRequest& req, Stream& stream
     FileStream   file;
 
     time_t last_modified = mtime(path.c_str());
+#ifdef WITH_RUST_CORE
+    // If-Modified-Since の読み取りと比べるのは Rust (peercast-rs の src/public.rs)。
+    auto ims = req.headers.get("If-Modified-Since");
+    if (pcrs_assets_not_modified(last_modified, reinterpret_cast<const uint8_t*>(ims.data()), ims.size()))
+        return HTTPResponse::notModified({{ "Last-Modified", cgi::rfc1123Time(last_modified) }});
+#else
     time_t if_modified_since = -1;
 
     if (req.headers.get("If-Modified-Since").size())
@@ -79,6 +96,7 @@ HTTPResponse AssetsController::operator()(const HTTPRequest& req, Stream& stream
     if (last_modified != -1 && if_modified_since != -1)
         if (last_modified <= if_modified_since)
             return HTTPResponse::notModified({{ "Last-Modified", cgi::rfc1123Time(last_modified) }});
+#endif // WITH_RUST_CORE
 
     file.openReadOnly(path.c_str());
     file.writeTo(mem, file.length());

@@ -385,9 +385,28 @@ pub fn parse_http_date(s: &[u8]) -> i64 {
     }
 }
 
+/// `HTTPRequest` のコンストラクター: URL を `?` で分けた、パスとクエリー (段階 8c)。
+/// `?` が 2 つ以上あると、クエリーは 2 つ目の部分だけになる (C++ 版と同じ)。
+pub fn split_request_url(url: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let vec = crate::strutil::split(url, b"?");
+    if vec.len() >= 2 {
+        (vec[0].clone(), vec[1].clone())
+    } else {
+        (url.to_vec(), Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_url() {
+        assert_eq!(split_request_url(b"/a?b=1"), (b"/a".to_vec(), b"b=1".to_vec()));
+        assert_eq!(split_request_url(b"/a?b?c"), (b"/a".to_vec(), b"b".to_vec()));
+        assert_eq!(split_request_url(b"/a"), (b"/a".to_vec(), Vec::new()));
+        assert_eq!(split_request_url(b"?"), (Vec::new(), Vec::new()));
+    }
 
     #[test]
     fn atoi_like_c() {

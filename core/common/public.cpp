@@ -6,6 +6,9 @@
 #include "sstream.h"
 #include "template.h"
 #include "jrpc.h"
+#ifdef WITH_RUST_CORE
+#include "rustjrpc.h"
+#endif
 
 using namespace std;
 
@@ -46,6 +49,13 @@ PublicController::PublicController(const string& documentRoot)
 }
 
 // ------------------------------------------------------------
+#ifdef WITH_RUST_CORE
+// 拡張子から決めるのは Rust (peercast-rs の src/public.rs)。
+static string MIMEType(const string& path)
+{
+    return pcrs_public_mime_type(reinterpret_cast<const uint8_t*>(path.data()), path.size());
+}
+#else
 static string MIMEType(const string& path)
 {
     using namespace str;
@@ -73,6 +83,7 @@ static string MIMEType(const string& path)
         return "application/octet-stream";
     }
 }
+#endif // WITH_RUST_CORE
 
 // ------------------------------------------------------------
 static string getTIP()
@@ -94,6 +105,20 @@ string PublicController::formatUptime(unsigned int totalSeconds)
 
 #endif // WITH_RUST_CORE
 
+#ifdef WITH_RUST_CORE
+// ------------------------------------------------------------
+// このサーバーから配信しているチャンネルとCINから教わったチャンネルの index.txt を作る。
+// 組み立ては Rust (peercast-rs の src/jrpc.rs の channel_index)。
+string PublicController::createChannelIndex()
+{
+    rustbridge::JrpcHost host;
+    auto tip = getTIP();
+    rustbridge::RustBuf out;
+    if (pcrs_public_channel_index(host.get(), reinterpret_cast<const uint8_t*>(tip.data()), tip.size(), out.out()) != 0)
+        throw std::runtime_error(out.str());
+    return out.str();
+}
+#else
 // ------------------------------------------------------------
 static string getDirectPermission()
 {
@@ -174,6 +199,7 @@ string PublicController::createChannelIndex()
 
     return res;
 }
+#endif // WITH_RUST_CORE
 
 #ifndef WITH_RUST_CORE
 // WITH_RUST_CORE のときは rustcore.cpp (peercast-rs の src/public.rs) を使う。
@@ -218,16 +244,24 @@ HTTPResponse PublicController::operator()(const HTTPRequest& req, Stream& stream
 {
     vector<string> langs = acceptableLanguages(req.headers.get("Accept-Language"));
 
-    if (req.path == "/public")
+#ifdef WITH_RUST_CORE
+    // 振り分けは Rust (peercast-rs の src/public.rs)
+    const int route = pcrs_public_route(reinterpret_cast<const uint8_t*>(req.path.data()), req.path.size());
+#define PUBLIC_ROUTE(n, p) (route == (n))
+#else
+#define PUBLIC_ROUTE(n, p) (req.path == (p))
+#endif
+
+    if (PUBLIC_ROUTE(0, "/public"))
     {
         return HTTPResponse::redirectTo("/public/");
-    }else if (req.path == "/public/")
+    }else if (PUBLIC_ROUTE(1, "/public/"))
     {
         return HTTPResponse::redirectTo("/public/index.html");
-    }else if (req.path == "/public/index.txt")
+    }else if (PUBLIC_ROUTE(2, "/public/index.txt"))
     {
         return HTTPResponse::ok({{"Content-Type","text/plain"}}, createChannelIndex());
-    }else if (req.path == "/public/play.html")
+    }else if (PUBLIC_ROUTE(3, "/public/play.html"))
     {
         String id = cgi::Query(req.queryString).get("id").c_str();
         ChanInfo info;
@@ -327,3 +361,5 @@ HTTPResponse PublicController::operator()(const HTTPRequest& req, Stream& stream
         }
     }
 }
+
+#undef PUBLIC_ROUTE

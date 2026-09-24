@@ -25,6 +25,9 @@
 #include "host.h"
 #include "stream.h"
 #include "str.h"
+#ifdef WITH_RUST_CORE
+#include "peercast_rs.h"
+#endif
 
 // -------------------------------------
 class HTTPException : public StreamException
@@ -185,6 +188,15 @@ public:
         , protocolVersion(aProtocolVersion)
         , headers(aHeaders)
     {
+#ifdef WITH_RUST_CORE
+        // URL の分割は Rust (peercast-rs の src/http.rs)
+        pcrs_buf p, q;
+        pcrs_http_split_url(reinterpret_cast<const uint8_t*>(url.data()), url.size(), &p, &q);
+        path.assign(reinterpret_cast<const char*>(p.ptr), p.len);
+        queryString.assign(reinterpret_cast<const char*>(q.ptr), q.len);
+        pcrs_buf_free(p);
+        pcrs_buf_free(q);
+#else
         auto vec = str::split(url, "?");
         if (vec.size() >= 2)
         {
@@ -192,6 +204,7 @@ public:
             queryString = vec[1];
         }else
             path = url;
+#endif
     }
 
     std::string method;

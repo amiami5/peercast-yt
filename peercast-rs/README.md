@@ -481,7 +481,8 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   `clearDeadHits` / `deadHit` / `delHit` / `addHit` でどのホストをどうするかの判断。連結リスト
   (`hit`) はほかのコード (チャンネル、配信、JSON-RPC) が直接たどっているので C++ に残し、並び
   どおりの配列にして渡す。リストの付け替えは C++ 側。
-* `createChannelXML` などの XML と `getState` は、中身を組み立てるだけなので段階 8 で扱う。
+* `createChannelXML` などの XML と `getState` は、状態を書き出すだけなので、状態を持つクラスと一緒に
+  段階 9 で扱う (段階 8 は入力の解釈と判断を移した)。
 
 ### C++ 版との違い
 
@@ -539,7 +540,7 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
 
 チャンネルのスレッド (`Channel::stream`、`PeercastSource::stream`、`readStream`) と、チャンネルと
 ヒットリストの連結リストの管理 (`ChanMgr` の `find*`、`clearDeadHits` など) は、ソケットと
-スレッドと一緒に段階 9 で扱う。`createXML` と `getState` は段階 8 で扱う。
+スレッドと一緒に段階 9 で扱う。`createXML` と `getState` も段階 9 で扱う。
 
 ### C++ 版との違い
 
@@ -623,8 +624,8 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
   `servhs.cpp` は、判断のところだけ `WITH_RUST_CORE` で Rust を呼ぶ。`cmdLine` のバッファを書き換える
   こと (パスの後ろに NUL を書くなど) も C++ 版と同じにしてある。
 * `cgi::Query` の Rust 版 (`servhs::Query`) を作った。C++ の `cgi::Query` は、ほかのコードが使うので残る。
-* `atoi` は glibc と同じく `long` (64 ビット) で読んでから `int` にする (32 ビットの CPU の C++ 版は
-  桁あふれが `long` の端の値になり、結果が違っていた)。
+* 数の読み取り (`atoi`) は段階 3a の `http::atoi` を使い、`int` に収まらなければ端の値にする
+  (C++ 版の glibc の `atoi` は `long` で読んで `int` に切り詰めるので、CPU で結果が違っていた)。
 
 ### C++ 版との違い
 
@@ -632,6 +633,10 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
   見つかるまで後ろ向きに読み、そこに `/` があれば 1 つ前に NUL を書いていた (範囲外の読み書き)。
   Rust 版は行の先頭で止め、マウントを空にする。行が 7 文字より短いとき、C++ 版はパスワードとして行の
   後ろの古い中身を読んでいたが、Rust 版は空にする。
+* **`int` に収まらない数**: `/api/1` の Content-Length が `int` に収まらないとき、x86-64 の C++ 版は
+  `atoi` の切り詰めで負の数になり 411 (Length required) を返していた (大きさによっては正の数になる)。
+  Rust 版は `int` の端の値にするので 413 (Request Entity Too Large)。`CMD_apply` の数の設定も、同じく
+  端の値になる。
 
 ### C++ 版と同じにしたもの (直していない)
 
@@ -644,6 +649,32 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * `nextCGIarg` は名前を `=` まで読む (`&` では止まらない)。名前か値が 511 バイトを超えると切れる。
 * `String` に入れるものは、C++ 版と同じく NUL と 255 バイトで切れる (`String::append` は、収まらなければ
   何も足さない)。
+
+## 段階8c で追加したもの (公開ディレクトリとファイルの場所)
+
+段階 8 の残り: `/public` と `/assets` の処理 (`core/common/public.cpp`、`assets.cpp`)、仮想パスから
+ファイルの場所を決めるもの (`mapper.cpp` の `FileSystemMapper`)、`HTTPRequest` の URL の分割。
+
+| 関数 | 内容 |
+|---|---|
+| `mapper::local_path`、`candidates`、`inside` | `toLocalFilePath` のパスの付け替え、`resolvePath` で試すパスと言語の順、ディレクトリトラバーサルの判断 |
+| `public::route`、`mime_type` | `PublicController::operator()` の振り分け、public.cpp の `MIMEType` |
+| `public::assets_mime_type`、`not_modified` | assets.cpp の `MIMEType`、If-Modified-Since で 304 を返すか |
+| `http::split_request_url` | `HTTPRequest` のコンストラクターの、パスとクエリーへの分割 |
+| `jrpc::channel_index` | `PublicController::createChannelIndex` (`/public/index.txt`) |
+
+* パスの解決 (`realpath`)、ファイルの読み書き、テンプレートは C++ のまま。
+* index.txt は、C++ 版と同じく `getChannels` と `getChannelsFound` の結果 (段階 8a) から組み立てる。
+  それぞれを `LOG_DEBUG` に出すための書き出しも同じにしたので、チャンネル名などに不正な UTF-8 が
+  あると、C++ 版と同じく例外 (`type_error` 316) になる (docs/cpp-known-issues.md)。
+* `getState` と `createXML` (状態の XML)、`CMD_dump_hitlists` の文字列は、状態を書き出すだけなので、
+  状態を持つクラス (`Servent`、`ServMgr`、`ChanMgr` など) と一緒に段階 9 で扱う。
+
+### C++ 版との違い
+
+* **隣のディレクトリへのトラバーサル**: C++ 版は、解決したパスの先頭が文書のディレクトリと一致するか
+  だけを見ていたので、名前の先頭が同じ隣のディレクトリ (`.../public` に対する `.../public2`) を指す
+  シンボリックリンクなどを通していた。Rust 版は、続きがパスの区切りであることも確かめる。
 
 ## 差分テスト
 
@@ -664,7 +695,8 @@ make
 ./diff_media                   # FLV/MKV/OGG/MP4/MP3: 生成した入力とその変異 (各2万件、引数で変更)
 ./diff_template 20000 $(find ../../../ui/html -name "*.html")
                              # テンプレート: UI の実際のテンプレート、生成したもの、その変異
-./diff_public                  # Accept-Language、formatUptime、コンソールの引数 (約80万件)
+./diff_public                  # Accept-Language、formatUptime、コンソールの引数、FileSystemMapper、
+                               # MIMEType、振り分け、304、URL の分割 (約240万件)
 ./diff_pcp                     # PCP の受け取ったパケット: 生成した atom の木とその変異 (10万件)
 ./diff_pcp_hs                  # PCP のハンドシェイクの helo / oleh と readVersion (20万件)
 ./diff_chanpacket               # ChanPacketBuffer: 操作の列 2 万本 (約290万回の比較)
@@ -672,7 +704,8 @@ make
 ./diff_chanhit                  # ChanInfo と ChanHit / ChanHitList: 乱数の一覧への操作 (約265万件)
 ./diff_hostgraph_uptest         # HostGraph と帯域測定の yp4g.xml の読み取りなど (約70万件)
 ./diff_channel                   # Channel と ChanMgr の移した部分: 乱数のチャンネルへの操作 (約40万件)
-./diff_jrpc                      # JSON-RPC: 乱数の状態への要求とその変異 10万件、メソッドを直接呼ぶもの 2.5万件
+./diff_jrpc                      # JSON-RPC: 乱数の状態への要求とその変異 10万件、メソッドを直接呼ぶもの 2.5万件、
+                                 # index.txt 2.5万件
 ./diff_servhs                    # HTTP の要求の解釈と判断: 乱数の入力 (約220万件)
 ```
 
@@ -694,7 +727,12 @@ C++ のコア一式 (`cxxcore.a`、`make` が自動で作る) にリンクしま
 設定、状態のファイル) を作り直して C++ 版と Rust 版に同じ要求を与え、応答、ログ、横取りした呼び出し
 (チャンネルを作る、配信元に接続する、情報を更新する、など)、あとの状態を比べます。`id` に乱数の JSON を
 入れて書き出しを比べ、`getState` が読む `inspect()` の結果も横取りして、構文解析の例外の文言も比べます。
-`DJ_STATS=1` を付けると、メソッドごとの応答の種類の数を表示します。
+`DJ_STATS=1` を付けると、メソッドごとの応答の種類の数を表示します。同じ状態から、C++ 版の
+`PublicController::createChannelIndex` と Rust 版の index.txt (か例外) も比べます。
+
+`diff_public` の `FileSystemMapper` は、一時ディレクトリにファイルとシンボリックリンク (外や隣の
+ディレクトリを指すもの) を作り、乱数の仮想パスと言語で C++ 版と比べます。隣のディレクトリを通して
+しまう C++ 版の誤り (段階 8c) は、既知の違いとして数えます。
 
 `diff_pcp` は、同じパケットのバッファと同じ状態の `chanMgr`、`servMgr`、`PCPStream` で C++ 版の
 `procAtom` と Rust 版を動かし、ログ、中継、通知、ヒットの追加と削除、`Channel::updateInfo`

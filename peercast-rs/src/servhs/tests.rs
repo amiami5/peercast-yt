@@ -121,8 +121,9 @@ fn query_and_cgi_args() {
 #[test]
 fn numbers_and_paths() {
     assert_eq!(atoi(b"  -12x"), -12);
-    assert_eq!(atoi(b"4294967297"), 1);
-    assert_eq!(atoi(b"99999999999999999999"), -1);
+    // 範囲を超える数は、段階 3a と同じく端に丸める
+    assert_eq!(atoi(b"4294967297"), i32::MAX);
+    assert_eq!(atoi(b"-99999999999999999999"), i32::MIN);
     assert_eq!(atoi(b"+"), 0);
     assert!(is_valid_html_path(b"html/ja"));
     assert!(!is_valid_html_path(b"html/"));
@@ -200,6 +201,8 @@ fn cgi_and_jrpc() {
     assert_eq!(jrpc_body_length(b"0", 100), Err(("HTTP/1.0 400 Bad Request", 400)));
     assert_eq!(jrpc_body_length(b"101", 100), Err(("HTTP/1.0 413 Request Entity Too Large", 413)));
     assert_eq!(jrpc_body_length(b" 42x", 100), Ok(42));
+    // C++ 版は x86-64 で (int)LONG_MAX の -1 になり 411 だった
+    assert_eq!(jrpc_body_length(b"99999999999999999999", 100), Err(("HTTP/1.0 413 Request Entity Too Large", 413)));
 }
 
 /// 乱数の入力でパニックしない

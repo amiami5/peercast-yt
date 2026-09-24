@@ -39,7 +39,8 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   だけで、不正な UTF-8 を先に置き換えるので起きない (段階 9)。
 * `PublicController::createChannelIndex` は `getChannels` の結果を `LOG_DEBUG` に出すために `dump()` する
   ので、配信元の URL などに不正な UTF-8 があると `type_error` が飛び、index.txt を返さずに接続が切れる
-  (`GeneralException` でないので捕まえられない)。
+  (`GeneralException` でないので捕まえられない)。Rust 版 (段階 8c) も同じく例外にしている。接続の
+  処理を移す段階 9 で、例外をどう扱うか決める。
 
 * `Servent::handshakeGET` などが `handshakeAuth` に渡す引数は `http.cmdLine` の中を指していて、
   `handshakeAuth` の中の `readHeaders` で書き換えられる。このため `/html/`、`/cmd?`、`/cgi-bin/` の
@@ -71,5 +72,11 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
 * 段階 8a: JSON-RPC の要求に `1e400` のような `double` に収まらない数があると、nlohmann の
   `out_of_range` を捕まえず (`parse_error` だけを捕まえている)、応答を返さずに接続を切る。Rust 版は
   Parse error を返す。
+* 段階 8c: `FileSystemMapper::toLocalFilePath` のディレクトリトラバーサルの確認は、解決したパスの
+  先頭が文書のディレクトリと一致するかだけを見る。このため、名前の先頭が同じ隣のディレクトリ
+  (`.../public` に対する `.../public2`) の中のファイルを、`/public` の下のシンボリックリンクなどから
+  返してしまう。Rust 版は、続きがパスの区切りであることも確かめる。
+* 段階 8b: `/api/1` の Content-Length が `int` に収まらないと、`atoi` の切り詰めで負の数になり 411 を
+  返す (値によっては正の数になり、違う長さを読む)。Rust 版は端の値にするので 413。
 * 全体: `char` の符号や `double` から `int` への変換など、CPU によって結果が変わる箇所
   (Rust 版は CPU によらず x86 と同じ結果にしている)。

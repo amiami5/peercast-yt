@@ -4,6 +4,7 @@
 // C++ 版は、外から呼べるものは Rust を使わずにビルドしたコア一式 (cxxcore.a) の関数 (nextCGIarg、
 // Servent::hasValidAuthToken、Servent::fileNameToMimeType、ServMgr::isValidHtmlPath、stristr など)、
 // Servent のメソッドの途中にあるものは、servhs.cpp の元のコードをこのファイルにそのまま写したもの。
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -117,6 +118,14 @@ static std::string queryGet(const std::string& queryString, const std::string& k
     return it->second[0];
 }
 
+
+// atoi は、範囲を超える数を Rust 版は段階 3a と同じく int の端に丸める (C++ 版は未定義の動作で、x86-64
+// では下位 32 ビットになる)。写したものも丸めて比べる。
+static int clampAtoi(const char* s)
+{
+    long v = strtol(s, nullptr, 10);
+    return v > INT_MAX ? INT_MAX : v < INT_MIN ? INT_MIN : (int) v;
+}
 
 static bool isRequest(const char* cmdLine, const char* rq) { return strncmp(cmdLine, rq, strlen(rq)) == 0; }
 
@@ -318,10 +327,10 @@ static std::string cxx_apply(const char* cmd)
     {
         if (strcmp(curr, "servername") == 0) op(PCRS_APPLY_SERVER_NAME, 0, unesc(arg));
         else if (strcmp(curr, "serveractive") == 0) op(PCRS_APPLY_SERVER_ACTIVE, strcmp(arg, "1") == 0, "");
-        else if (strcmp(curr, "port") == 0) op(PCRS_APPLY_PORT, atoi(arg), "");
+        else if (strcmp(curr, "port") == 0) op(PCRS_APPLY_PORT, clampAtoi(arg), "");
         else if (strcmp(curr, "icymeta") == 0)
         {
-            int iv = atoi(arg);
+            int iv = clampAtoi(arg);
             if (iv < 0) iv = 0;
             else if (iv > 16384) iv = 16384;
             op(PCRS_APPLY_ICY_META, iv, "");
@@ -329,7 +338,7 @@ static std::string cxx_apply(const char* cmd)
         else if (strcmp(curr, "root") == 0) op(PCRS_APPLY_ROOT, strcmp(arg, "1") == 0, "");
         else if (strcmp(curr, "brroot") == 0) op(PCRS_APPLY_BR_ROOT, strcmp(arg, "1") == 0, "");
         else if (strcmp(curr, "getupd") == 0) op(PCRS_APPLY_GET_UPD, strcmp(arg, "1") == 0, "");
-        else if (strcmp(curr, "huint") == 0) op(PCRS_APPLY_HU_INT, atoi(arg), "");
+        else if (strcmp(curr, "huint") == 0) op(PCRS_APPLY_HU_INT, clampAtoi(arg), "");
         else if (strcmp(curr, "forceip") == 0) op(PCRS_APPLY_FORCE_IP, 0, arg);
         else if (strcmp(curr, "htmlPath") == 0)
         {
@@ -337,12 +346,12 @@ static std::string cxx_apply(const char* cmd)
             op(PCRS_APPLY_HTML_PATH, ServMgr::isValidHtmlPath(newPath), newPath);
         }else if (strcmp(curr, "djmsg") == 0) op(PCRS_APPLY_DJ_MSG, 0, unesc(arg));
         else if (strcmp(curr, "pcmsg") == 0) op(PCRS_APPLY_PC_MSG, 0, unesc(arg));
-        else if (strcmp(curr, "maxcin") == 0) op(PCRS_APPLY_MAX_CIN, atoi(arg), "");
-        else if (strcmp(curr, "maxsin") == 0) op(PCRS_APPLY_MAX_SIN, atoi(arg), "");
-        else if (strcmp(curr, "maxup") == 0) op(PCRS_APPLY_MAX_UP, atoi(arg), "");
-        else if (strcmp(curr, "maxrelays") == 0) op(PCRS_APPLY_MAX_RELAYS, atoi(arg), "");
-        else if (strcmp(curr, "maxdirect") == 0) op(PCRS_APPLY_MAX_DIRECT, atoi(arg), "");
-        else if (strcmp(curr, "maxrelaypc") == 0) op(PCRS_APPLY_MAX_RELAY_PC, atoi(arg), "");
+        else if (strcmp(curr, "maxcin") == 0) op(PCRS_APPLY_MAX_CIN, clampAtoi(arg), "");
+        else if (strcmp(curr, "maxsin") == 0) op(PCRS_APPLY_MAX_SIN, clampAtoi(arg), "");
+        else if (strcmp(curr, "maxup") == 0) op(PCRS_APPLY_MAX_UP, clampAtoi(arg), "");
+        else if (strcmp(curr, "maxrelays") == 0) op(PCRS_APPLY_MAX_RELAYS, clampAtoi(arg), "");
+        else if (strcmp(curr, "maxdirect") == 0) op(PCRS_APPLY_MAX_DIRECT, clampAtoi(arg), "");
+        else if (strcmp(curr, "maxrelaypc") == 0) op(PCRS_APPLY_MAX_RELAY_PC, clampAtoi(arg), "");
         else if (strncmp(curr, "filt_", 5) == 0)
         {
             char *fs = curr+5;
@@ -358,8 +367,8 @@ static std::string cxx_apply(const char* cmd)
         }
         else if (strcmp(curr, "clientactive") == 0) op(PCRS_APPLY_CLIENT_ACTIVE, strcmp(arg, "1") == 0, "");
         else if (strcmp(curr, "yp") == 0) op(PCRS_APPLY_YP, 0, unesc(arg));
-        else if (strcmp(curr, "deadhitage") == 0) op(PCRS_APPLY_DEAD_HIT_AGE, atoi(arg), "");
-        else if (strcmp(curr, "refresh") == 0) op(PCRS_APPLY_REFRESH, atoi(arg), "");
+        else if (strcmp(curr, "deadhitage") == 0) op(PCRS_APPLY_DEAD_HIT_AGE, clampAtoi(arg), "");
+        else if (strcmp(curr, "refresh") == 0) op(PCRS_APPLY_REFRESH, clampAtoi(arg), "");
         else if (strcmp(curr, "chat") == 0) op(PCRS_APPLY_CHAT, strcmp(arg, "1") == 0, "");
         else if (strcmp(curr, "randomizechid") == 0) op(PCRS_APPLY_RANDOMIZE_CHID, strcmp(arg, "1") == 0, "");
         else if (strcmp(curr, "public_directory") == 0) op(PCRS_APPLY_PUBLIC_DIRECTORY, 1, "");
@@ -372,11 +381,11 @@ static std::string cxx_apply(const char* cmd)
             if (strcmp(arg, "session") == 0) op(PCRS_APPLY_EXPIRE, 0, "");
             else if (strcmp(arg, "never") == 0) op(PCRS_APPLY_EXPIRE, 1, "");
         }
-        else if (strcmp(curr, "logLevel") == 0) op(PCRS_APPLY_LOG_LEVEL, atoi(arg), "");
-        else if (strcmp(curr, "allowHTML1") == 0) op(PCRS_APPLY_ALLOW_HTML, atoi(arg) ? 1 : 0, "");
-        else if (strcmp(curr, "allowNetwork1") == 0) op(PCRS_APPLY_ALLOW_NETWORK, atoi(arg) ? 1 : 0, "");
-        else if (strcmp(curr, "allowBroadcast1") == 0) op(PCRS_APPLY_ALLOW_BROADCAST, atoi(arg) ? 1 : 0, "");
-        else if (strcmp(curr, "allowDirect1") == 0) op(PCRS_APPLY_ALLOW_DIRECT, atoi(arg) ? 1 : 0, "");
+        else if (strcmp(curr, "logLevel") == 0) op(PCRS_APPLY_LOG_LEVEL, clampAtoi(arg), "");
+        else if (strcmp(curr, "allowHTML1") == 0) op(PCRS_APPLY_ALLOW_HTML, clampAtoi(arg) ? 1 : 0, "");
+        else if (strcmp(curr, "allowNetwork1") == 0) op(PCRS_APPLY_ALLOW_NETWORK, clampAtoi(arg) ? 1 : 0, "");
+        else if (strcmp(curr, "allowBroadcast1") == 0) op(PCRS_APPLY_ALLOW_BROADCAST, clampAtoi(arg) ? 1 : 0, "");
+        else if (strcmp(curr, "allowDirect1") == 0) op(PCRS_APPLY_ALLOW_DIRECT, clampAtoi(arg) ? 1 : 0, "");
         else if (strcmp(curr, "transcoding_enabled") == 0) op(PCRS_APPLY_TRANSCODING, strcmp(arg, "1") == 0, "");
         else if (strcmp(curr, "preset") == 0) op(PCRS_APPLY_PRESET, 0, arg);
         else if (strcmp(curr, "audio_codec") == 0) op(PCRS_APPLY_AUDIO_CODEC, 0, arg);
@@ -566,7 +575,7 @@ static std::string cxx_jrpc_len(const std::string& lenstr)
 {
     int content_length = -1;
     if (!lenstr.empty())
-        content_length = atoi(lenstr.c_str());
+        content_length = clampAtoi(lenstr.c_str());
     if (content_length == -1) return "HTTP/1.0 411 Length required";
     if (content_length <= 0) return HTTP_SC_BADREQUEST;
     if (content_length > HTTP::MAX_REQUEST_BODY) return "HTTP/1.0 413 Request Entity Too Large";

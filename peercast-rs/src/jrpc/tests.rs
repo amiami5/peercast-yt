@@ -386,6 +386,59 @@ fn invoke_direct() {
     assert!(rpc(&mut m, "getChannelsFound", "[]").contains("Method not found"));
 }
 
+#[test]
+fn index_txt() {
+    let mut c = channel();
+    c.info.name = b"a b".to_vec();
+    c.uptime = 3661;
+    c.total_directs = 3;
+    let mut m = Mock { channels: vec![c], ..Default::default() };
+    let text = String::from_utf8(channel_index(&mut m, b"1.2.3.4:7144").unwrap()).unwrap();
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        "a b<>11111111111111111111111111111111<>1.2.3.4:7144<><><><>3<>0<>500<>FLV<><><><><>a+b<>01:01<>click<><>0"
+    );
+    // ほかのノードから教わったもの (ヒットがあるもの)
+    assert_eq!(lines.next().unwrap(), "<>00000000000000000000000000000000<><><><><>0<>0<>0<><><><><><><>00:00<>click<><>0");
+    assert!(lines.next().is_none());
+
+    // 書き出せない文字列があると、C++ 版と同じく例外
+    m.channels[0].info.content_type = b"\xff".to_vec();
+    assert_eq!(channel_index(&mut m, b"x").unwrap_err(), b"[json.exception.type_error.316] invalid UTF-8 byte at index 0: 0xFF");
+}
+
+/// 乱数の欄で index.txt を作ってもパニックしない
+#[test]
+fn fuzz_index_txt() {
+    let mut x: u32 = 9151;
+    let mut rnd = || {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        x
+    };
+    let mut m = Mock::default();
+    for _ in 0..20_000 {
+        m.channels = (0..rnd() % 4)
+            .map(|_| {
+                let mut c = channel();
+                let n = (rnd() % 8) as usize;
+                c.info.name = (0..n).map(|_| if rnd() % 3 == 0 { rnd() as u8 } else { b'a' + (rnd() % 26) as u8 }).collect();
+                c.uptime = rnd();
+                c.total_directs = rnd() as i32;
+                c.is_broadcasting = rnd() % 4 != 0;
+                c
+            })
+            .collect();
+        match channel_index(&mut m, b"1.2.3.4:7144") {
+            Ok(t) => assert!(t.ends_with(b"\n")),
+            Err(w) => assert!(w.starts_with(b"[json.exception.type_error.316]")),
+        }
+        m.logs.clear();
+    }
+}
+
 /// 変異させた要求でパニックしない
 #[test]
 fn fuzz_requests() {

@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+/// `atoi` (範囲を超える数は段階 3a と同じく `int` の端に丸める) と `stristr`
+pub use crate::http::{atoi, stristr};
 use crate::{cgi, channel, gnuid, pcstring, strutil};
 
 /// `MAX_CGI_LEN` (core/common/sys.h)
@@ -22,14 +24,6 @@ pub fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// `stristr` (core/common/sys.cpp)。ASCII の英字だけ大文字小文字を区別しない。needle が空なら
-/// 見つからない (`strstr` と違う)。
-pub fn stristr(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return None;
-    }
-    hay.windows(needle.len()).position(|w| w.eq_ignore_ascii_case(needle))
-}
 
 /// `cgi::Query` (core/common/cgi.cpp)
 #[derive(Clone, Debug, Default)]
@@ -342,34 +336,6 @@ pub fn cgi_args(cmd: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
     res
 }
 
-/// C の `atoi` (先頭の空白と符号を読み、`int` に収まらない値は、glibc の x86-64 と同じく `long` で
-/// 計算してから下位 32 ビットにする)
-pub fn atoi(s: &[u8]) -> i32 {
-    let mut i = 0;
-    while i < s.len() && matches!(s[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
-        i += 1;
-    }
-    let mut neg = false;
-    if i < s.len() && (s[i] == b'+' || s[i] == b'-') {
-        neg = s[i] == b'-';
-        i += 1;
-    }
-    // strtol は long に丸める (桁あふれは LONG_MAX / LONG_MIN)
-    let mut v: i64 = 0;
-    let mut overflow = false;
-    while i < s.len() && s[i].is_ascii_digit() {
-        let d = (s[i] - b'0') as i64;
-        match v.checked_mul(10).and_then(|x| if neg { x.checked_sub(d) } else { x.checked_add(d) }) {
-            Some(x) => v = x,
-            None => overflow = true,
-        }
-        i += 1;
-    }
-    if overflow {
-        v = if neg { i64::MIN } else { i64::MAX };
-    }
-    v as i32
-}
 
 /// `ServMgr::isValidHtmlPath`: `html/` の後ろが 1〜64 文字の英数字、`-`、`_`。
 pub fn is_valid_html_path(path: &[u8]) -> bool {

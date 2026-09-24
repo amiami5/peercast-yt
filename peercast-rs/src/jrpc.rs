@@ -1148,6 +1148,129 @@ fn get_channels_found(host: &mut dyn Host, _args: Vec<Value>) -> CallResult {
     Ok(Value::Array(host.channels_found()?.iter().map(found_json).collect()))
 }
 
+// ---------------------------------------------------------------- index.txt (public.cpp)
+
+/// `j[k1][k2]...` (const でない `operator[]`。ここでは必ずある欄だけを読む)
+fn at<'a>(v: &'a Value, keys: &[&str]) -> &'a Value {
+    keys.iter().fold(v, |v, k| match v {
+        Value::Object(o) => o.get(k.as_bytes()).unwrap_or(&Value::Null),
+        _ => &Value::Null,
+    })
+}
+
+fn call_what(e: CallError) -> Vec<u8> {
+    match e {
+        CallError::MethodNotFound(w) | CallError::InvalidParams(w) | CallError::Application(_, w) | CallError::Internal(w) => {
+            c_str(&w).to_vec()
+        }
+    }
+}
+
+/// `std::string s = j` と `to_string((int) j)` など (欄の型は決まっている)
+fn s_of(v: &Value) -> Result<Vec<u8>, Vec<u8>> {
+    v.as_string().map(|s| s.to_vec())
+}
+
+fn int_of(v: &Value) -> Result<Vec<u8>, Vec<u8>> {
+    Ok(v.as_int()?.to_string().into_bytes())
+}
+
+fn uptime_of(v: &Value) -> Result<Vec<u8>, Vec<u8>> {
+    Ok(crate::public::format_uptime(v.as_size()? as u32).into_bytes())
+}
+
+/// `PublicController::createChannelIndex`: このサーバーから配信しているチャンネルと、ほかのノードから
+/// 教わったチャンネルの index.txt。`tip` は `servMgr->serverHost.str()`。
+///
+/// C++ 版と同じく、`getChannels` などの結果を `LOG_DEBUG` に出すために書き出すので、不正な UTF-8 が
+/// あると `type_error` になる (`Err` に `what()` を返す)。
+pub fn channel_index(host: &mut dyn Host, tip: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+    let mut res = Vec::new();
+    let channels = match get_channels(host, Vec::new()).map_err(call_what)? {
+        Value::Array(a) => a,
+        _ => Vec::new(),
+    };
+    let channels: Vec<Value> =
+        channels.into_iter().filter(|c| matches!(at(c, &["status", "isBroadcasting"]), Value::Bool(true))).collect();
+
+    let dumped = json::dump(&Value::Array(channels.clone()))?;
+    host.log(Level::Debug, &dumped);
+    for c in &channels {
+        let name = s_of(at(c, &["info", "name"]))?;
+        let vec: Vec<Vec<u8>> = vec![
+            name.clone(),
+            s_of(at(c, &["channelId"]))?,
+            tip.to_vec(),
+            s_of(at(c, &["info", "url"]))?,
+            s_of(at(c, &["info", "genre"]))?,
+            s_of(at(c, &["info", "desc"]))?,
+            int_of(at(c, &["status", "totalDirects"]))?,
+            int_of(at(c, &["status", "totalRelays"]))?,
+            int_of(at(c, &["info", "bitrate"]))?,
+            s_of(at(c, &["info", "contentType"]))?,
+            s_of(at(c, &["track", "creator"]))?,
+            s_of(at(c, &["track", "album"]))?,
+            s_of(at(c, &["track", "name"]))?,
+            s_of(at(c, &["track", "url"]))?,
+            crate::cgi::escape(&name),
+            uptime_of(at(c, &["status", "uptime"]))?,
+            b"click".to_vec(),
+            s_of(at(c, &["info", "comment"]))?,
+            b"0".to_vec(), // getDirectPermission
+        ];
+        res.extend_from_slice(&strutil::join(b"<>", &vec));
+        res.push(b'\n');
+    }
+
+    let found = match get_channels_found(host, Vec::new()).map_err(call_what)? {
+        Value::Array(a) => a,
+        _ => Vec::new(),
+    };
+    let dumped = json::dump(&Value::Array(found.clone()))?;
+    host.log(Level::Debug, &dumped);
+    for c in &found {
+        let hits = at(c, &["hits"]);
+        if hits.size() == 0 {
+            let mut msg = b"createChannelIndex: skipping `".to_vec();
+            msg.extend_from_slice(c_str(&s_of(at(c, &["name"]))?));
+            msg.extend_from_slice(b"` because no hits");
+            host.log(Level::Debug, &msg);
+            continue;
+        }
+        let first = match hits {
+            Value::Array(a) => &a[0],
+            _ => &Value::Null,
+        };
+        let push = matches!(at(first, &["push"]), Value::Bool(true));
+        let tip = if push { Vec::new() } else { s_of(at(first, &["ip"]))? };
+        let name = s_of(at(c, &["name"]))?;
+        let vec: Vec<Vec<u8>> = vec![
+            name.clone(),
+            s_of(at(c, &["id"]))?,
+            tip,
+            s_of(at(c, &["url"]))?,
+            s_of(at(c, &["genre"]))?,
+            s_of(at(c, &["desc"]))?,
+            int_of(at(c, &["hit_stat", "listeners"]))?,
+            int_of(at(c, &["hit_stat", "relays"]))?,
+            int_of(at(c, &["bitrate"]))?,
+            s_of(at(c, &["type"]))?,
+            s_of(at(c, &["track", "creator"]))?,
+            s_of(at(c, &["track", "album"]))?,
+            s_of(at(c, &["track", "name"]))?,
+            s_of(at(c, &["track", "url"]))?,
+            crate::cgi::escape(&name),
+            uptime_of(at(c, &["uptime"]))?,
+            b"click".to_vec(),
+            s_of(at(c, &["comment"]))?,
+            int_of(at(first, &["direct"]))?,
+        ];
+        res.extend_from_slice(&strutil::join(b"<>", &vec));
+        res.push(b'\n');
+    }
+    Ok(res)
+}
+
 const KNOWN_KEYS: [&[u8]; 1] = [b"channelFilters"];
 
 fn get_server_storage_item(host: &mut dyn Host, args: Vec<Value>) -> CallResult {
