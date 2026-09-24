@@ -9,6 +9,7 @@
 #   make clean
 #
 # 必要なもの: cargo (Rust 1.70 以降)、OpenSSL、librtmp (WITH_RTMP=no なら不要)。
+# メモリが少ないときは JOBS=1 (1.5GiB 未満なら自動)。README.md の「ビルドにかかる時間とメモリ」を参照。
 # 変数はコマンドラインか Makefile.local で変えられる。
 
 WITH_RTMP ?= yes
@@ -38,6 +39,21 @@ pixmapdir = $(DESTDIR)$(PREFIX)/share/pixmaps
 
 -include Makefile.local
 
+# 並べてコンパイルするクレートの数。既定では cargo に任せる (CPU の数) が、メモリ (MemTotal) が
+# 1.5GiB 未満なら 1 つずつにする: 並べると合わせて 1GB を超えるが、1 つずつなら約 700MB で済む。
+ifeq ($(JOBS),)
+  MEM_KB := $(shell awk '/^MemTotal:/ { print $$2 }' /proc/meminfo 2>/dev/null)
+  ifneq ($(MEM_KB),)
+    ifeq ($(shell test $(MEM_KB) -lt 1572864 && echo low),low)
+      JOBS = 1
+      LOWMEM_NOTE = メモリが少ないので、クレートを 1 つずつコンパイルします (make JOBS=n で変えられます)。
+    endif
+  endif
+endif
+ifneq ($(JOBS),)
+  CARGO_JOBS = -j $(JOBS)
+endif
+
 .PHONY: all cargo-build install uninstall check dist appimage clean
 
 # 作り直すかどうかは cargo が決めるので、毎回呼ぶ。配布用のディレクトリは毎回作り直す
@@ -51,7 +67,9 @@ all: cargo-build
 
 cargo-build:
 	@command -v $(CARGO) >/dev/null 2>&1 || { echo "error: '$(CARGO)' not found. Install Rust (e.g. 'sudo apt install cargo')." >&2; exit 1; }
-	$(CARGO) build --release $(CARGO_FEATURES)
+	@echo "初めてのビルドは、機械によっては 20 分以上かかります。"
+	$(if $(LOWMEM_NOTE),@echo "$(LOWMEM_NOTE)")
+	$(CARGO) build --release $(CARGO_JOBS) $(CARGO_FEATURES)
 
 # install はビルドしない (sudo で cargo を動かさないため)。先に一般ユーザーで make しておく。
 install:
@@ -70,7 +88,7 @@ uninstall:
 	rm -f $(appdir)/peercast.desktop $(pixmapdir)/peercast.png
 
 check:
-	$(CARGO) test --release --workspace $(CARGO_FEATURES)
+	$(CARGO) test --release --workspace $(CARGO_JOBS) $(CARGO_FEATURES)
 
 dist: all
 	tar czf $(DISTARCHIVE) -C $(BUILD) peercast-yt

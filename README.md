@@ -49,14 +49,13 @@ OBS などから RTMP で配信を受け付ける `rtmp-server` を、C++ から
 
 **4. PeerCast 本体も Rust で書き直しました**
 
-C++ のコアを段階的に Rust ([`peercast-rs/`](peercast-rs/)) に移し、このブランチ (`develop-rs`) では
-C++ のコードをすべて取り除きました。ネットワークとのやりとりや設定ファイル、HTML の管理画面、
+C++ のコアを段階的に Rust ([`peercast-rs/`](peercast-rs/)) に移し、C++ のコードをすべて取り除きました。ネットワークとのやりとりや設定ファイル、HTML の管理画面、
 JSON-RPC などのふるまいは C++ 版と同じにしてあります (C++ 版と Rust 版に同じ要求を送って応答を
 比べて確かめました)。移行の記録は [`docs/rust-migration.md`](docs/rust-migration.md)、移行中に
 見つかった C++ 版の不具合は [`docs/cpp-known-issues.md`](docs/cpp-known-issues.md) にあります。
 
-このブランチは Linux 用です。Windows 版 (GUI) と macOS 版は C++ で書かれていたので、ここにはありません。
-C++ 版のコードは `develop-old` ブランチにあります。
+Linux 用です。Windows 版 (GUI) と macOS 版は C++ で書かれていたので、Rust 版にはありません。
+C++ 版のコードは `develop-old` ブランチに残しています。
 
 個々の変更は `git log` で確認できます。ライセンスは本家と同じ GPL です。
 
@@ -99,11 +98,12 @@ HTML も作ります (これも Rust の小さなツール `tools/ui-gen`)。
 Ubuntu / Debian なら、次の 1 行で揃います。
 
 ```sh
-sudo apt install cargo pkg-config libssl-dev librtmp-dev
+sudo apt install git make cargo pkg-config libssl-dev librtmp-dev
 ```
 
 | パッケージ | 何に使うか | 備考 |
 |---|---|---|
+| `git` `make` | ソースの取得とビルド | 最小構成の OS (Raspberry Pi OS Lite など) では入っていないことがある |
 | `cargo` | Rust のコンパイラとビルド | Rust 1.70 以降 (1.70、1.75、1.85 で確認)。`rustup` で入れてもよい |
 | `pkg-config` `libssl-dev` | TLS (OpenSSL) | |
 | `librtmp-dev` | RTMP fetch (他サーバーからの取得) | 不要なら `make WITH_RTMP=no` |
@@ -131,6 +131,27 @@ sudo make install
 * ほかに `make dist` (tar.gz)、`make appimage`、`make clean` があります。変数は `Makefile.local` に
   書いておくこともできます。
 * Rust のコードだけなら `cargo build --release` でもビルドできます (出力は `build/target/release/`)。
+
+### ビルドにかかる時間とメモリ
+
+* 機械によっては**ビルドに 20 分以上かかります** (Raspberry Pi 3 で約 18 分)。止まったように見えても、
+  `rustc` が動いているうちは待ってください。2 回目からは変更したところだけビルドし直します。
+* ビルドには**メモリが 1GB ほど**要ります。いちばん大きい `peercast-rs` をコンパイルする rustc が
+  1 つで約 700MB 使い、既定では他のクレートと並べてコンパイルするためです。
+* `make` はメモリ (`/proc/meminfo` の MemTotal) が 1.5GB 未満なら、クレートを 1 つずつコンパイルします
+  (`cargo build -j 1`)。これで最大使用量は約 700MB に下がります。手で決めるときは `make JOBS=1`
+  (1 つずつ) や `make JOBS=4` のようにします。
+* メモリが 1GB 以下の機械 (Raspberry Pi 3、小さな VPS など) では、それでも足りないことがあるので、
+  スワップを 1GB 以上用意してください。スワップがないと、メモリ不足でビルドが止まることがあります。
+  Raspberry Pi OS なら `/etc/dphys-swapfile` の `CONF_SWAPSIZE=1024`、ほかの Linux なら例えば:
+
+  ```sh
+  sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile
+  sudo mkswap /swapfile && sudo swapon /swapfile   # ビルドが終わったら sudo swapoff /swapfile
+  ```
+
+* メモリの少ない機械でビルドせず、別の機械でビルドした `make dist` の tar.gz を持ってくることもできます
+  (同じ CPU の種類 (aarch64、x86_64 など) で、OpenSSL などのライブラリの版がそろっていること)。
 
 ## 3. テスト (任意)
 
