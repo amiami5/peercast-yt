@@ -28,6 +28,7 @@ ui/*/tests/test-all.exe
 ui/**/Makefile.local
 *.zip
 *.exe
+CLAUDE.md
 
 # CMake build dir
 build/
