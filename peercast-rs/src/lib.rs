@@ -43,4 +43,5 @@ pub mod template;
 pub mod uptest;
 pub mod url;
 pub mod utf8;
+pub mod version;
 pub mod xml;

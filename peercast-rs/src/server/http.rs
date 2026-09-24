@@ -10,8 +10,7 @@ use super::stream::{Stream, StreamExt};
 use super::sys;
 use crate::strutil;
 
-pub const PCX_AGENT: &str = "PeerCast/0.1218 (YT50-rs2)";
-pub const PCX_VERSTRING: &str = "v0.1218 YT50-rs2";
+pub use crate::version::{PCX_AGENT, PCX_VERSTRING};
 
 pub const HTTP_SC_OK: &str = "HTTP/1.0 200 OK";
 pub const HTTP_SC_NOTFOUND: &str = "HTTP/1.0 404 Not Found";
