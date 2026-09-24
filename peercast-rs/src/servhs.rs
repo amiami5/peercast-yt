@@ -457,6 +457,7 @@ pub enum ApplyKey {
     AudioCodec = 41,
     PreferredTheme = 42,
     AccentColor = 43,
+    MaxTranscodes = 44, // 数 (Rust 版で足した。負の数は 0)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -541,6 +542,7 @@ pub fn apply_ops(cmd: &[u8]) -> Vec<ApplyOp> {
             b"transcoding_enabled" => op(Transcoding, b, Vec::new()),
             b"preset" => op(Preset, 0, arg.clone()),
             b"audio_codec" => op(AudioCodec, 0, arg.clone()),
+            b"max_transcodes" => op(MaxTranscodes, n.max(0), Vec::new()),
             b"preferredTheme" => op(PreferredTheme, 0, arg.clone()),
             b"accentColor" => op(AccentColor, 0, arg.clone()),
             _ => None,
@@ -733,9 +735,45 @@ pub fn flv_ffmpeg_args(query: &[u8], server_port: u16) -> Option<Vec<String>> {
     Some(args.to_vec())
 }
 
+/// flv.cgi が同時に動かす ffmpeg の数を数える。ffmpeg は 1 つで CPU を大きく使うので、トークンを
+/// 手に入れた人が (再生ページに出る) いくつも開いてマシンを止められないように、設定の
+/// `maxTranscodes` で上限を決める。
+#[derive(Debug, Default)]
+pub struct TranscodeLimiter {
+    running: std::sync::atomic::AtomicU32,
+}
+
+/// `TranscodeLimiter::acquire` で得た 1 つ分。捨てると数を戻す
+#[derive(Debug)]
+pub struct TranscodeSlot<'a>(&'a TranscodeLimiter);
+
+impl Drop for TranscodeSlot<'_> {
+    fn drop(&mut self) {
+        self.0.running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl TranscodeLimiter {
+    pub const fn new() -> TranscodeLimiter {
+        TranscodeLimiter { running: std::sync::atomic::AtomicU32::new(0) }
+    }
+
+    /// 動いている数が `max` 未満なら 1 つ増やして返す。`max` 以上なら `None`
+    pub fn acquire(&self, max: u32) -> Option<TranscodeSlot<'_>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.running.fetch_update(SeqCst, SeqCst, |n| if n < max { Some(n + 1) } else { None }).ok()?;
+        Some(TranscodeSlot(self))
+    }
+
+    pub fn running(&self) -> u32 {
+        self.running.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 /// flv.cgi の `auth` が `id` のチャンネルのトークン (`/stream/` の `?auth=` と同じもの) か。
-/// トークンは管理画面 (パスワードで守られている) のプレーヤーにだけ出るので、private でない
-/// ホストからでも、それを持っていれば使えるようにする。
+/// private でないホストからでも、それを持っていれば使えるようにする。トークンは管理画面の
+/// プレーヤーのほか、公開ディレクトリの再生ページ (パスワードなしで見られる) にも出るので、
+/// 秘密ではない。このため同時に動かす数を `TranscodeLimiter` で抑える。
 pub fn flv_valid_auth_token(request_filename: &[u8], broadcast_id: &[u8; 16]) -> bool {
     let q = match request_filename.iter().position(|&c| c == b'?') {
         Some(p) => &request_filename[p + 1..],

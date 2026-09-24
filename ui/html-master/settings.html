@@ -387,6 +387,14 @@
           </td>
         </tr>
 
+        <tr>
+          <th class="left-heading">{#Max. Transcodes}</th>
+          <td>
+            <input size="5" value="{$servMgr.maxTranscodes}" name="max_transcodes">
+            <br><small>{#How many MKV streams may be converted with ffmpeg for viewing in a browser at the same time. Each conversion uses a lot of CPU. Viewers on this PC (localhost) are not counted. 0 means other PCs cannot view converted streams.}</small>
+          </td>
+        </tr>
+
       </table>
     </div>
   </div><!-- .flex-container -->

@@ -140,6 +140,8 @@ pub struct ServSettings {
     pub transcoding_enabled: bool,
     pub preset: Vec<u8>,
     pub audio_codec: Vec<u8>,
+    /// flv.cgi (トランスコード) を localhost 以外から同時に使える数 (Rust 版で足した)
+    pub max_transcodes: u32,
     pub rtmp_port: u16,
     pub default_channel_info: ChanInfo,
     pub chat: bool,
@@ -219,6 +221,7 @@ impl ServMgr {
                 transcoding_enabled: false,
                 preset: b"veryfast".to_vec(),
                 audio_codec: b"mp3".to_vec(),
+                max_transcodes: 2,
                 rtmp_port: 1935,
                 default_channel_info: ChanInfo::new(),
                 chat: true,
@@ -928,6 +931,7 @@ impl ServMgr {
                 .key("transcodingEnabled", s.transcoding_enabled)
                 .key("preset", &s.preset[..])
                 .key("audioCodec", &s.audio_codec[..])
+                .key("maxTranscodes", s.max_transcodes)
                 .key("preferredTheme", &s.preferred_theme[..])
                 .key("accentColor", &s.accent_color[..]),
         );
@@ -1219,6 +1223,8 @@ impl ServMgr {
             set!(|s: &mut ServSettings| s.preset = v.clone());
         } else if is("audioCodec") {
             set!(|s: &mut ServSettings| s.audio_codec = v.clone());
+        } else if is("maxTranscodes") {
+            set!(|s: &mut ServSettings| s.max_transcodes = iv.max(0) as u32);
         } else if is("preferredTheme") {
             set!(|s: &mut ServSettings| s.preferred_theme = v.clone());
         } else if is("accentColor") {
@@ -1516,6 +1522,7 @@ impl ServMgr {
             ("transcodingEnabled", flag(s.transcoding_enabled)),
             ("preset", super::state::s(&s.preset)),
             ("audioCodec", super::state::s(&s.audio_codec)),
+            ("maxTranscodes", ts(s.max_transcodes)),
             ("defaultChannelInfo", s.default_channel_info.state()),
             ("rtmpServerMonitor", self.rtmp_monitor.state()),
             ("rtmpPort", ts(s.rtmp_port as u32)),

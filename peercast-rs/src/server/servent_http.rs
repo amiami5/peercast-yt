@@ -782,17 +782,39 @@ fn handshake_bbs(http: &mut Http) -> Result<()> {
     }
 }
 
+/// flv.cgi が動かしている ffmpeg の数 (localhost からのものは数えない)
+static TRANSCODES: servhs::TranscodeLimiter = servhs::TranscodeLimiter::new();
+
 /// `/cgi-bin/flv.cgi`: チャンネルのストリームを ffmpeg で FLV (H.264) にして送る。接続が切れたら
-/// ffmpeg を止める
+/// ffmpeg を止める。設定のトランスコードが無効なら断る (C++ 版は設定を見ずに動かしていた)。
+/// localhost 以外からは、同時に動かす数を設定の `maxTranscodes` までにする。
 fn handshake_flv(ctx: &Ctx, http: &mut Http) -> Result<()> {
     let req = http.get_request().map_err(|_| http_error(HTTP_SC_BADREQUEST, 400))?;
     if req.path != b"/cgi-bin/flv.cgi" {
         return Err(http_error(HTTP_SC_NOTFOUND, 404));
     }
-    let port = ctx.pc.servmgr.settings().server_host.port;
+    let (enabled, max, port) = {
+        let s = ctx.pc.servmgr.settings();
+        (s.transcoding_enabled, s.max_transcodes, s.server_host.port)
+    };
+    if !enabled {
+        crate::log_warn!("flv.cgi: transcoding is disabled");
+        return Err(http_error(HTTP_SC_FORBIDDEN, 403));
+    }
     let args = match servhs::flv_ffmpeg_args(&req.query_string, port) {
         Some(a) => a,
         None => return Err(http_error(HTTP_SC_BADREQUEST, 400)),
+    };
+    let _slot = if is_localhost(&ctx.host()) {
+        None
+    } else {
+        match TRANSCODES.acquire(max) {
+            Some(slot) => Some(slot),
+            None => {
+                crate::log_warn!("flv.cgi: too many transcodes ({} running, max {})", TRANSCODES.running(), max);
+                return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
+            }
+        }
     };
     let mut child = match std::process::Command::new("ffmpeg")
         .args(&args)
@@ -1378,6 +1400,7 @@ fn cmd_apply(ctx: &Ctx, http: &mut Http, query: &[u8], jump: &mut Vec<u8>) -> Re
             K::Transcoding => sm.settings().transcoding_enabled = v != 0,
             K::Preset => sm.settings().preset = op.str.clone(),
             K::AudioCodec => sm.settings().audio_codec = op.str.clone(),
+            K::MaxTranscodes => sm.settings().max_transcodes = v as u32,
             K::PreferredTheme => sm.settings().preferred_theme = op.str.clone(),
             K::AccentColor => sm.settings().accent_color = op.str.clone(),
         }

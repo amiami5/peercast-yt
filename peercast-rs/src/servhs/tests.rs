@@ -171,6 +171,29 @@ fn apply() {
     assert_eq!(ops[3].int, 0);
     assert_eq!(ops[6].int, 1);
     assert_eq!(ops[7].int, 1);
+
+    let ops = apply_ops(b"max_transcodes=3&max_transcodes=-1");
+    assert_eq!(ops.iter().map(|o| (o.key, o.int)).collect::<Vec<_>>(), vec![(ApplyKey::MaxTranscodes, 3), (ApplyKey::MaxTranscodes, 0)]);
+}
+
+#[test]
+fn transcode_limiter() {
+    let l = TranscodeLimiter::new();
+    let a = l.acquire(2).unwrap();
+    let b = l.acquire(2).unwrap();
+    assert!(l.acquire(2).is_none());
+    assert_eq!(l.running(), 2);
+    // 上限を増やせば (設定を変えれば) すぐに使える
+    let c = l.acquire(3).unwrap();
+    drop(a);
+    assert_eq!(l.running(), 2);
+    assert!(l.acquire(2).is_none());
+    drop((b, c));
+    assert_eq!(l.running(), 0);
+    assert!(l.acquire(1).is_some());
+    // 0 なら使えない。使えなかったときは数が増えない
+    assert!(l.acquire(0).is_none());
+    assert_eq!(l.running(), 0);
 }
 
 #[test]

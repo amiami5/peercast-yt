@@ -289,6 +289,8 @@
     "x264 Preset"             : "x264プリセット",
     "Audio Codec"             : "オーディオ・コーデック",
     "AAC (Experimental)"      : "AAC (実験的)",
+    "Max. Transcodes"         : "同時トランスコード数上限",
+    "How many MKV streams may be converted with ffmpeg for viewing in a browser at the same time. Each conversion uses a lot of CPU. Viewers on this PC (localhost) are not counted. 0 means other PCs cannot view converted streams." : "MKV のチャンネルをブラウザーで見られるように、ffmpeg で変換して送る数の上限です。変換は 1 つで CPU を大きく使います。このパソコン (localhost) から見る分は数えません。0 にすると、ほかのパソコンからは変換して見られません。",
 
     "Level"                   : "レベル",
     "TRACE"                   : "トレース",
