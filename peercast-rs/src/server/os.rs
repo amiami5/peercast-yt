@@ -48,6 +48,54 @@ mod imp {
         fn umask(mask: u32) -> u32;
         fn gethostname(name: *mut c_char, len: usize) -> c_int;
         fn tzset();
+        fn getuid() -> u32;
+    }
+
+    /// `struct passwd` (glibc と musl の Linux での並び。BSD や macOS は欄が違うので使わない)
+    #[cfg(target_os = "linux")]
+    #[repr(C)]
+    struct Passwd {
+        pw_name: *mut c_char,
+        pw_passwd: *mut c_char,
+        pw_uid: u32,
+        pw_gid: u32,
+        pw_gecos: *mut c_char,
+        pw_dir: *mut c_char,
+        pw_shell: *mut c_char,
+    }
+
+    #[cfg(target_os = "linux")]
+    extern "C" {
+        fn getpwuid_r(uid: u32, pwd: *mut Passwd, buf: *mut c_char, buflen: usize, result: *mut *mut Passwd) -> c_int;
+    }
+
+    /// `getpwuid(getuid())->pw_dir`: パスワードのデータベースにある自分のホームディレクトリ
+    #[cfg(target_os = "linux")]
+    pub fn home_dir_of_user() -> Option<Vec<u8>> {
+        let mut pwd = Passwd {
+            pw_name: std::ptr::null_mut(),
+            pw_passwd: std::ptr::null_mut(),
+            pw_uid: 0,
+            pw_gid: 0,
+            pw_gecos: std::ptr::null_mut(),
+            pw_dir: std::ptr::null_mut(),
+            pw_shell: std::ptr::null_mut(),
+        };
+        let mut buf = vec![0 as c_char; 16384];
+        let mut result: *mut Passwd = std::ptr::null_mut();
+        // SAFETY: pwd と buf はこの関数の中で生きていて、buf の大きさを渡す。結果の文字列は buf の中を指す。
+        let r = unsafe { getpwuid_r(getuid(), &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result) };
+        if r != 0 || result.is_null() || pwd.pw_dir.is_null() {
+            return None;
+        }
+        // SAFETY: pw_dir は buf の中の NUL で終わる文字列
+        let dir = unsafe { std::ffi::CStr::from_ptr(pwd.pw_dir) };
+        Some(dir.to_bytes().to_vec())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn home_dir_of_user() -> Option<Vec<u8>> {
+        None
     }
 
     pub fn localtime(t: i64) -> Option<Tm> {
@@ -246,6 +294,9 @@ mod imp {
     pub fn set_umask(_mask: u32) {}
     pub fn hostname() -> Option<Vec<u8>> {
         std::env::var("COMPUTERNAME").ok().map(|s| s.into_bytes())
+    }
+    pub fn home_dir_of_user() -> Option<Vec<u8>> {
+        None
     }
     #[allow(dead_code)]
     fn _unused(_: c_long, _: *const c_char) {}

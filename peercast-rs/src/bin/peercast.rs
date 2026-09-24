@@ -71,7 +71,8 @@ fn mkdir_p(dir: &[u8]) -> bool {
 fn xdg_dir(var: &str, fallback: &str) -> Vec<u8> {
     let mut dir = match env(var) {
         Some(d) => d,
-        None => [&env("HOME").unwrap_or_default()[..], fallback.as_bytes()].concat(),
+        // HOME がなければ、C++ 版と同じくパスワードのデータベースから引く
+        None => [&env("HOME").or_else(os::home_dir_of_user).unwrap_or_default()[..], fallback.as_bytes()].concat(),
     };
     dir.extend_from_slice(b"/peercast");
     if dir.first() == Some(&b'/') {
