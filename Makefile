@@ -38,36 +38,29 @@ pixmapdir = $(DESTDIR)$(PREFIX)/share/pixmaps
 
 -include Makefile.local
 
-.PHONY: all cargo-build ui-build FORCE install uninstall check dist appimage clean
+.PHONY: all cargo-build ui-build install uninstall check dist appimage clean
 
-all: $(DISTDIR)
-
-# 作り直すかどうかは cargo と ui/Makefile が決めるので、毎回呼ぶ
-cargo-build: FORCE
-	@command -v $(CARGO) >/dev/null 2>&1 || { echo "error: '$(CARGO)' not found. Install Rust (e.g. 'sudo apt install cargo')." >&2; exit 1; }
-	$(CARGO) build --release $(CARGO_FEATURES)
-
-$(TARGET_DIR)/peercast $(TARGET_DIR)/rtmp-server: cargo-build
-	@:
-
-ui-build: FORCE
-	$(MAKE) -C ui html.tar public.tar
-
-ui/html.tar ui/public.tar: ui-build
-	@:
-
-FORCE:
-
-# 配布用のディレクトリ: 実行ファイルと、html、public、assets、cgi-bin、ライセンス
-$(DISTDIR): $(TARGET_DIR)/peercast $(TARGET_DIR)/rtmp-server ui/html.tar ui/public.tar
+# 作り直すかどうかは cargo と ui/Makefile が決めるので、どちらも毎回呼ぶ。配布用のディレクトリは
+# 毎回作り直す (コピーだけなので速い)。
+all: cargo-build ui-build
 	rm -rf $(DISTDIR)
 	mkdir -p $(DISTDIR)
 	tar xf ui/html.tar -C $(DISTDIR)
 	tar xf ui/public.tar -C $(DISTDIR)
 	cp -R ui/assets ui/cgi-bin licenses LICENSE $(DISTDIR)/
+	rm -rf $(DISTDIR)/cgi-bin/__pycache__ $(DISTDIR)/cgi-bin/.gitignore
 	cp $(TARGET_DIR)/peercast $(TARGET_DIR)/rtmp-server $(DISTDIR)/
 
-install: $(DISTDIR)
+cargo-build:
+	@command -v $(CARGO) >/dev/null 2>&1 || { echo "error: '$(CARGO)' not found. Install Rust (e.g. 'sudo apt install cargo')." >&2; exit 1; }
+	$(CARGO) build --release $(CARGO_FEATURES)
+
+ui-build:
+	$(MAKE) -C ui html.tar public.tar
+
+# install はビルドしない (sudo で cargo を動かさないため)。先に一般ユーザーで make しておく。
+install:
+	@test -x $(DISTDIR)/peercast || { echo "error: $(DISTDIR) がありません。先に (sudo を付けずに) make してください。" >&2; exit 1; }
 	mkdir -p $(bindir) $(sharedir) $(docdir) $(appdir) $(pixmapdir)
 	install -m 755 $(DISTDIR)/peercast $(DISTDIR)/rtmp-server $(bindir)/
 	cp -R $(DISTDIR)/html $(DISTDIR)/public $(DISTDIR)/assets $(DISTDIR)/cgi-bin $(sharedir)/
@@ -81,21 +74,17 @@ uninstall:
 	rm -f $(appdir)/peercast.desktop $(pixmapdir)/peercast.png
 
 # bvt は作業用の写しで走らせる (bvt/peercast-yt は .gitignore で無視している)
-check: $(DISTDIR)
+check: all
 	$(CARGO) test --release $(CARGO_FEATURES)
 	rm -rf bvt/peercast-yt
 	cp -R $(DISTDIR) bvt/peercast-yt
 	cd bvt && ruby -W0 test-all.rb
 	rm -rf bvt/peercast-yt
 
-dist: $(DISTARCHIVE)
+dist: all
+	tar czf $(DISTARCHIVE) -C $(BUILD) peercast-yt
 
-$(DISTARCHIVE): $(DISTDIR)
-	tar czf $@ -C $(BUILD) peercast-yt
-
-appimage: $(APPIMAGE)
-
-$(APPIMAGE): $(DISTDIR) $(APPIMAGETOOL) $(LINUXDEPLOY) ui/linux/peercast.desktop ui/linux/peercast.png
+appimage: all $(APPIMAGETOOL) $(LINUXDEPLOY)
 	rm -rf $(BUILD)/AppDir
 	$(MAKE) install PREFIX=/usr DESTDIR=$(abspath $(BUILD)/AppDir)
 	cd $(BUILD) && ./$(notdir $(LINUXDEPLOY)) --appdir=AppDir -e AppDir/usr/bin/peercast --deploy-deps-only=AppDir/usr/bin/rtmp-server \
