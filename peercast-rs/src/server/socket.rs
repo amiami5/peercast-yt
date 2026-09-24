@@ -9,8 +9,9 @@
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::any::Any;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::error::{strerror, Error, Result};
 use super::host::{Host, Ip};
@@ -60,6 +61,10 @@ pub struct ClientSocket {
     closer: Closer,
     /// TLS で接続するときの、検証するホスト名 (`SslClientSocket::setHostname`)
     tls_host: Option<Vec<u8>>,
+    /// 要求を読み終えるまでの期限 (Slowloris よけ)。Rust 版で足した
+    deadline: Option<Instant>,
+    /// 要求を読んでいる間だけ持っておくもの (IP アドレスごとの数の札)
+    handshake_slot: Option<Box<dyn Any + Send>>,
 }
 
 impl Default for ClientSocket {
@@ -72,6 +77,8 @@ impl Default for ClientSocket {
             stat: Arc::new(Stat::default()),
             closer: Closer::default(),
             tls_host: None,
+            deadline: None,
+            handshake_slot: None,
         }
     }
 }
@@ -163,6 +170,41 @@ impl ClientSocket {
         self.read_timeout
     }
 
+    /// 要求を読み終えるまでの期限を、今から `ms` ミリ秒にする (0 なら期限なし)。1 文字ずつ送って
+    /// 読むたびの待ち時間を延ばされても、この期限で切れる。`slot` は期限を外すときに捨てる。
+    /// 最初に書いたとき (返事を始めたとき) か `end_handshake` で外す。
+    pub fn begin_handshake(&mut self, ms: u32, slot: Option<Box<dyn Any + Send>>) {
+        self.deadline = (ms != 0).then(|| Instant::now() + Duration::from_millis(ms as u64));
+        self.handshake_slot = slot;
+    }
+
+    /// 要求を読み終えるまでの期限を外す
+    pub fn end_handshake(&mut self) {
+        self.handshake_slot = None;
+        if self.deadline.take().is_some() {
+            if let Some(c) = &self.conn {
+                let _ = c.tcp().set_read_timeout(dur(self.read_timeout));
+            }
+        }
+    }
+
+    /// 期限があれば、読む待ち時間を期限までの残りに縮める。過ぎていれば `TimeoutException`
+    fn apply_deadline(&self) -> Result<()> {
+        let d = match self.deadline {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        let rest = d.saturating_duration_since(Instant::now()).as_millis().min(u32::MAX as u128) as u32;
+        if rest == 0 {
+            return Err(Error::new(super::error::Kind::Timeout, "Handshake timeout"));
+        }
+        let ms = if self.read_timeout == 0 { rest } else { rest.min(self.read_timeout) };
+        if let Some(c) = &self.conn {
+            let _ = c.tcp().set_read_timeout(dur(ms));
+        }
+        Ok(())
+    }
+
     pub fn is_tls(&self) -> bool {
         #[cfg(unix)]
         {
@@ -191,6 +233,7 @@ impl ClientSocket {
 
     /// `peekChar`: 1 バイト先を見る (読まない)
     pub fn peek_char(&mut self) -> Result<u8> {
+        self.apply_deadline()?;
         let c = self.conn.as_ref().ok_or_else(|| Error::stream("recv MSG_PEEK failed. ret = -1"))?;
         let mut b = [0u8; 1];
         match c.tcp().peek(&mut b) {
@@ -204,6 +247,8 @@ impl ClientSocket {
     #[cfg(unix)]
     pub fn upgrade_tls(mut self) -> Result<ClientSocket> {
         use std::os::unix::io::AsRawFd;
+        // TLS のハンドシェイクも、読むたびの待ち時間を期限までの残りにする
+        self.apply_deadline()?;
         let s = match self.conn.take() {
             Some(Conn::Tcp(s)) => s,
             _ => return Err(Error::stream("upgrade: not a TCP socket")),
@@ -233,6 +278,7 @@ impl ClientSocket {
 
     /// 1 回読む。相手が閉じたら 0
     fn read_once(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.apply_deadline()?;
         let c = self.conn.as_mut().ok_or_else(|| Error::sock("Closed on read"))?;
         match c {
             Conn::Tcp(s) => loop {
@@ -298,6 +344,10 @@ impl Stream for ClientSocket {
             #[cfg(unix)]
             Conn::Tls(_, t) => t.write(data)?,
         }
+        // 返事を始めたので、要求を読み終えるまでの期限は外す
+        if self.deadline.is_some() || self.handshake_slot.is_some() {
+            self.end_handshake();
+        }
         self.count_out(data.len());
         Ok(())
     }
@@ -330,6 +380,11 @@ impl Stream for ClientSocket {
 
     /// `readReady`: `ms` ミリ秒以内に読めるようになるか (相手が閉じたときも真)
     fn read_ready(&mut self, ms: u32) -> bool {
+        let ms = match self.deadline {
+            // 要求を読み終えるまでの期限より長くは待たない
+            Some(d) if ms != 0 => (d.saturating_duration_since(Instant::now()).as_millis().min(u32::MAX as u128) as u32).clamp(1, ms),
+            _ => ms,
+        };
         let c = match &self.conn {
             Some(c) => c,
             None => return false,

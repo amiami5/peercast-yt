@@ -278,6 +278,20 @@
           <th class="left-heading">{#Max. Connections In} </th>
           <td><input name="maxsin" id="maxsin" value="{$servMgr.maxServIn}" size="5"></td>
         </tr>
+        <tr>
+          <th class="left-heading">{#Request Timeout}</th>
+          <td>
+            <input size="5" value="{$servMgr.handshakeTimeout}" name="handshake_timeout">
+            <br><small>{#Seconds allowed from connecting until the request has been fully received. Slow clients that take longer are disconnected. 0 turns the limit off.}</small>
+          </td>
+        </tr>
+        <tr>
+          <th class="left-heading">{#Max. Unfinished Requests Per IP}</th>
+          <td>
+            <input size="5" value="{$servMgr.maxHandshakesPerIP}" name="max_handshakes_per_ip">
+            <br><small>{#How many connections from the same IP address may still be sending their request at once. 0 means no limit. This PC (localhost) is not counted, and can connect even when the connections are full.}</small>
+          </td>
+        </tr>
       </table>
 
       <table class="table-panel" width="100%" align="center" border="0">

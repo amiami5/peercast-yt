@@ -194,6 +194,12 @@ fn apply() {
         ops.iter().map(|o| (o.key, o.int)).collect::<Vec<_>>(),
         vec![(ApplyKey::AuthFailLimit, 5), (ApplyKey::AuthFailLimit, 0), (ApplyKey::AuthLockSeconds, 60)]
     );
+
+    let ops = apply_ops(b"handshake_timeout=15&handshake_timeout=-1&max_handshakes_per_ip=8");
+    assert_eq!(
+        ops.iter().map(|o| (o.key, o.int)).collect::<Vec<_>>(),
+        vec![(ApplyKey::HandshakeTimeout, 15), (ApplyKey::HandshakeTimeout, 0), (ApplyKey::MaxHandshakesPerIp, 8)]
+    );
 }
 
 #[test]
@@ -246,6 +252,28 @@ fn auth_throttle() {
         assert_eq!(t.failed(ip, 0, 0, 60), None);
     }
     assert_eq!(t.locked(ip, 0, 0), None);
+}
+
+#[test]
+fn handshake_counter() {
+    static C: HandshakeCounter = HandshakeCounter::new();
+    let a = C.acquire(b"1.2.3.4", 2).unwrap();
+    let b = C.acquire(b"1.2.3.4", 2).unwrap();
+    assert!(C.acquire(b"1.2.3.4", 2).is_none());
+    // ほかの IP アドレスは別に数える
+    let other = C.acquire(b"5.6.7.8", 2).unwrap();
+    assert_eq!(C.count(b"1.2.3.4"), 2);
+    drop(a);
+    assert_eq!(C.count(b"1.2.3.4"), 1);
+    let c = C.acquire(b"1.2.3.4", 2).unwrap();
+    drop((b, c, other));
+    assert_eq!(C.count(b"1.2.3.4"), 0);
+    assert!(C.m.lock().unwrap().is_empty());
+    // 0 なら上限なし
+    let v: Vec<_> = (0..20).map(|_| C.acquire(b"1.2.3.4", 0).unwrap()).collect();
+    assert_eq!(C.count(b"1.2.3.4"), 20);
+    drop(v);
+    assert_eq!(C.count(b"1.2.3.4"), 0);
 }
 
 #[test]

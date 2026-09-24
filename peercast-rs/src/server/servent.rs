@@ -1089,6 +1089,9 @@ fn incoming_proc(c: &mut Conn) {
     }
 }
 
+/// IP アドレスごとの、要求を読み終えていない接続の数
+static HANDSHAKES: crate::servhs::HandshakeCounter = crate::servhs::HandshakeCounter::new();
+
 /// `serverProc`: 接続を受け付けてサーバントに渡す
 fn server_proc(pc: &Arc<Peercast>, sv: &Arc<Servent>, listener: ServerSocket) {
     let port = listener.host.port;
@@ -1099,18 +1102,38 @@ fn server_proc(pc: &Arc<Peercast>, sv: &Arc<Servent>, listener: ServerSocket) {
         crate::log_info!("Server started on port {}", port);
     }
     while sv.thread.active() {
-        // 接続数が上限なら、受け付けずに待つ
-        if pc.servmgr.num_active_on_port(port as i32) >= pc.servmgr.settings().max_serv_in {
-            sys::sleep(100);
-            continue;
-        }
-        let cs = match listener.accept() {
+        let mut cs = match listener.accept() {
             Some(cs) => cs,
             None => {
                 listener.wait(100);
                 continue;
             }
         };
+        let (max_in, timeout, max_hs) = {
+            let s = pc.servmgr.settings();
+            (s.max_serv_in, s.handshake_timeout, s.max_handshakes_per_ip)
+        };
+        // 接続数が上限なら切る。ループバックからは、上限でも受け付ける (管理画面を開けるように)。
+        // C++ 版は上限のあいだ受け付けるのをやめていたので、ゆっくり送る接続で埋められると、
+        // 誰もつなげなくなっていた
+        let loopback = cs.host.loopback_ip();
+        if !loopback && pc.servmgr.num_active_on_port(port as i32) >= max_in {
+            crate::log_debug!("Server full, closing connection from {}", cs.host.str());
+            continue;
+        }
+        // 要求を読み終えていない接続は、IP アドレスごとに数を抑える (ループバックは数えない)
+        let slot = if loopback {
+            None
+        } else {
+            match HANDSHAKES.acquire(cs.host.ip.str().as_bytes(), max_hs) {
+                Some(s) => Some(Box::new(s) as Box<dyn std::any::Any + Send>),
+                None => {
+                    crate::log_debug!("Too many unfinished requests from {}", cs.host.ip.str());
+                    continue;
+                }
+            }
+        };
+        cs.begin_handshake(timeout.saturating_mul(1000), slot);
         crate::log_trace!("accepted incoming");
         let ns = pc.servmgr.alloc_servent();
         let (net, allow) = {

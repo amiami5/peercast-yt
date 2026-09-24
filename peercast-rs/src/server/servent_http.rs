@@ -439,6 +439,8 @@ fn handshake_jrpc(ctx: &Ctx, http: &mut Http) -> Result<()> {
 /// `handshakeGIV`
 fn handshake_giv(c: &mut Conn, line: &[u8]) -> Result<()> {
     Http::new(c.sock()?).read_headers()?;
+    // ソケットはこのあと中継に使うので、要求を読み終えるまでの期限は外す
+    c.sock()?.end_handshake();
     if !c.sv.is_allowed(c.pc, svt::ALLOW_NETWORK) || !c.sv.is_filtered(c.pc, sf::F_NETWORK) {
         return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
     }
@@ -525,6 +527,8 @@ fn handshake_http_push(c: &mut Conn, args: &[u8]) -> Result<()> {
         http.read_headers()?;
         http.headers.clone()
     };
+    // 返事を書かずに配信のデータを読み始めるので、要求を読み終えるまでの期限はここで外す
+    c.sock()?.end_handshake();
     if q.get(b"name").is_empty() {
         crate::log_error!("handshakeHTTPPush: name parameter is mandatory");
         return Err(http_error(HTTP_SC_BADREQUEST, 400));
@@ -1480,6 +1484,8 @@ fn cmd_apply(ctx: &Ctx, http: &mut Http, query: &[u8], jump: &mut Vec<u8>) -> Re
             K::MaxTranscodes => sm.settings().max_transcodes = v as u32,
             K::AuthFailLimit => sm.settings().auth_fail_limit = v as u32,
             K::AuthLockSeconds => sm.settings().auth_lock_seconds = v as u32,
+            K::HandshakeTimeout => sm.settings().handshake_timeout = v as u32,
+            K::MaxHandshakesPerIp => sm.settings().max_handshakes_per_ip = v as u32,
             K::PreferredTheme => sm.settings().preferred_theme = op.str.clone(),
             K::AccentColor => sm.settings().accent_color = op.str.clone(),
         }

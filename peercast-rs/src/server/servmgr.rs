@@ -103,6 +103,10 @@ pub struct ServSettings {
     pub max_relays: u32,
     pub max_direct: u32,
     pub max_serv_in: u32,
+    /// 接続を受け付けてから要求を読み終えるまでの期限 (秒。0 なら期限なし)。Rust 版で足した
+    pub handshake_timeout: u32,
+    /// 同じ IP アドレスからの、要求を読み終えていない接続の数の上限 (0 なら上限なし)。Rust 版で足した
+    pub max_handshakes_per_ip: u32,
     pub is_disabled: bool,
     pub server_host: Host,
     pub server_host_ipv6: Host,
@@ -189,6 +193,8 @@ impl ServMgr {
                 max_relays: MIN_RELAYS,
                 max_direct: 0,
                 max_serv_in: 50,
+                handshake_timeout: 15,
+                max_handshakes_per_ip: 8,
                 is_disabled: false,
                 server_host: Host::from_str_ip(b"127.0.0.1", DEFAULT_PORT),
                 server_host_ipv6: Host::new(Ip::parse(b"::1").unwrap_or_default(), DEFAULT_PORT),
@@ -910,6 +916,8 @@ impl ServMgr {
                 .key("cookiesExpire", if cookies_never { "never" } else { "session" })
                 .key("htmlPath", &s.html_path[..])
                 .key("maxServIn", s.max_serv_in)
+                .key("handshakeTimeout", s.handshake_timeout)
+                .key("maxHandshakesPerIP", s.max_handshakes_per_ip)
                 .key("chanLog", &s.chan_log.data[..])
                 .key("publicDirectory", s.public_directory_enabled)
                 .key("networkID", ci::id_str(&s.network_id)),
@@ -1185,6 +1193,10 @@ impl ServMgr {
             cm.settings().icy_meta_interval = iv;
         } else if is("maxServIn") {
             set!(|s: &mut ServSettings| s.max_serv_in = iv as u32);
+        } else if is("handshakeTimeout") {
+            set!(|s: &mut ServSettings| s.handshake_timeout = iv.max(0) as u32);
+        } else if is("maxHandshakesPerIP") {
+            set!(|s: &mut ServSettings| s.max_handshakes_per_ip = iv.max(0) as u32);
         } else if is("chanLog") {
             set!(|s: &mut ServSettings| s.chan_log.set(&v, StrType::Ascii));
         } else if is("publicDirectory") {
@@ -1499,6 +1511,8 @@ impl ServMgr {
             ("maxBitrateOut", ts(s.max_bitrate_out)),
             ("maxControlsIn", ts(s.max_control)),
             ("maxServIn", ts(s.max_serv_in)),
+            ("handshakeTimeout", ts(s.handshake_timeout)),
+            ("maxHandshakesPerIP", ts(s.max_handshakes_per_ip)),
             ("numFilters", super::state::s((nf as i32 + 1).to_string())),
             ("filters", arr(filters)),
             ("numActive1", ts(self.num_active_on_port(s.server_host.port as i32))),

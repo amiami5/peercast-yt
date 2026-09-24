@@ -410,6 +410,57 @@ impl AuthThrottle {
     }
 }
 
+/// Slowloris (要求をゆっくり送って接続を居座らせる) よけに、IP アドレスごとに、まだ要求を読み終えて
+/// いない接続を数える。札 (`HandshakeSlot`) を捨てると 1 つ減る。
+#[derive(Debug, Default)]
+pub struct HandshakeCounter {
+    m: std::sync::Mutex<BTreeMap<Vec<u8>, u32>>,
+}
+
+impl HandshakeCounter {
+    pub const fn new() -> HandshakeCounter {
+        HandshakeCounter { m: std::sync::Mutex::new(BTreeMap::new()) }
+    }
+
+    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<Vec<u8>, u32>> {
+        self.m.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `key` の数が `max` 未満なら 1 つ増やして札を返す。`max` 以上なら `None` (`max` が 0 なら上限なし)
+    pub fn acquire(&'static self, key: &[u8], max: u32) -> Option<HandshakeSlot> {
+        let mut m = self.map();
+        let n = m.entry(key.to_vec()).or_default();
+        if max != 0 && *n >= max {
+            return None;
+        }
+        *n += 1;
+        Some(HandshakeSlot { c: self, key: key.to_vec() })
+    }
+
+    pub fn count(&self, key: &[u8]) -> u32 {
+        self.map().get(key).copied().unwrap_or(0)
+    }
+}
+
+/// `HandshakeCounter::acquire` の札
+#[derive(Debug)]
+pub struct HandshakeSlot {
+    c: &'static HandshakeCounter,
+    key: Vec<u8>,
+}
+
+impl Drop for HandshakeSlot {
+    fn drop(&mut self) {
+        let mut m = self.c.map();
+        if let Some(n) = m.get_mut(&self.key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                m.remove(&self.key);
+            }
+        }
+    }
+}
+
 /// `Servent::hasValidAuthToken`。`request_filename` はパスの後ろ (`<チャンネル ID>...?auth=...`)。
 pub fn valid_auth_token(request_filename: &[u8], broadcast_id: &[u8; 16]) -> bool {
     let vec = strutil::split(request_filename, b"?");
@@ -592,6 +643,8 @@ pub enum ApplyKey {
     MaxTranscodes = 44, // 数 (Rust 版で足した。負の数は 0)
     AuthFailLimit = 45, // 数 (Rust 版で足した。負の数は 0)
     AuthLockSeconds = 46, // 数 (Rust 版で足した。負の数は 0)
+    HandshakeTimeout = 47, // 秒 (Rust 版で足した。負の数は 0)
+    MaxHandshakesPerIp = 48, // 数 (Rust 版で足した。負の数は 0)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -679,6 +732,8 @@ pub fn apply_ops(cmd: &[u8]) -> Vec<ApplyOp> {
             b"max_transcodes" => op(MaxTranscodes, n.max(0), Vec::new()),
             b"auth_fail_limit" => op(AuthFailLimit, n.max(0), Vec::new()),
             b"auth_lock_seconds" => op(AuthLockSeconds, n.max(0), Vec::new()),
+            b"handshake_timeout" => op(HandshakeTimeout, n.max(0), Vec::new()),
+            b"max_handshakes_per_ip" => op(MaxHandshakesPerIp, n.max(0), Vec::new()),
             b"preferredTheme" => op(PreferredTheme, 0, arg.clone()),
             b"accentColor" => op(AccentColor, 0, arg.clone()),
             _ => None,
