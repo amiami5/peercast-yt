@@ -1,5 +1,5 @@
 //! セッション全体の結合テスト (メモリ上の疑似クライアントと疑似出力先)。
-//! ネットワークは使わない。実ネットワークでの比較は tests/differential.py を参照。
+//! ネットワークは使わない。実際に起動して試すものは tests/robustness.rs。
 
 use rtmpserver::session::Session;
 use rtmpserver::{Error, Result};

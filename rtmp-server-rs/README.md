@@ -26,8 +26,7 @@ Rust 1.70 以降 (1.70、1.75、1.85 で確認)。外部クレートには依存
 
 下の表の C++ 版との比較は、C++ 版があったときに `tests/differential.py` (`develop-old` ブランチ) で行ったもの。
 
-    cargo test --release                                   # 単体テスト + 結合テスト (23 件)
-    python3 tests/robustness.py RUST_BIN                   # タイムアウト、出力先切断など
+    cargo test --release    # 単体テスト + 結合テスト。tests/robustness.rs は実際に起動して、タイムアウト (約 30 秒かかる)、出力先の切断などを試す
 
 | 項目 | 結果 |
 |---|---|
