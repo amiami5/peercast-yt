@@ -194,6 +194,38 @@ fn html() {
     assert_eq!(get(p, "/html/ja/play.html").code, 400);
 }
 
+/// 設定ファイルのフィルターが、最後のものまで全部読まれる (設定の画面に出る)
+#[test]
+fn filters() {
+    let s = Server::start_with(17210, |ini| {
+        let filter = |ip: &str, private: &str, network: &str, direct: &str| {
+            format!("[Filter]\r\nip = {}\r\nprivate = {}\r\nban = No\r\nnetwork = {}\r\ndirect = {}\r\n[End]\r\n", ip, private, network, direct)
+        };
+        let old = filter("255.255.255.255", "No", "Yes", "Yes");
+        assert!(ini.contains(&old));
+        let new = [
+            filter("255.255.255.255", "No", "Yes", "Yes"),
+            filter("::/0", "No", "No", "Yes"),
+            filter("192.0.2.0/24", "Yes", "Yes", "Yes"),
+        ]
+        .concat();
+        ini.replace(&old, &new)
+    });
+    let body = String::from_utf8(get(s.port, "/html/en/settings.html").body).unwrap();
+    let ips: Vec<&str> = body
+        .split("value=\"")
+        .skip(1)
+        .filter(|t| t.contains("name=\"filt_ip\""))
+        .map(|t| &t[..t.find('"').unwrap()])
+        .collect();
+    // 最後は新しく足すための空の行
+    assert_eq!(ips, ["255.255.255.255", "::/0", "192.0.2.0/24", "0.0.0.0"]);
+    let checked = |name: &str| body.contains(&format!("checked value=\"1\" name=\"{}\"", name));
+    assert!(checked("filt_nw0") && checked("filt_di0") && !checked("filt_pr0"));
+    assert!(!checked("filt_nw1") && checked("filt_di1") && !checked("filt_pr1"));
+    assert!(checked("filt_nw2") && checked("filt_di2") && checked("filt_pr2"));
+}
+
 /// 03-jrpc: JSON-RPC
 #[test]
 fn jrpc() {

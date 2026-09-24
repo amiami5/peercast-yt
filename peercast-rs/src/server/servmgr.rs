@@ -1093,7 +1093,8 @@ impl ServMgr {
         if FileStream::open_read(fn_).is_err() {
             self.save_settings(pc, fn_);
         }
-        self.settings().filters.clear();
+        // numFilters = 0 (作業用の 1 つだけ)
+        self.settings().filters = vec![ServFilter::default()];
         self.uptest.clear();
         self.channel_directory.clear_feeds();
 
@@ -1264,11 +1265,12 @@ impl ServMgr {
                 }
             }
             // C++ 版は filters[numFilters] に読み、上限に達していなければ numFilters を進める
+            // (最後の要素が filters[numFilters])
             let mut s = self.settings();
-            if s.filters.len() < MAX_FILTERS - 1 {
-                s.filters.push(f);
-            } else if let Some(last) = s.filters.last_mut() {
-                *last = f;
+            let n = s.filters.len() - 1;
+            s.filters[n] = f;
+            if n < MAX_FILTERS - 1 {
+                s.filters.push(ServFilter::default());
             }
         } else if is("[Feed]") {
             while r.read_next() {
