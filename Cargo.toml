@@ -4,7 +4,7 @@
 #
 # html などを含む配布用のディレクトリと、インストールは Makefile で行う (README.md を参照)。
 [workspace]
-members = ["peercast-rs", "rtmp-server-rs"]
+members = ["peercast-rs", "rtmp-server-rs", "tools/ui-gen"]
 resolver = "2"
 
 [profile.release]

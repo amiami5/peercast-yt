@@ -22,3 +22,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "peercast"
 path = "src/bin/peercast.rs"
+
+[dev-dependencies]
+# テストで UI (html/) を作るため
+peercast-ui-gen = { path = "../tools/ui-gen" }

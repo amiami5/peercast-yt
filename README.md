@@ -91,15 +91,15 @@ C++ 版のコードは `develop-old` ブランチにあります。
 
 # Linuxでのビルド
 
-リポジトリの一番上の Makefile でビルドします。中では `cargo` で Rust のコードをビルドし、Ruby で
-HTML を作ります。
+リポジトリの一番上の Makefile でビルドします。中では `cargo` で Rust のコードをビルドし、管理画面の
+HTML も作ります (これも Rust の小さなツール `tools/ui-gen`)。
 
 ## 1. 必要なものを入れる
 
 Ubuntu / Debian なら、次の 1 行で揃います。
 
 ```sh
-sudo apt install cargo pkg-config libssl-dev librtmp-dev ruby python3
+sudo apt install cargo pkg-config libssl-dev librtmp-dev python3
 ```
 
 | パッケージ | 何に使うか | 備考 |
@@ -107,7 +107,6 @@ sudo apt install cargo pkg-config libssl-dev librtmp-dev ruby python3
 | `cargo` | Rust のコンパイラとビルド | Rust 1.70 以降 (1.70、1.75、1.85 で確認)。`rustup` で入れてもよい |
 | `pkg-config` `libssl-dev` | TLS (OpenSSL) | |
 | `librtmp-dev` | RTMP fetch (他サーバーからの取得) | 不要なら `make WITH_RTMP=no` |
-| `ruby` | ビルド時の HTML 生成と、bvt (テスト) | |
 | `python3` | 実行時の CGI スクリプト | |
 
 外部のクレート (Rust のライブラリ) は使っていないので、ビルド中にネットワークからは何も取ってきません。
@@ -136,10 +135,10 @@ sudo make install
 ## 3. テスト (任意)
 
 ```sh
-make check    # Rust の単体テストと、実際に起動して試す bvt
+make check    # 単体テストと、サーバーを実際に起動して試すテスト (cargo test --release --workspace)
 ```
 
-中継や配信元の種類ごとの確認などは [`peercast-rs/tests/server/`](peercast-rs/tests/server/) にあります。
+中継や配信元の種類ごとの確認 (Python) は [`peercast-rs/tests/server/`](peercast-rs/tests/server/) にあります。
 
 # 実行
 

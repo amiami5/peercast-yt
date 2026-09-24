@@ -1,0 +1,19 @@
+[package]
+name = "peercast-ui-gen"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "PeerCast YT のブラウザ UI (html/、public/) を、テンプレートとメッセージカタログから作る (ビルド時に使う)"
+license = "GPL-2.0-or-later"
+publish = false
+
+# 外部クレートには依存しない。
+[dependencies]
+
+[[bin]]
+name = "peercast-ui-gen"
+path = "src/main.rs"
+
+[lib]
+name = "peercast_ui_gen"
+path = "src/lib.rs"

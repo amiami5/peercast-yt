@@ -34,8 +34,8 @@ cargo build --release --features peercast-rs/rtmp   # rtmp:// の取得 (librtmp
 cargo test --release
 ```
 
-サーバーを実際に起動して試すテスト (中継、配信元の種類ごと、C++ 版との応答の比較) は
-[`tests/server/`](tests/server/) にあります。
+`cargo test` には、サーバーを実際に起動して試すテスト (`tests/bvt.rs`、もとは Ruby の bvt/) も入っている。
+中継、配信元の種類ごと、C++ 版との応答の比較などの Python のテストは [`tests/server/`](tests/server/) にある。
 
 ## 移行の記録 (C++ 版との違い)
 

@@ -20,7 +20,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 # make で作る配布用のディレクトリ (html などを使う)
 TEMPLATE = ROOT + '/build/peercast-yt'
-INI = ROOT + '/bvt/peercast.ini.master'
+INI = ROOT + '/peercast-rs/tests/peercast.ini'
 # サーバーを起こすディレクトリ
 WORK = os.environ.get('PCYT_TEST_DIR', '/tmp/pcyt-servertest')
 RS = ROOT + '/build/target/release/peercast'

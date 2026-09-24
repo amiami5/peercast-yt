@@ -5,6 +5,13 @@ version = 3
 [[package]]
 name = "peercast-rs"
 version = "0.1.0"
+dependencies = [
+ "peercast-ui-gen",
+]
+
+[[package]]
+name = "peercast-ui-gen"
+version = "0.1.0"
 
 [[package]]
 name = "rtmp-server"
