@@ -172,9 +172,10 @@ pub fn cgi_arg(s: &[u8], name: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// `/admin.cgi` (ShoutCast の曲名の更新) の引数。`pass=` と `song=` がなければ `None`。
-/// C++ 版と同じく、パスワードの中身は確かめない (docs/cpp-known-issues.md)。
+/// パスワードは `authorized` で確かめる (C++ 版は中身を見ていなかった。docs/cpp-known-issues.md)。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdminCgi {
+    pub pass: Vec<u8>,
     pub song: Vec<u8>,
     pub mount: Option<Vec<u8>>,
     pub url: Option<Vec<u8>>,
@@ -186,8 +187,15 @@ pub fn admin_cgi(fn_: &[u8]) -> Option<AdminCgi> {
     let mount = cgi_arg(fn_, b"mount=");
     let url = cgi_arg(fn_, b"url=");
     match (pass, song) {
-        (Some(_), Some(song)) => Some(AdminCgi { song, mount, url }),
+        (Some(pass), Some(song)) => Some(AdminCgi { pass, song, mount, url }),
         _ => None,
+    }
+}
+
+impl AdminCgi {
+    /// 放送を受け付けるときと同じ規則 (`icy_password_ok`) で `pass=` を確かめる
+    pub fn authorized(&self, password: &[u8], localhost: bool) -> bool {
+        icy_password_ok(&crate::cgi::unescape(&self.pass), password, localhost)
     }
 }
 

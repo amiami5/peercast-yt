@@ -214,6 +214,20 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                 return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
             }
             if let Some(a) = servhs::admin_cgi(fn_) {
+                // 配信ソフトは Origin などを付けないので、付いていてほかのサイトからなら断る (CSRF)
+                http.read_headers()?;
+                let hd = |n: &[u8]| http.headers.get(n);
+                if crate::http::is_cross_origin_request(&hd(b"Sec-Fetch-Site"), &hd(b"Origin"), &hd(b"Host")) {
+                    crate::log_warn!("Rejected cross-origin request");
+                    return Err(http_error(HTTP_SC_FORBIDDEN, 403));
+                }
+                let password = ctx.pc.servmgr.settings().password.clone();
+                // DNS リバインディングで localhost に来たブラウザーは、Host がループバックの名前にならない
+                let localhost = is_localhost(&ctx.host()) && crate::http::is_loopback_host_header(&hd(b"Host"));
+                if !a.authorized(&password, localhost) {
+                    crate::log_warn!("admin.cgi: wrong password");
+                    return Err(http_error(HTTP_SC_FORBIDDEN, 403));
+                }
                 for ch in ctx.pc.chanmgr.channels() {
                     let (status, ct, mount) = {
                         let st = ch.st();

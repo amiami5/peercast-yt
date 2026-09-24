@@ -50,6 +50,20 @@ fn admin_cgi_args() {
 }
 
 #[test]
+fn admin_cgi_password() {
+    let a = |q: &[u8]| admin_cgi(&[&b"/admin.cgi?mode=updinfo&song=s&"[..], q].concat()).unwrap();
+    assert!(a(b"pass=secret").authorized(b"secret", false));
+    assert!(a(b"pass=se%63ret").authorized(b"secret", false));
+    assert!(!a(b"pass=x").authorized(b"secret", false));
+    assert!(!a(b"pass=").authorized(b"", false));
+    assert!(!a(b"pass=x").authorized(b"", false));
+    // localhost は、配信を始められるのと同じく空でもよい
+    assert!(a(b"pass=").authorized(b"secret", true));
+    assert!(a(b"pass=secret").authorized(b"secret", true));
+    assert!(!a(b"pass=x").authorized(b"secret", true));
+}
+
+#[test]
 fn post_routes() {
     assert_eq!(post_route(b"POST /api/1?pass=x HTTP/1.1"), Some((PostKind::Api1, b"pass=x".to_vec())));
     assert_eq!(post_route(b"POST /?name=a&b=c?d HTTP/1.1"), Some((PostKind::Push, b"name=a&b=c?d".to_vec())));
