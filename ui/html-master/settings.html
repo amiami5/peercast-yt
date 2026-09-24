@@ -21,6 +21,20 @@
       </td>
     </tr>
     <tr>
+      <th class="left-heading">{#Wrong Password Limit}</th>
+      <td>
+        <input size="5" value="{$servMgr.authFailLimit}" name="auth_fail_limit">
+        <br><small>{#After this many wrong passwords from the same IP address, that address is locked out for a while. 0 turns the lockout off. This PC (localhost) is never locked out.}</small>
+      </td>
+    </tr>
+    <tr>
+      <th class="left-heading">{#Lockout Seconds}</th>
+      <td>
+        <input size="5" value="{$servMgr.authLockSeconds}" name="auth_lock_seconds">
+        <br><small>{#How long the first lockout lasts. It doubles each time the password is wrong again, up to one hour.}</small>
+      </td>
+    </tr>
+    <tr>
       <th class="left-heading" style="width: 8.5em">{#Port}</th>
       <td><input size="10" value="{$servMgr.serverPort1}" name="port"></td>
     </tr>

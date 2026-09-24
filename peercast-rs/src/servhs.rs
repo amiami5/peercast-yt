@@ -286,6 +286,130 @@ pub fn icy_password_ok(sent: &[u8], password: &[u8], localhost: bool) -> bool {
     }
 }
 
+/// ログに書く要求の行から、パスワードを `***` に置き換えたもの。ShoutCast の放送は行がパスワード
+/// そのもの、Icecast の放送 (`SOURCE パスワード /マウント`) は 2 つ目の語、それ以外は URL の
+/// `pass=` と `passnew=` の値。
+pub fn redact_request_line(line: &[u8], password: &[u8]) -> Vec<u8> {
+    match request_kind(line, password) {
+        RequestKind::Shoutcast => b"***".to_vec(),
+        RequestKind::Source => match source(line).password {
+            Some(p) if !p.is_empty() => [&line[..7], b"***", &line[7 + p.len()..]].concat(),
+            _ => line.to_vec(),
+        },
+        _ => redact_query(line, &[b"pass", b"passnew"]),
+    }
+}
+
+/// `?` か `&` の後ろの `names` の引数の値を `***` にする。値は次の `&` か空白の手前まで。
+pub fn redact_query(s: &[u8], names: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        out.push(s[i]);
+        i += 1;
+        if !matches!(s[i - 1], b'?' | b'&') {
+            continue;
+        }
+        let rest = &s[i..];
+        if let Some(n) = names.iter().find(|n| rest.starts_with(n) && rest.get(n.len()) == Some(&b'=')) {
+            out.extend_from_slice(n);
+            out.extend_from_slice(b"=***");
+            i += n.len() + 1;
+            while i < s.len() && !matches!(s[i], b'&' | b' ') {
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// ICY のヘッダーの行をログに書くとき、パスワードの入るヘッダーは値を `***` にする
+pub fn redact_icy_header(line: &[u8]) -> Vec<u8> {
+    match icy_header(line) {
+        IcyHeader::Authorization | IcyHeader::Password => match line.iter().position(|&c| c == b':') {
+            Some(p) => [&line[..=p], b" ***"].concat(),
+            None => b"***".to_vec(),
+        },
+        _ => line.to_vec(),
+    }
+}
+
+/// 締め出す時間の上限 (秒)
+pub const AUTH_LOCK_MAX_SECS: u64 = 3600;
+/// 最後に間違えてからこれだけ経てば (締め出していなければ)、間違えた数を数え直す (秒)
+const AUTH_FORGET_SECS: u64 = 24 * 3600;
+/// 覚えておく IP アドレスの数の上限
+const AUTH_MAX_ENTRIES: usize = 4096;
+
+/// パスワードの総当たりを抑える。IP アドレスごとに続けて間違えた数を数え、設定の数 (`limit`) に
+/// 達したら `lock_secs` 秒締め出す。そのあとも間違えるたびに、締め出す時間を倍にしていく
+/// (最長 `AUTH_LOCK_MAX_SECS`)。正しいパスワードで入れば数え直す。`limit` が 0 なら何もしない。
+#[derive(Debug, Default)]
+pub struct AuthThrottle {
+    m: std::sync::Mutex<BTreeMap<Vec<u8>, AuthFails>>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AuthFails {
+    count: u32,
+    until: u64,
+    last: u64,
+}
+
+impl AuthThrottle {
+    pub const fn new() -> AuthThrottle {
+        AuthThrottle { m: std::sync::Mutex::new(BTreeMap::new()) }
+    }
+
+    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<Vec<u8>, AuthFails>> {
+        self.m.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `key` が締め出されていれば、残りの秒数
+    pub fn locked(&self, key: &[u8], now: u64, limit: u32) -> Option<u64> {
+        if limit == 0 {
+            return None;
+        }
+        let f = *self.map().get(key)?;
+        (f.until > now).then(|| f.until - now)
+    }
+
+    /// 間違えた。これで締め出したなら、その秒数
+    pub fn failed(&self, key: &[u8], now: u64, limit: u32, lock_secs: u64) -> Option<u64> {
+        if limit == 0 {
+            return None;
+        }
+        let mut m = self.map();
+        if m.len() >= AUTH_MAX_ENTRIES && !m.contains_key(key) {
+            m.retain(|_, f| f.until > now || now.saturating_sub(f.last) < AUTH_FORGET_SECS);
+            if m.len() >= AUTH_MAX_ENTRIES {
+                m.retain(|_, f| f.until > now);
+            }
+            if m.len() >= AUTH_MAX_ENTRIES {
+                return None;
+            }
+        }
+        let f = m.entry(key.to_vec()).or_default();
+        if f.until <= now && now.saturating_sub(f.last) >= AUTH_FORGET_SECS {
+            *f = AuthFails::default();
+        }
+        f.count = f.count.saturating_add(1);
+        f.last = now;
+        if f.count < limit {
+            return None;
+        }
+        let shift = (f.count - limit).min(12);
+        let secs = lock_secs.max(1).saturating_mul(1 << shift).min(AUTH_LOCK_MAX_SECS);
+        f.until = now + secs;
+        Some(secs)
+    }
+
+    /// 正しいパスワードで入った
+    pub fn succeeded(&self, key: &[u8]) {
+        self.map().remove(key);
+    }
+}
+
 /// `Servent::hasValidAuthToken`。`request_filename` はパスの後ろ (`<チャンネル ID>...?auth=...`)。
 pub fn valid_auth_token(request_filename: &[u8], broadcast_id: &[u8; 16]) -> bool {
     let vec = strutil::split(request_filename, b"?");
@@ -466,6 +590,8 @@ pub enum ApplyKey {
     PreferredTheme = 42,
     AccentColor = 43,
     MaxTranscodes = 44, // 数 (Rust 版で足した。負の数は 0)
+    AuthFailLimit = 45, // 数 (Rust 版で足した。負の数は 0)
+    AuthLockSeconds = 46, // 数 (Rust 版で足した。負の数は 0)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -551,6 +677,8 @@ pub fn apply_ops(cmd: &[u8]) -> Vec<ApplyOp> {
             b"preset" => op(Preset, 0, arg.clone()),
             b"audio_codec" => op(AudioCodec, 0, arg.clone()),
             b"max_transcodes" => op(MaxTranscodes, n.max(0), Vec::new()),
+            b"auth_fail_limit" => op(AuthFailLimit, n.max(0), Vec::new()),
+            b"auth_lock_seconds" => op(AuthLockSeconds, n.max(0), Vec::new()),
             b"preferredTheme" => op(PreferredTheme, 0, arg.clone()),
             b"accentColor" => op(AccentColor, 0, arg.clone()),
             _ => None,

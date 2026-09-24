@@ -188,6 +188,64 @@ fn apply() {
 
     let ops = apply_ops(b"max_transcodes=3&max_transcodes=-1");
     assert_eq!(ops.iter().map(|o| (o.key, o.int)).collect::<Vec<_>>(), vec![(ApplyKey::MaxTranscodes, 3), (ApplyKey::MaxTranscodes, 0)]);
+
+    let ops = apply_ops(b"auth_fail_limit=5&auth_fail_limit=-2&auth_lock_seconds=60");
+    assert_eq!(
+        ops.iter().map(|o| (o.key, o.int)).collect::<Vec<_>>(),
+        vec![(ApplyKey::AuthFailLimit, 5), (ApplyKey::AuthFailLimit, 0), (ApplyKey::AuthLockSeconds, 60)]
+    );
+}
+
+#[test]
+fn redact() {
+    let pw = b"secret";
+    assert_eq!(redact_request_line(b"GET /admin?cmd=login&pass=secret HTTP/1.1", pw), b"GET /admin?cmd=login&pass=*** HTTP/1.1");
+    assert_eq!(redact_request_line(b"GET /html/ja/index.html?pass=x&a=1", pw), b"GET /html/ja/index.html?pass=***&a=1");
+    assert_eq!(redact_request_line(b"GET /admin?cmd=apply&passnew=new&bypass=1", pw), b"GET /admin?cmd=apply&passnew=***&bypass=1");
+    // 名前の一部が同じだけの引数はそのまま
+    assert_eq!(redact_request_line(b"GET /x?bypass=1&password=2", pw), b"GET /x?bypass=1&password=2");
+    assert_eq!(redact_request_line(b"secret", pw), b"***");
+    assert_eq!(redact_request_line(b"SOURCE secret /live", pw), b"SOURCE *** /live");
+    assert_eq!(redact_icy_header(b"icy-name:foo"), b"icy-name:foo");
+    assert_eq!(redact_icy_header(b"Authorization: Basic c291cmNlOnNlY3JldA=="), b"Authorization: ***");
+}
+
+#[test]
+fn auth_throttle() {
+    let t = AuthThrottle::new();
+    let ip = b"10.0.0.1";
+    for _ in 0..4 {
+        assert_eq!(t.failed(ip, 100, 5, 60), None);
+    }
+    assert_eq!(t.locked(ip, 100, 5), None);
+    // 5 回目で締め出す。そのあとは間違えるたびに倍
+    assert_eq!(t.failed(ip, 100, 5, 60), Some(60));
+    assert_eq!(t.locked(ip, 130, 5), Some(30));
+    assert_eq!(t.locked(ip, 160, 5), None);
+    assert_eq!(t.failed(ip, 160, 5, 60), Some(120));
+    assert_eq!(t.failed(ip, 280, 5, 60), Some(240));
+    // 上限は 1 時間
+    for i in 0..20 {
+        t.failed(ip, 1000 + i, 5, 60);
+    }
+    assert_eq!(t.locked(ip, 1019, 5), Some(AUTH_LOCK_MAX_SECS));
+    // ほかのアドレスは関係ない
+    assert_eq!(t.locked(b"10.0.0.2", 1019, 5), None);
+    // 正しいパスワードで入れば数え直す
+    t.succeeded(ip);
+    assert_eq!(t.locked(ip, 1019, 5), None);
+    assert_eq!(t.failed(ip, 1019, 5, 60), None);
+    // 1 日経てば数え直す
+    for _ in 0..3 {
+        t.failed(ip, 1019, 5, 60);
+    }
+    assert_eq!(t.failed(ip, 1019 + 24 * 3600, 5, 60), None);
+    // 0 なら締め出さない
+    let t = AuthThrottle::new();
+    for _ in 0..10 {
+        assert_eq!(t.failed(ip, 0, 0, 60), None);
+    }
+    assert_eq!(t.locked(ip, 0, 0), None);
 }
 
 #[test]

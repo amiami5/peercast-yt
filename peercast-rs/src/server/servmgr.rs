@@ -142,6 +142,10 @@ pub struct ServSettings {
     pub audio_codec: Vec<u8>,
     /// flv.cgi (トランスコード) を localhost 以外から同時に使える数 (Rust 版で足した)
     pub max_transcodes: u32,
+    /// パスワードを続けて間違えたら締め出す数 (0 なら締め出さない)。Rust 版で足した
+    pub auth_fail_limit: u32,
+    /// 最初に締め出す秒数。間違え続けると倍にしていく
+    pub auth_lock_seconds: u32,
     pub rtmp_port: u16,
     pub default_channel_info: ChanInfo,
     pub chat: bool,
@@ -222,6 +226,8 @@ impl ServMgr {
                 preset: b"veryfast".to_vec(),
                 audio_codec: b"mp3".to_vec(),
                 max_transcodes: 2,
+                auth_fail_limit: 5,
+                auth_lock_seconds: 60,
                 rtmp_port: 1935,
                 default_channel_info: ChanInfo::new(),
                 chat: true,
@@ -935,7 +941,13 @@ impl ServMgr {
                 .key("preferredTheme", &s.preferred_theme[..])
                 .key("accentColor", &s.accent_color[..]),
         );
-        doc.push(Section::new("Privacy", false).key("password", &s.password[..]).key("maxUptime", cs.max_uptime));
+        doc.push(
+            Section::new("Privacy", false)
+                .key("password", &s.password[..])
+                .key("maxUptime", cs.max_uptime)
+                .key("authFailLimit", s.auth_fail_limit)
+                .key("authLockSeconds", s.auth_lock_seconds),
+        );
         let nf = s.filters.len().saturating_sub(1);
         for f in &s.filters[..nf] {
             doc.push(
@@ -1225,6 +1237,10 @@ impl ServMgr {
             set!(|s: &mut ServSettings| s.audio_codec = v.clone());
         } else if is("maxTranscodes") {
             set!(|s: &mut ServSettings| s.max_transcodes = iv.max(0) as u32);
+        } else if is("authFailLimit") {
+            set!(|s: &mut ServSettings| s.auth_fail_limit = iv.max(0) as u32);
+        } else if is("authLockSeconds") {
+            set!(|s: &mut ServSettings| s.auth_lock_seconds = iv.max(0) as u32);
         } else if is("preferredTheme") {
             set!(|s: &mut ServSettings| s.preferred_theme = v.clone());
         } else if is("accentColor") {
@@ -1523,6 +1539,8 @@ impl ServMgr {
             ("preset", super::state::s(&s.preset)),
             ("audioCodec", super::state::s(&s.audio_codec)),
             ("maxTranscodes", ts(s.max_transcodes)),
+            ("authFailLimit", ts(s.auth_fail_limit)),
+            ("authLockSeconds", ts(s.auth_lock_seconds)),
             ("defaultChannelInfo", s.default_channel_info.state()),
             ("rtmpServerMonitor", self.rtmp_monitor.state()),
             ("rtmpPort", ts(s.rtmp_port as u32)),

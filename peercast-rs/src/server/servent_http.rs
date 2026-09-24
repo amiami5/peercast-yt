@@ -15,7 +15,7 @@ use super::host::Host;
 use super::html::{self, Scope};
 use super::http::{
     http_error, http_error_msg, Headers, Http, Response, HTTP_SC_BADREQUEST, HTTP_SC_FORBIDDEN, HTTP_SC_FOUND, HTTP_SC_NOTFOUND, HTTP_SC_OK,
-    HTTP_SC_SERVERERROR, HTTP_SC_UNAUTHORIZED, HTTP_SC_UNAVAILABLE, HTTP_SC_URITOOLONG, MAX_REQUEST_BODY, MIME_TEXT, MIME_XML, PCX_AGENT,
+    HTTP_SC_SERVERERROR, HTTP_SC_TOOMANYREQUESTS, HTTP_SC_UNAUTHORIZED, HTTP_SC_UNAVAILABLE, HTTP_SC_URITOOLONG, MAX_REQUEST_BODY, MIME_TEXT, MIME_XML, PCX_AGENT,
 };
 use super::pcstr::{self, PcString, StrType};
 use super::peercast::Peercast;
@@ -98,10 +98,11 @@ pub fn handshake_incoming(c: &mut Conn) -> Result<()> {
     }
     let is_http = servhs::is_http(&line);
     let host = c.sock()?.host.str();
+    let logged = servhs::redact_request_line(&line, &c.pc.servmgr.settings().password);
     if is_http {
-        crate::log_trace!("HTTP from {} '{}'", host, b(&line));
+        crate::log_trace!("HTTP from {} '{}'", host, b(&logged));
     } else {
-        crate::log_trace!("Connect from {} '{}'", host, b(&line));
+        crate::log_trace!("Connect from {} '{}'", host, b(&logged));
     }
     let cmd_line = {
         let mut h = Http::new(c.sock()?);
@@ -113,8 +114,9 @@ pub fn handshake_incoming(c: &mut Conn) -> Result<()> {
 
 /// `handshakeHTTP`
 fn handshake_http(c: &mut Conn, line: &[u8], is_http: bool) -> Result<()> {
-    crate::log_debug!("{} \"{}\"", c.sv.host().ip.str(), b(line));
     let password = c.pc.servmgr.settings().password.clone();
+    // パスワードはログに残さない
+    crate::log_debug!("{} \"{}\"", c.sv.host().ip.str(), b(&servhs::redact_request_line(line, &password)));
     match servhs::request_kind(line, &password) {
         servhs::RequestKind::Get => handshake_get(c, line),
         servhs::RequestKind::Post => handshake_post(c, line),
@@ -224,7 +226,15 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                 let password = ctx.pc.servmgr.settings().password.clone();
                 // DNS リバインディングで localhost に来たブラウザーは、Host がループバックの名前にならない
                 let localhost = is_localhost(&ctx.host()) && crate::http::is_loopback_host_header(&hd(b"Host"));
-                if !a.authorized(&password, localhost) {
+                let ip = ctx.host().ip.str();
+                if !localhost {
+                    auth_lockout(ctx.pc, &ip)?;
+                }
+                let ok = a.authorized(&password, localhost);
+                if !localhost && !password.is_empty() {
+                    auth_record(ctx.pc, &ip, ok);
+                }
+                if !ok {
                     crate::log_warn!("admin.cgi: wrong password");
                     return Err(http_error(HTTP_SC_FORBIDDEN, 403));
                 }
@@ -467,7 +477,7 @@ fn handshake_source(c: &mut Conn, line: &[u8], is_http: bool) -> Result<()> {
         None => crate::log_debug!("ICE 1.0 client to {}", b(&src.mount)),
         Some(p) => {
             let pw = pcs(p);
-            crate::log_debug!("ICY client: {} {}", b(&pw.data), b(&src.mount));
+            crate::log_debug!("ICY client: {}", b(&src.mount));
             c.sv.st().login_password = pw;
         }
     }
@@ -552,13 +562,22 @@ fn handshake_icy(c: &mut Conn, src_type: i32, is_http: bool) -> Result<()> {
     {
         let mut http = Http::new(c.sock()?);
         while http.next_header()? {
-            crate::log_debug!("ICY {}", b(&http.cmd_line));
+            crate::log_debug!("ICY {}", b(&servhs::redact_icy_header(&http.cmd_line)));
             svt::read_icy_header(&http, &mut info, Some(&mut pwd));
         }
     }
     c.sv.st().login_password = pwd.clone();
     let password = pc.servmgr.settings().password.clone();
-    if !servhs::icy_password_ok(&pwd.data, &password, is_localhost(&c.sv.host())) {
+    let localhost = is_localhost(&c.sv.host());
+    let ip = c.sv.host().ip.str();
+    if !localhost {
+        auth_lockout(pc, &ip)?;
+    }
+    let ok = servhs::icy_password_ok(&pwd.data, &password, localhost);
+    if !localhost && !password.is_empty() {
+        auth_record(pc, &ip, ok);
+    }
+    if !ok {
         return Err(http_error(HTTP_SC_UNAUTHORIZED, 401));
     }
     // 始める前に正しい IP アドレスが要る
@@ -633,6 +652,35 @@ fn local_url(ctx: &Ctx, host_header: &[u8]) -> Vec<u8> {
 
 // ---------------------------------------------------------------- 認証
 
+/// パスワードを間違えた回数 (IP アドレスごと)
+static AUTH_FAILS: servhs::AuthThrottle = servhs::AuthThrottle::new();
+
+/// パスワードを何度も間違えてしばらく締め出している IP アドレスなら 429
+fn auth_lockout(pc: &Peercast, ip: &str) -> Result<()> {
+    let limit = pc.servmgr.settings().auth_fail_limit;
+    if let Some(rest) = AUTH_FAILS.locked(ip.as_bytes(), sys::get_time() as u64, limit) {
+        crate::log_warn!("Too many wrong passwords from {}; locked out for {} more seconds", ip, rest);
+        return Err(http_error(HTTP_SC_TOOMANYREQUESTS, 429));
+    }
+    Ok(())
+}
+
+/// パスワードが合ったか間違えたかを記録する
+fn auth_record(pc: &Peercast, ip: &str, ok: bool) {
+    if ok {
+        AUTH_FAILS.succeeded(ip.as_bytes());
+        return;
+    }
+    let (limit, secs) = {
+        let s = pc.servmgr.settings();
+        (s.auth_fail_limit, s.auth_lock_seconds as u64)
+    };
+    crate::log_warn!("Wrong password from {}", ip);
+    if let Some(secs) = AUTH_FAILS.failed(ip.as_bytes(), sys::get_time() as u64, limit, secs) {
+        crate::log_warn!("Too many wrong passwords from {}; locking out for {} seconds", ip, secs);
+    }
+}
+
 /// `handshakeAuth`: 認証できれば true。できなければ応答を書いて false
 fn handshake_auth(ctx: &Ctx, http: &mut Http, args: &[u8], reject_cross_origin: bool) -> Result<bool> {
     http.read_headers()?;
@@ -653,21 +701,31 @@ fn handshake_auth(ctx: &Ctx, http: &mut Http, args: &[u8], reject_cross_origin: 
         let s = ctx.pc.servmgr.settings();
         (s.password.clone(), s.auth_type, s.server_host.port)
     };
-    if !password.is_empty() && Query::new(args).get(b"pass") == password {
+    let sent_pass = Query::new(args).get(b"pass");
+    let basic = hd(b"Authorization");
+    let sent_basic = auth_type == AUTH_HTTPBASIC && !basic.is_empty();
+    // パスワードが設定されていて、送られてきたときは、総当たりでないかを見る
+    let tried = !password.is_empty() && (!sent_pass.is_empty() || sent_basic);
+    let ip = ctx.host().ip.str();
+    if tried {
+        auth_lockout(ctx.pc, &ip)?;
+    }
+    if !password.is_empty() && sent_pass == password {
+        auth_record(ctx.pc, &ip, true);
         return Ok(true);
     }
     if auth_type == AUTH_HTTPBASIC {
-        let a = hd(b"Authorization");
-        if !a.is_empty() {
-            let (_, pass) = super::http::parse_authorization_header(&a);
+        if sent_basic {
+            let (_, pass) = super::http::parse_authorization_header(&basic);
             if !password.is_empty() && pass == password {
+                auth_record(ctx.pc, &ip, true);
                 return Ok(true);
             }
         }
     } else if auth_type == AUTH_COOKIE {
         let arg = hd(b"Cookie");
         if !arg.is_empty() {
-            crate::log_trace!("Got cookie: {}", b(&arg));
+            crate::log_trace!("Got cookie");
             match servhs::cookie_id(&arg, port) {
                 servhs::CookieParse::Invalid => crate::log_error!("Invalid Cookie header: expected '='"),
                 servhs::CookieParse::Found(id) => ctx.sv.st().cookie = Cookie::new(&id, ctx.host().ip),
@@ -681,6 +739,9 @@ fn handshake_auth(ctx: &Ctx, http: &mut Http, args: &[u8], reject_cross_origin: 
         }
     }
     // 認証できなかった
+    if tried {
+        auth_record(ctx.pc, &ip, false);
+    }
     if auth_type == AUTH_HTTPBASIC {
         http.stream.write_line(HTTP_SC_UNAUTHORIZED)?;
         http.stream.write_line("WWW-Authenticate: Basic realm=\"PeerCast Admin\"")?;
@@ -1417,6 +1478,8 @@ fn cmd_apply(ctx: &Ctx, http: &mut Http, query: &[u8], jump: &mut Vec<u8>) -> Re
             K::Preset => sm.settings().preset = op.str.clone(),
             K::AudioCodec => sm.settings().audio_codec = op.str.clone(),
             K::MaxTranscodes => sm.settings().max_transcodes = v as u32,
+            K::AuthFailLimit => sm.settings().auth_fail_limit = v as u32,
+            K::AuthLockSeconds => sm.settings().auth_lock_seconds = v as u32,
             K::PreferredTheme => sm.settings().preferred_theme = op.str.clone(),
             K::AccentColor => sm.settings().accent_color = op.str.clone(),
         }

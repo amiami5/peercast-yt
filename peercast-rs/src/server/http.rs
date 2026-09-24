@@ -23,6 +23,7 @@ pub const HTTP_SC_SWITCH: &str = "HTTP/1.0 101 Switch protocols";
 pub const HTTP_SC_BADGATEWAY: &str = "HTTP/1.0 502 Bad Gateway";
 pub const HTTP_SC_SERVERERROR: &str = "HTTP/1.0 500 Internal Server Error";
 pub const HTTP_SC_URITOOLONG: &str = "HTTP/1.0 414 URI Too Long";
+pub const HTTP_SC_TOOMANYREQUESTS: &str = "HTTP/1.0 429 Too Many Requests";
 
 pub const MIME_MP3: &str = "audio/mpeg";
 pub const MIME_XMP3: &str = "audio/x-mpeg";
@@ -197,6 +198,7 @@ pub fn status_message(code: i32) -> &'static str {
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        429 => "Too Many Requests",
         500 => "Internal Server Error",
         501 => "Not Implemented",
         502 => "Bad Gateway",
