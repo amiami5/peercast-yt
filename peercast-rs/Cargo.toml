@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 # 確認した最も古い Rust (Ubuntu などの配布版の rustc でもビルドできるようにする)
 rust-version = "1.70"
-description = "PeerCast YT の C++ コードを段階的に置き換える Rust 実装 (C++ から静的ライブラリとして呼ぶ)"
+description = "PeerCast YT のサーバー (Rust 版)"
 license = "GPL-2.0-or-later"
 publish = false
 
@@ -12,20 +12,13 @@ publish = false
 [dependencies]
 
 [features]
-# 入力元の rtmp:// を librtmp で読む (C++ 版の WITH_RTMP)
+# 入力元の rtmp:// を librtmp で読む
 rtmp = []
 
 [lib]
 name = "peercast_rs"
 path = "src/lib.rs"
-# staticlib: C++ 側にリンクする。rlib: Rust のテスト用。
-crate-type = ["staticlib", "rlib"]
 
-# extern "C" 関数からの unwind は未定義動作 (Rust 1.81 未満) なので、panic は常に abort にする。
-[profile.release]
-opt-level = 3
-overflow-checks = true
-panic = "abort"
-
-[profile.dev]
-panic = "abort"
+[[bin]]
+name = "peercast"
+path = "src/bin/peercast.rs"

@@ -1,0 +1,15 @@
+# PeerCast YT (Rust 版) のワークスペース。
+#
+#   cargo build --release    # build/target/release/ に peercast と rtmp-server ができる
+#
+# html などを含む配布用のディレクトリと、インストールは Makefile で行う (README.md を参照)。
+[workspace]
+members = ["peercast-rs", "rtmp-server-rs"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+# 万一の算術オーバーフローを黙って通さない (panic はそのスレッドの処理だけを終わらせる)
+overflow-checks = true
+lto = true
+strip = true

@@ -1,25 +1,49 @@
 # peercast-rs
 
-PeerCast YT の C++ コア (`core/common`) を段階的に置き換えていく Rust 実装です。
-Rust コード自体は普通のライブラリですが、`crate-type = ["staticlib"]` で C++ から
-呼べる静的ライブラリとしてもビルドされます。全体の計画は
-[`../docs/rust-migration.md`](../docs/rust-migration.md) を参照してください。
+PeerCast YT のサーバーの Rust 版です。もとは C++ のコア (`core/common` など) を段階的に移したもので、
+全体の記録は [`../docs/rust-migration.md`](../docs/rust-migration.md) にあります。C++ のコードは
+`develop-old` ブランチにあります。
 
 ## 構成
 
-* `src/utf8.rs`, `src/inspect.rs`, `src/cgi.rs`, `src/url.rs`, `src/entities.rs` — 本体。
-  `#![deny(unsafe_code)]` (ワークスペース全体、`ffi` モジュールを除く)。
-* `src/ffi.rs` — C ABI (`extern "C"`)。`unsafe` を使うのはここだけ。
-* `include/peercast_rs.h` — 上記に対応する C ヘッダー。
-* `../core/common/rustcore.cpp` — C++ 側の橋渡し。`cgi::escape` などの関数を、
-  `WITH_RUST_CORE` が定義されているときだけ Rust 呼び出しに差し替える。
-* `tests/differential/` — C++ 版と Rust 版に同じ入力を与えて出力を比べるテスト (下記)。
+* `src/bin/peercast.rs` — 実行ファイル (C++ 版の ui/linux/main.cpp)。引数、設定ファイルの場所
+  (XDG Base Directory)、シグナル、ログの書き出し。
+* `src/server/` — サーバーの状態、スレッド、ソケット: 接続 (`servent.rs`、`servent_http.rs`)、
+  チャンネルと配信元 (`channel.rs`、`sources.rs`、`chanmgr.rs`)、設定と管理 (`servmgr.rs`)、
+  テンプレートの変数と HTML (`html.rs`)、JSON-RPC (`jrpc_host.rs`)、コンソールのコマンド
+  (`commands.rs`) など。
+* `src/` の直下 — ネットワークからの入力を解釈する、状態を持たないモジュール: PCP (`pcp`)、HTTP
+  (`http`、`servhs`)、メディアの解析 (`media`)、JSON (`json`)、JSON-RPC (`jrpc`)、テンプレート
+  (`template`)、XML、URL、文字列処理など。
+
+`unsafe` を使うのは、OS の機能と OpenSSL・librtmp を C ABI で呼ぶ `server::os`、`server::tls`、
+`server::rtmp` だけです (`#![deny(unsafe_code)]`)。外部クレートは使いません。
 
 Rust は 1.70 以降でビルドできる (`Cargo.toml` の `rust-version`)。配布版の古い rustc でも通るように、
 新しい版で入った機能 (トレイトのアップキャストなど) は使わない。1.70、1.75、1.85 でビルドと単体テスト
 を確認した。
 
-## この段階で置き換えた関数
+## ビルドとテスト
+
+リポジトリの一番上の `Makefile` を使います (ルートの `README.md` の「Linuxでのビルド」)。
+Rust のコードだけなら、リポジトリのどこかで
+
+```sh
+cargo build --release          # build/target/release/peercast
+cargo build --release --features peercast-rs/rtmp   # rtmp:// の取得 (librtmp) を入れる
+cargo test --release
+```
+
+サーバーを実際に起動して試すテスト (中継、配信元の種類ごと、C++ 版との応答の比較) は
+[`tests/server/`](tests/server/) にあります。
+
+## 移行の記録 (C++ 版との違い)
+
+段階ごとに、何を移したか、C++ 版と比べて見つかった違いと、Rust 版でどう扱ったかの記録です。
+ここに出てくる `include/peercast_rs.h`、`src/ffi.rs`、`tests/differential/` (C++ 版と Rust 版に同じ入力を
+与えて出力を比べるテスト)、C++ のファイルは、`develop-old` ブランチにあります。
+
+### 段階1 で置き換えた関数
 
 | 関数 | 元の場所 |
 |---|---|
@@ -42,7 +66,7 @@ Rust は 1.70 以降でビルドできる (`Cargo.toml` の `rust-version`)。�
 | `GnuID::toStr`, `GnuID::fromStr`, `GnuID::encode` | `core/common/gnuid.cpp` (同上、純粋な部分のみ) |
 | `JISConverter::sjisToUnicode`, `JISConverter::eucToUnicode` | `core/common/jis.cpp` (段階1d) |
 
-## C++ 版との違い
+### C++ 版との違い
 
 比較の過程で、C++ 版に次のバグが見つかりました。Rust 版では直っています。
 
@@ -66,7 +90,7 @@ Rust は 1.70 以降でビルドできる (`Cargo.toml` の `rust-version`)。�
   (`%zz`, `%4` など)、C++ 版は `sscanf` の戻り値を確認せず、初期化していない変数の値を
   出力に混ぜていた。Rust 版は `%` をそのまま出力する。
 
-## 段階1c で追加したもの
+### 段階1c で追加したもの
 
 `md5::hexdigest` (RFC 1321 の MD5。`core/common/chanmgr.cpp` でリレー可否を決める認証
 トークンの生成に使われている) と、`GnuID` の `toStr`/`fromStr`/`encode` を移植した。
@@ -82,7 +106,7 @@ C++ 版との違いは見つからなかった (MD5、GnuID とも、既知の�
 `fromStr` が空白と符号を読む `strtoul` の動きを再現していなかったことがわかり、直した
 (段階 7a の節を参照)。
 
-## 段階1d で追加したもの
+### 段階1d で追加したもの
 
 `JISConverter::sjisToUnicode`/`eucToUnicode` (Shift_JIS・EUC-JPの1文字をUnicodeのコード
 ポイントにする、JIS X 0208 の94×94変換表を使う) を移植した。呼び出し元は `_string.cpp` の
@@ -94,7 +118,7 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
 実装し、`sjisToUnicode`/`eucToUnicode` それぞれ65536通り全数の差分テストで、C++版とビット単位
 で一致することを確認した (相違なし)。
 
-## C++ 版との違い (段階1b で追加で見つかったもの)
+### C++ 版との違い (段階1b で追加で見つかったもの)
 
 * **`str::split` (2引数・3引数の両方) が NUL バイトで壊れる**: `p = in.c_str()`、
   `sep = separator.c_str()` として `strstr`/`strlen` で処理しているため、C 文字列の終端規則に
@@ -113,7 +137,7 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
   区切りが実質空でも無限ループにはならない (空要素を `limit - 1` 個積んでから残り全体を返す。
   これは Rust 版でも C++ 版と同じ動き)。
 
-## 段階2 で追加したもの (`String`)
+### 段階2 で追加したもの (`String`)
 
 `core/common/_string.cpp` の `String` クラス (256 バイト固定長の文字列) のうち、入力を解釈する
 変換関数を `src/pcstring.rs` に移植した。
@@ -130,7 +154,7 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
 `sprintf` など) は C++ のまま残した。`String` はメンバー変数 `data` を直接読み書きする
 コードが全体に散らばっているので、クラスそのものは段階 9 まで C++ に残る。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **`ESC2ASCII` が、末尾の不完全な `%` で終端を越えて読む**: `"ab%"` や `"ab%4"` のように
   `%` の後ろに 2 文字ないと、C++ 版は終端の NUL とその次のバイトを 16 進数字として読み、
@@ -146,7 +170,7 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
 * `BASE642ASCII` は出力の長さを確かめずに `data` に書いていた。`convertTo` 経由では入力が
   255 バイト以下なので実害はないが、Rust 版は出力を `MAX_LEN - 1` バイトで切り詰める。
 
-## 段階3a で追加したもの (HTTP の行の解析)
+### 段階3a で追加したもの (HTTP の行の解析)
 
 `src/http.rs`。`HTTP` クラスはソケットから 1 行読む部分 (`readLine`) を C++ に残し、
 読んだ行の解釈だけを Rust にした。
@@ -159,7 +183,7 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
 | `HTTP::isCrossOriginRequest`, `HTTP::isLoopbackHostHeader` | CSRF・DNS リバインディング対策の判定 |
 | `cgi::parseHttpDate` | RFC 1123 / RFC 1036 / asctime 形式の日付 |
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **ステータスコードの桁あふれ**: C++ 版は `atoi` を使っており、`int` に収まらない数字の
   結果は未定義 (x86-64 の Linux では -1 になっていた。`long` の幅で CPU によっても違う)。
@@ -171,15 +195,15 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
   (`Sunday, 06-Nov-94 ...`) は、曜日の名前から "day" を除いた部分を 3 文字の略号と比べるので、
   Sunday, Monday, Friday 以外は解釈できない。
 
-### 見つけたが、この段階では直していないもの
+#### 見つけたが、この段階では直していないもの
 
 * `HTTP::getResponse` の `if (contentLengthStr.empty())` は条件が逆になっている。
   Content-Length があるときに接続が閉じるまで読み、ないときに 0 バイトだけ読む。
   ソケットを読む側の処理なので、段階 9 で扱う。
 
-## 段階3b で追加したもの (AMF0、chunked 転送)
+### 段階3b で追加したもの (AMF0、chunked 転送)
 
-### `Stream` から読む解析器の設計
+#### `Stream` から読む解析器の設計
 
 解析器が C++ の `Stream` から読む必要がある場合は、**Rust 側が C++ のコールバックを呼んで
 1 バイトずつ (または決まった長さを) 読む**形にした (`src/reader.rs`、C の型は `pcrs_reader`)。
@@ -196,7 +220,7 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
 メモリ上にそろったデータを解析するもの (段階 3a の HTTP の行など) は、これまでどおりバイト列を
 受け取る。
 
-### 置き換えたもの
+#### 置き換えたもの
 
 | 関数 | 内容 |
 |---|---|
@@ -205,7 +229,7 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
 
 `Dechunker::read` (読んだチャンクを溜めて返す部分) と `amf0::Value` (値の型そのもの) は C++ に残る。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **`readDouble` がリトルエンディアンの CPU でしか正しく動かなかった**: C++ 版は 8 バイトを
   逆順にメモリへ書いて `double` とみなしていた。Rust 版はどの CPU でも正しい値になる
@@ -214,7 +238,7 @@ C++版は `unsigned int` の引き算がラップアラウンドすることを�
   表示しており、0x80 以上の型が x86 では負の数、ARM の Linux では正の数になっていた。
   Rust 版は常に符号付き (x86 の C++ 版と同じ)。
 
-## 段階3c で追加したもの (XML)
+### 段階3c で追加したもの (XML)
 
 `src/xml.rs`。`XML::read` (字句解析)、`XML::Node::setAttributes` (属性の解析)、
 `XML::Node::getBinaryContent` (16 進の内容) を置き換えた。ノードの木は、Rust からの通知を受けて
@@ -224,7 +248,7 @@ C++ 側 (`rustbridge.h` の `XmlReader`) が組み立てる。XML はプレイ�
 PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄い読み出し口で、中身の解釈は
 `pcp.cpp` 側にある。段階 6 で PCP の解析をまとめて Rust にするときに一緒に扱う。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **`XML::read` の共有バッファ**: C++ 版はバッファを `static` で持っていて、別々のスレッドで
   同時に XML を読むと中身が混ざった。また、タグや内容の長さが上限 (100 KiB) ちょうどのとき、
@@ -238,31 +262,31 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
   名前は確かめない。属性値の閉じる `"` がないと、値の最後の 1 文字が落ちる。`findAttr` は属性名の
   前方一致で探す。
 
-## 段階3d で追加したもの (URL)
+### 段階3d で追加したもの (URL)
 
 `src/url.rs` に、`LUrlParser::clParseURL::ParseURL` と `GetPort` (`URI` クラスの中身) と、
 `URLSource::getSourceProtocol` (配信元の URL の先頭から入力元の種類を決める) を移した。
 `URLSource` のそれ以外 (配信元に接続して読み続ける処理) は段階 7〜9 で扱う。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **ポート番号の桁あふれ**: C++ 版は `atoi` を使っており、2^32 を超える数が一周して小さな値に
   なっていた (例えば `http://h:4294967376/` のポートが 80 になる。`long` の幅で CPU によっても違う)。
   Rust 版は範囲を超える数をすべて無効なポートとする (URI の既定のポートが使われる)。
 
-### 見つけたが、この段階では直していないもの
+#### 見つけたが、この段階では直していないもの
 
 * `URLSource::streamURL` は、プレイリストの中の URL を自分自身の再帰呼び出しで読むので、
   プレイリストを指すプレイリストが続くと再帰が深くなる。段階 7〜9 で扱う。
 
-## 段階4 で追加したもの (メディアコンテナ)
+### 段階4 で追加したもの (メディアコンテナ)
 
 `src/media/` に、配信の中身を解析する `ChannelStream` の派生クラス (`FLVStream`, `MKVStream`,
 `OGGStream`, `MP3Stream`, `MP4Stream`) を移した。FLV、Matroska/WebM、Ogg (Vorbis/Theora)、MP3
 (ICY メタデータを含む)、fragmented MP4 を扱う。NSV と Windows Media 系 (ASF, MMS, WMHTTP) は
 移植せずにサポートをやめた (ルートの `README.md` の「本家との違い」を参照)。
 
-### 設計
+#### 設計
 
 * 解析器は、入力の `Stream` とチャンネル (`Channel`) を、`Host` トレイト (C の型は
   `pcrs_media_host`) のメソッドだけで触る。C++ 側の実装 (`core/common/rustmedia.h` の
@@ -279,7 +303,7 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
 * MKV は `Stream::read(int)` (4096 バイトずつ `read(void*, int)` を呼ぶ) を Rust 側で行うので、
   大きな要素 (最大 256 MiB) でも、実際に届いた分しかメモリを確保しない (C++ 版と同じ)。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **初期化していないメモリ**: 読み出しが足りなかったときのバッファの残り (FLV のタグ、MP4 の
   ボックス、OGG のページ、MP3 のパケットなど) のように、C++ 版が初期化していないメモリを読んで
@@ -303,13 +327,13 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
   確かめていた。Rust 版は 16 KiB を超えた分は溜めずに長さだけ数える (エラーになることと、その
   メッセージは同じ)。
 
-## 段階5a で追加したもの (テンプレートエンジン)
+### 段階5a で追加したもの (テンプレートエンジン)
 
 `src/template/` に、HTML テンプレートエンジン (`core/common/template.cpp` の `Template`) の
 式の字句解析・構文解析・評価と、ディレクティブ (`{$式}` `{\式}` `{!式}` `{@if}` `{@elsif}`
 `{@else}` `{@foreach}` `{@let}` `{@loop}` `{@fragment}`) の読み出しを移した。
 
-### 設計
+#### 設計
 
 * 変数の値を持つスコープ (`servMgr` などの状態を返す `RootObjectScope`、`HTTPRequestScope`、
   `GenericScope`) と、`=~` `!~` の正規表現 (`Regexp`、中身は `std::regex`) は C++ のまま。
@@ -320,7 +344,7 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
   簡単な形式 (`src/template/value.rs`) で受け渡す。
 * 出力は Rust 側で溜め、呼び出しの終わりに (エラーのときも、それまでの分を) 書く。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **評価の順序**: C++ 版は `==` や関数の引数などの評価順序を決めていなかった (C++11 では
   未規定)。Rust 版は、x86-64 の GCC でビルドした C++ 版に合わせた (二項演算子 `==` `!=` `=~` は
@@ -337,7 +361,7 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
   CPU によって違った (x86 では -2^31 で 1 回も回らず、ARM では `int` の最大値で約 21 億回回る)。
   Rust 版は、どの CPU でも x86 と同じく -2^31 にする。
 
-## 段階5b で追加したもの (Accept-Language、コンソールの引数)
+### 段階5b で追加したもの (Accept-Language、コンソールの引数)
 
 * `src/public.rs`: `PublicController::acceptableLanguages` (Accept-Language ヘッダーの解釈) と
   `formatUptime`。q 値は glibc の `atof` と同じく読む (`src/strtod.rs`。16 進数、`inf`、
@@ -349,7 +373,7 @@ PCP の atom (`atom.h` の `AtomStream`) は、atom の頭を読むだけの薄�
 HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバーの管理 (`servMgr`、`chanMgr`) を
 呼ぶだけなので、それらを移す段階 7〜9 で扱う。テンプレートのスコープと正規表現も同じ。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **Accept-Language の並べ替え**: C++ 版は `std::sort` で q 値の大きい順に並べていた。
   タグが 16 個以下なら挿入ソートになるので、Rust 版は同じ挿入ソートを使う (結果は同じ)。
@@ -358,14 +382,14 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   Rust 版は個数によらず同じ挿入ソートで、同じ q 値は書かれた順になる。
 * NUL を含むヘッダーや引数は、段階1 の `str::split` の違い (C++ 版は NUL で切れる) のとおり。
 
-## 段階6a で追加したもの (PCP の受け取ったパケットの処理)
+### 段階6a で追加したもの (PCP の受け取ったパケットの処理)
 
 `src/pcp/` に、ほかのノードから受け取った PCP のパケットの処理 (`core/common/pcp.cpp` の
 `PCPStream::procAtom` 以下と、`chaninfo.cpp` の `ChanInfo::readInfoAtoms` / `readTrackAtoms`) を
 移した。`chan` (チャンネルの情報とストリームのパケット)、`host` (ヒット)、`root`、`bcst` (中継)、
 `push`、`helo`、`mesg`、`ok`、`quit`、`atom` を扱う。
 
-### 設計
+#### 設計
 
 * atom の読み書き (`AtomStream`) は、C++ 版と同じく 16KB のバッファ (`ChanPacket::data`) の上で
   行う (`src/pcp/atom.rs`)。バッファの終わりを越える読み出しは 0 を返して位置を進めない、4096
@@ -381,7 +405,7 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   `src/pcp/tests.rs` にある。`chaninfo_unittest.cpp` の URL のテスト 3 件は、Rust 版のビルドでは
   PCP のパケットとして受け取り、ヒットリストに入る値で確かめる。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **入れ子の深さ**: C++ 版は `atom` の子や `bcst` の中の atom の入れ子に上限がなく、`bcst` の
   入れ子ごとに 16KB のバッファをスタックに取るので、数百段の入れ子でスタックを使い果たして
@@ -399,7 +423,7 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   違った (x86 は符号付き、ARM の Linux は符号なし。例えば `ttl` が 0 の中継の扱いが変わる)。
   Rust 版は CPU によらず x86 と同じ符号付き。
 
-## 段階6b で追加したもの (PCP のハンドシェイクで受け取る atom)
+### 段階6b で追加したもの (PCP のハンドシェイクで受け取る atom)
 
 `src/pcp/handshake.rs` に、PCP のハンドシェイクで相手から受け取る atom の読み取りを移した。
 `Servent::handshakeIncomingPCP` の `helo`、`handshakeOutgoingPCP` の `oleh`、`pingHost` の `oleh`、
@@ -415,12 +439,12 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
 * `GeneralException` はコピーすると `msg` が古い `msgbuf` を指したままになる (C++ 版の例外クラスの
   性質)。`StreamException` は `std::make_exception_ptr` などでコピーせず、その場で作って投げる。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * エージェント名 (`agnt`) を読む `char arg[64]` の、まだ書いていない部分は C++ 版では初期化されて
   いなかった。Rust 版は 0 とみなす (6a の文字列と同じ)。
 
-## 段階6c で追加したもの (チャンネルのパケットのバッファ)
+### 段階6c で追加したもの (チャンネルのパケットのバッファ)
 
 `src/chanpacket.rs` に、チャンネルのパケットのバッファ (`core/common/chanpacket.cpp` の
 `ChanPacketBuffer`。最近の 64 個のパケットを輪の形に持つ) の処理を移した。パケットの書き込みと
@@ -433,14 +457,14 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   段階 7 でチャンネルを Rust に移すとき、同じ Rust のコードを Rust 側の記憶領域で使う。
 * `ChanPacket` の小さなメソッド (`init`、`writeRaw`、`operator=`) は C++ のまま。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * `lastPos` が `UINT_MAX` (4G 個目のパケット) のとき、C++ 版は `findPacket` などのループが
   終わらなかった。Rust 版は 1 周で終える。
 * 使われていない `copyFrom` は、C++ 版は書き先の番号を 64 で割らずに `packets[writePos++]` に
   書いていた (配列の外に書く)。Rust 版は 64 で割った位置に書く。
 
-## 段階7a で追加したもの (イエローページのチャンネル一覧)
+### 段階7a で追加したもの (イエローページのチャンネル一覧)
 
 `src/chandir.rs` に、イエローページの index.txt の解釈 (`core/common/chandir.cpp` の
 `ChannelEntry::textToChannelEntries` と `ChannelEntry` のコンストラクタ) と、`chatUrl` / `statsUrl`、
@@ -452,13 +476,13 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   HTTP)、`writeChannelVariable` などは C++ に残る。ほかのコード (`servmgr`、`jrpc`、`channel`) が
   直接触っているので、それらと一緒に段階 9 で移す。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * 数の欄 (直接・リレーの数、ビットレート、`direct`) が `int` に収まらないとき、C++ 版の `atoi` は
   x86-64 の Linux では一周した値になる (C 標準では未定義)。Rust 版は段階 3a と同じく範囲の端に丸める。
 * NUL を含む行は、段階 1 の `str::split` の違い (C++ 版は NUL で切れる) のとおり。
 
-### 段階 1c の `GnuID::fromStr` の修正
+#### 段階 1c の `GnuID::fromStr` の修正
 
 `GnuID::fromStr` は 2 文字ずつ `strtoul(buf, nullptr, 16)` で読む。`strtoul` は先頭の空白と符号を
 読むので、C++ 版は `" 7"` と `"+7"` を 7、`"-1"` を 0xFF と読む。段階 1c の Rust 版はこれを 0 と
@@ -466,7 +490,7 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
 欄の差分テストで見つけたので、C++ 版と同じにした。`diff_md5_gnuid` に 2 文字の組み合わせを全部
 試す比較を足した。
 
-## 段階7b で追加したもの (チャンネルの情報と、中継しているホストの一覧)
+### 段階7b で追加したもの (チャンネルの情報と、中継しているホストの一覧)
 
 `src/chaninfo.rs` に `ChanInfo` と `TrackInfo` (`core/common/chaninfo.cpp`)、`src/chanhit.rs` に
 `ChanHit` と `ChanHitList` (`core/common/chanhit.cpp`) の、状態を持たない部分を移した。
@@ -484,13 +508,13 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
 * `createChannelXML` などの XML と `getState` は、状態を書き出すだけなので、状態を持つクラスと一緒に
   段階 9 で扱う (段階 8 は入力の解釈と判断を移した)。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * atom をまとめて 1 回で書くので、書き先に途中までしか書けなかったとき、書けていた量が違う
   ことがある。書き先はソケットか 16KB のパケットで、書く量 (文字列は 1 つ 256 バイトまで) は
   パケットに収まるので、書き終えたときの中身は同じ。
 
-### C++ 版と同じにしたもの (直していない)
+#### C++ 版と同じにしたもの (直していない)
 
 * `getTypeFromMIME` は OGM と MP4 にならない (OGM の行は OGG と同じ MIME タイプを見ていて、MP4 の
   行がない)。
@@ -498,7 +522,7 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   選ばない。
 * `ChanHit::init` は `direct` を true にしたあと 0 にしている (結果は false)。
 
-## 段階7c で追加したもの (リレーツリーと帯域測定)
+### 段階7c で追加したもの (リレーツリーと帯域測定)
 
 * `src/hostgraph.rs`: `HostGraph` (`core/common/hostgraph.cpp`) のコンストラクターで、どのホストを
   どのホストの下に置くか (トラッカー、WAN の中継、LAN の中継の順に親を探す) を決める。C++ は
@@ -510,20 +534,20 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   (`URI`、LUrlParser) と、ダウンロード、POST、ロックは C++ 側。
 * `src/reader.rs` の `SliceReader` (バイト列から読む `Reader`) をテスト以外でも使えるようにした。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * `readInfo` でノードか属性が見つからなかったときの例外の文言 "non-null assertion failed on
   line N in file F" の N は、C++ 版では見つからなかった項目の行、Rust 版では橋渡しの行 (どの項目
   でも同じ)。
 * `isReady` は、状態が `kUntried` のときも `sys->getTime()` を呼ぶ (返り値は使わない)。
 
-### C++ 版と同じにしたもの (直していない)
+#### C++ 版と同じにしたもの (直していない)
 
 * `findAttr` は名前の先頭が一致すれば見つかったことにする (`port` で `port_open` も見つかる)。
   大文字小文字は問わない。
 * 最上位の要素が 2 つ以上ある文書では、最後のものだけが根になる (C++ 版は前の根を解放しない)。
 
-## 段階7d で追加したもの (チャンネルと ChanMgr の、スレッドやソケットに触らない部分)
+### 段階7d で追加したもの (チャンネルと ChanMgr の、スレッドやソケットに触らない部分)
 
 `src/channel.rs` に、`Channel` (`core/common/channel.cpp`) と `ChanMgr` (`chanmgr.cpp`) のうち
 次のものを移した。
@@ -542,7 +566,7 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
 ヒットリストの連結リストの管理 (`ChanMgr` の `find*`、`clearDeadHits` など) は、ソケットと
 スレッドと一緒に段階 9 で扱う。`createXML` と `getState` も段階 9 で扱う。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * `processMp3Metadata` は、受け取った文字列を書き換えない (C++ 版は区切りの `=` と `;` を NUL に
   書き換えていた)。呼び出し元 (`mp3.cpp`) はそのあと文字列を使わない。
@@ -556,7 +580,7 @@ HTTP の処理) は、入力を解釈せず、C++ のチャンネルやサーバ
   `readDelay` はファイルを流すときだけ使う。
 * `writeTrackerUpdateAtom` などは atom をまとめて 1 回で書く (段階 7b と同じ)。
 
-## 段階8a で追加したもの (JSON-RPC)
+### 段階8a で追加したもの (JSON-RPC)
 
 `src/json/` に nlohmann::json 3.7.3 (`core/common/json.hpp`) と同じふるまいの JSON を作り、`src/jrpc.rs` に
 JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
@@ -578,7 +602,7 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * gtest の `JrpcApiFixture` のうち、C++ 版の中身 (メソッドの表と `toPositionalArguments`) を直接
   使う 2 件は C++ 版のビルドでだけ動き、同じ内容のテストは `src/jrpc/tests.rs` にある。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **有限でない数**: `1e400` のように `double` に収まらない数を含む要求で、nlohmann は `out_of_range`
   (406) を投げる。C++ 版は `parse_error` しか捕まえていなかったので、例外がスレッドの一番上まで飛び、
@@ -590,7 +614,7 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
   なので、真偽値を受け付けない。32 ビットの CPU の C++ 版は受け付けていた。Rust 版は CPU によらず 64 ビット
   の CPU と同じ。
 
-### C++ 版と同じにしたもの (直していない)
+#### C++ 版と同じにしたもの (直していない)
 
 * `getLog` は、`from` が null でないときだけ `maxLines` が負かを確かめる (`from` が null なら、負の
   `maxLines` は大きな数になって全部返す)。
@@ -601,7 +625,7 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * `getYellowPages` の `uri` は `String::format` で作るので、254 バイトで切れる (文字の途中でも)。
 * 例外の文言 (`what()`) は C の文字列なので、メソッド名などに NUL があるとそこで切れる。
 
-## 段階8b で追加したもの (HTTP の要求の解釈と判断)
+### 段階8b で追加したもの (HTTP の要求の解釈と判断)
 
 `src/servhs.rs` に、HTTP の要求の処理 (`core/common/servhs.cpp` の `Servent::handshake*`) のうち、
 入力の解釈と判断を移した。
@@ -627,7 +651,7 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * 数の読み取り (`atoi`) は段階 3a の `http::atoi` を使い、`int` に収まらなければ端の値にする
   (C++ 版の glibc の `atoi` は `long` で読んで `int` に切り詰めるので、CPU で結果が違っていた)。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **`SOURCE` の行の読み方**: ICE/1.0 でない行に `/` がないと、C++ 版は行の先頭より前のメモリを NUL が
   見つかるまで後ろ向きに読み、そこに `/` があれば 1 つ前に NUL を書いていた (範囲外の読み書き)。
@@ -638,7 +662,7 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
   Rust 版は `int` の端の値にするので 413 (Request Entity Too Large)。`CMD_apply` の数の設定も、同じく
   端の値になる。
 
-### C++ 版と同じにしたもの (直していない)
+#### C++ 版と同じにしたもの (直していない)
 
 * `/admin.cgi` (ShoutCast の曲名の更新) は、`pass=` があるかだけを見て、パスワードの中身を確かめない。
 * `handshakeAuth` に渡す引数は `cmdLine` の中を指していて、`readHeaders` で書き換えられる。このため
@@ -650,7 +674,7 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * `String` に入れるものは、C++ 版と同じく NUL と 255 バイトで切れる (`String::append` は、収まらなければ
   何も足さない)。
 
-## 段階8c で追加したもの (公開ディレクトリとファイルの場所)
+### 段階8c で追加したもの (公開ディレクトリとファイルの場所)
 
 段階 8 の残り: `/public` と `/assets` の処理 (`core/common/public.cpp`、`assets.cpp`)、仮想パスから
 ファイルの場所を決めるもの (`mapper.cpp` の `FileSystemMapper`)、`HTTPRequest` の URL の分割。
@@ -670,13 +694,13 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * `getState` と `createXML` (状態の XML)、`CMD_dump_hitlists` の文字列は、状態を書き出すだけなので、
   状態を持つクラス (`Servent`、`ServMgr`、`ChanMgr` など) と一緒に段階 9 で扱う。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **隣のディレクトリへのトラバーサル**: C++ 版は、解決したパスの先頭が文書のディレクトリと一致するか
   だけを見ていたので、名前の先頭が同じ隣のディレクトリ (`.../public` に対する `.../public2`) を指す
   シンボリックリンクなどを通していた。Rust 版は、続きがパスの区切りであることも確かめる。
 
-## 段階9a で追加したもの (サーバーの土台)
+### 段階9a で追加したもの (サーバーの土台)
 
 段階 9 では、C++ に残っている状態とスレッドとソケットの部分を、Rust だけで動くサーバー
 (`src/server/`) として作り、最後に Linux のビルドの実行ファイルを切り替える (docs/rust-migration.md の
@@ -706,7 +730,7 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * libpeercast_rs.a に OpenSSL を呼ぶ部分が入ったので、これをリンクするもの (差分テスト) は OpenSSL も
   リンクする (C++ 版の本体は元から OpenSSL をリンクしている)。
 
-### C++ 版との違い
+#### C++ 版との違い
 
 * **応答の本体の長さ** (`HTTP::getResponse`): C++ 版は Content-Length の有無の条件が逆で、Content-Length
   があるときに接続が閉じるまで読み、ないときに 0 バイトだけ読んでいた。Rust 版は、あればその長さを、
@@ -725,89 +749,3 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
   の切り詰め、Rust 版は段階 3a と同じく端の値にする。
 * ログに書く文字列のうち、UTF-8 として正しくない部分は、C++ 版は行全体を `[XX]` の形にしていたが、Rust 版の
   書式付きのログ (`log_debug!` など) では置き換え文字になる (ログの中身だけの違い)。
-
-## 差分テスト
-
-```sh
-cd tests/differential
-make
-./diff                       # cgi/str の UTF-8・エスケープ系: 長さ0〜2バイト全網羅+乱数30万件+全コードポイント
-./diff --exhaustive3         # さらに長さ3バイトを全網羅 (1,677万通り、数十秒)
-./diff_strutil                # str.cpp のその他の関数: 乱数20万組 (既定)
-./diff_strutil --random 300000  # 比較件数780万件相当まで増やして実行
-./diff_md5_gnuid              # md5::hexdigest と GnuID: 乱数20万組 (既定)、fromStr の 2 文字の全通り
-./diff_jis                     # JISConverter: 65536通り全数 (sjis/euc 各1関数)
-./diff_string                  # String: 長さ0〜2全網羅+長さ3〜4を絞ったバイトで全通り+乱数30万件 (約980万件)
-./diff_http                    # HTTP の行の解析と parseHttpDate: 見本の変異+乱数 (約120万件)
-./diff_amf0_dechunk            # AMF0 と Dechunker: 生成した値の変異・切り詰め (約100万件)
-./diff_xml                     # XML: 見本の変異+乱数 (約40万件)
-./diff_url                     # URL: 短い入力の全通り+見本の変異+乱数 (約116万件)
-./diff_media                   # FLV/MKV/OGG/MP4/MP3: 生成した入力とその変異 (各2万件、引数で変更)
-./diff_template 20000 $(find ../../../ui/html -name "*.html")
-                             # テンプレート: UI の実際のテンプレート、生成したもの、その変異
-./diff_public                  # Accept-Language、formatUptime、コンソールの引数、FileSystemMapper、
-                               # MIMEType、振り分け、304、URL の分割 (約240万件)
-./diff_pcp                     # PCP の受け取ったパケット: 生成した atom の木とその変異 (10万件)
-./diff_pcp_hs                  # PCP のハンドシェイクの helo / oleh と readVersion (20万件)
-./diff_chanpacket               # ChanPacketBuffer: 操作の列 2 万本 (約290万回の比較)
-./diff_chandir                  # index.txt の解釈と一覧の URL・時間の文字列 (約120万件)
-./diff_chanhit                  # ChanInfo と ChanHit / ChanHitList: 乱数の一覧への操作 (約265万件)
-./diff_hostgraph_uptest         # HostGraph と帯域測定の yp4g.xml の読み取りなど (約70万件)
-./diff_channel                   # Channel と ChanMgr の移した部分: 乱数のチャンネルへの操作 (約40万件)
-./diff_jrpc                      # JSON-RPC: 乱数の状態への要求とその変異 10万件、メソッドを直接呼ぶもの 2.5万件、
-                                 # index.txt 2.5万件
-./diff_servhs                    # HTTP の要求の解釈と判断: 乱数の入力 (約220万件)
-./diff_regex                     # 正規表現: C++ 版が使う正規表現とそれらしい入力、乱数の正規表現 (約42万件)
-./diff_host                      # IP アドレス、ホストの文字列、フィルター (約110万件)
-```
-
-`diff_servhs` の C++ 版は、外から呼べるもの (`nextCGIarg`、`Servent::hasValidAuthToken` など) は
-コア一式の関数、`Servent` のメソッドの途中にあるものは servhs.cpp の元のコードを写したもの。
-`cgi::unescape` は段階 1 の既知の違いがあるので、写したものでは Rust 版を使う。
-
-`diff_http` のように、C++ 版をクラスごと呼びたい差分テストは、Rust を使わずにビルドした
-C++ のコア一式 (`cxxcore.a`、`make` が自動で作る) にリンクします。
-
-`diff_media` は、同じ入力と同じ状態の `Channel` で C++ 版と Rust 版の解析器を動かし、
-`Channel::newPacket` と `Channel::updateInfo` に渡ったもの (リンク時の `--wrap` で横取りする)、
-`sys->sleep` の呼び出し、例外、最後の `Channel` の状態を比べます。時刻は読むたびに進むので、
-時刻を読む回数と順序も比べることになります。C++ 版が初期化していないメモリを読む箇所を
-比べられるように、差分テストの C++ はスタックを 0 で初期化し (`-ftrivial-auto-var-init=zero`)、
-ヒープも 0 で埋めます (`diff_media.cpp` の `operator new`)。
-
-`diff_jrpc` は、同じ乱数の種から同じ状態 (チャンネル、サーバント、ヒットリスト、ログ、YP の一覧、
-設定、状態のファイル) を作り直して C++ 版と Rust 版に同じ要求を与え、応答、ログ、横取りした呼び出し
-(チャンネルを作る、配信元に接続する、情報を更新する、など)、あとの状態を比べます。`id` に乱数の JSON を
-入れて書き出しを比べ、`getState` が読む `inspect()` の結果も横取りして、構文解析の例外の文言も比べます。
-`DJ_STATS=1` を付けると、メソッドごとの応答の種類の数を表示します。同じ状態から、C++ 版の
-`PublicController::createChannelIndex` と Rust 版の index.txt (か例外) も比べます。
-
-`diff_public` の `FileSystemMapper` は、一時ディレクトリにファイルとシンボリックリンク (外や隣の
-ディレクトリを指すもの) を作り、乱数の仮想パスと言語で C++ 版と比べます。隣のディレクトリを通して
-しまう C++ 版の誤り (段階 8c) は、既知の違いとして数えます。
-
-`diff_pcp` は、同じパケットのバッファと同じ状態の `chanMgr`、`servMgr`、`PCPStream` で C++ 版の
-`procAtom` と Rust 版を動かし、ログ、中継、通知、ヒットの追加と削除、`Channel::updateInfo`
-(`--wrap` で横取りする) と、処理のあとのバッファ、ヒットリスト、チャンネルの状態などを比べます。
-C++ 版は深い入れ子で 8MB のスタックを使い果たすので、512MB のスタックのスレッドで動かします。
-C++ 版がバッファの終わりで空回りしたもの (ログが 10 万行を超えるか 0.2 秒を超えたもの) は、
-比べずに数えます。
-
-C++ 版の関数をそのままコンパイルしたもの (`WITH_RUST_CORE` を定義しない `cgi.cpp` / `str.cpp`) と、
-`libpeercast_rs.a` に、1 バイトずつ変えた入力を大量に与えて比較します。上に挙げた既知の違いは
-理由ごとに数えて表示し、それ以外の食い違いを「説明のつかない違い」として報告します
-(0 件であることを確認済み)。
-
-## 単体テスト
-
-```sh
-cargo test --release
-```
-
-C++ 版の既存の gtest (`tests/cgi_unittest.cpp`, `tests/str_unittest.cpp`) にある期待値は、
-`src/cgi.rs` と `src/utf8.rs` / `src/inspect.rs` のテストに移してあります。
-
-## ビルドへの組み込み
-
-`ui/linux/Makefile` から使われます。ルートの `README.md` の「Linuxでのビルド」を参照してください。
-CMake と `ui/mingui` は、この段階ではまだ対象にしていません (常に C++ 版を使います)。

@@ -2,7 +2,7 @@
 name = "rtmp-server"
 version = "0.1.0"
 edition = "2021"
-description = "PeerCast YT の rtmp-server (C++) の Rust 版。コマンドライン互換のドロップイン置き換え。"
+description = "PeerCast YT の rtmp-server (RTMP で配信を受け付けて PeerCast に流す)"
 license = "GPL-2.0-or-later"
 publish = false
 
@@ -16,9 +16,3 @@ path = "src/lib.rs"
 [[bin]]
 name = "rtmp-server"
 path = "src/main.rs"
-
-[profile.release]
-opt-level = 3
-overflow-checks = true   # 万一の算術オーバーフローを黙って通さず、セッションごと落とす
-lto = true
-strip = true

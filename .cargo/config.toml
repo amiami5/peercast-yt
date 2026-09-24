@@ -1,0 +1,3 @@
+# ビルドの出力はリポジトリの build/ の下に置く (.gitignore で無視している)
+[build]
+target-dir = "build/target"

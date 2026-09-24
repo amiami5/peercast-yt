@@ -1,10 +1,10 @@
-dist: xenial
-sudo: false
-language: cpp
-compiler: gcc
+dist: jammy
+language: rust
 addons:
   apt:
     packages:
-    - libgtest-dev
     - librtmp-dev
-script: make -C ui/linux WITH_RUST_RTMP=no && make -C ui/linux/tests && cd ui/linux/tests && ./test-all && cd ../../../bvt && cp -R ../ui/linux/peercast-yt . && ruby test-all.rb
+    - libssl-dev
+    - pkg-config
+    - ruby
+script: make check

@@ -806,7 +806,9 @@ fn stream_proc(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
         }
         let source = ch.st().source.clone();
         match source {
-            Some(src) => sources::stream(pc, ch, &src),
+            Some(src) => {
+                sys::catch_panic("Channel", || sources::stream(pc, ch, &src));
+            }
             None => crate::log_error!("Channel has no source"),
         }
         crate::log_info!("Channel stopped");

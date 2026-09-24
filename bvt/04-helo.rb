@@ -28,7 +28,7 @@ spawn_peercast
 oleh = helo('127.0.0.1:7144')
 
 fail 'oleh' unless oleh.id4 == 'oleh'
-fail 'agnt' unless oleh['agnt'] && oleh['agnt'].value =~ /\APeerCast\/0.1218 \(YT\d\d\)\z/
+fail 'agnt' unless oleh['agnt'] && oleh['agnt'].value =~ /\APeerCast\/0.1218 \(YT\d\d(-[a-z0-9]+)?\)\z/
 fail 'sid' unless oleh['sid']
 fail 'ver' unless oleh['ver'] && oleh['ver'].value == 1218
 fail 'rip' unless oleh['rip']

@@ -18,14 +18,14 @@ import time
 
 # リポジトリの一番上 (peercast-rs/tests/server の 3 つ上)
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-# ui/linux で make したときの配布用のディレクトリ (html などを使う)
-TEMPLATE = ROOT + '/ui/linux/peercast-yt'
+# make で作る配布用のディレクトリ (html などを使う)
+TEMPLATE = ROOT + '/build/peercast-yt'
 INI = ROOT + '/bvt/peercast.ini.master'
 # サーバーを起こすディレクトリ
 WORK = os.environ.get('PCYT_TEST_DIR', '/tmp/pcyt-servertest')
-RS = ROOT + '/peercast-rs/target/release/peercast'
-# make WITH_RUST_SERVER=no TARGET=peercast-cxx peercast-cxx で作る C++ 版
-CXX = ROOT + '/ui/linux/peercast-cxx'
+RS = ROOT + '/build/target/release/peercast'
+# C++ 版 (develop-old ブランチで ui/linux の make WITH_RUST_SERVER=no TARGET=peercast-cxx peercast-cxx で作ったもの)。環境変数 PCYT_CXX で変えられる
+CXX = os.environ.get('PCYT_CXX', ROOT + '/build/peercast-cxx')
 
 
 def setup(name, binary, port):

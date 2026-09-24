@@ -1,7 +1,7 @@
 # rtmp-server (Rust 版)
 
-PeerCast YT 付属の `rtmp-server` (C++, `../rtmp-server`) の Rust 移植です。
-コマンドラインも出力も同じなので、実行ファイルを差し替えるだけで使えます。
+PeerCast YT 付属の `rtmp-server` です。もとは C++ 版 (`develop-old` ブランチの `rtmp-server/`) の Rust 移植で、
+コマンドラインも出力も同じです。
 
     rtmp-server [-p PORT] URL...      # 既定のポートは 1935
 
@@ -10,29 +10,23 @@ PeerCast YT 付属の `rtmp-server` (C++, `../rtmp-server`) の Rust 移植で�
 
 PeerCast 本体との境界は今までと同じ (別プロセス + ループバック HTTP) で、FFI はありません。
 
-## ビルドと差し替え
+## ビルド
 
-`ui/linux` の Makefile では、これが既定のビルド対象です (ルートの README.md を参照)。
+リポジトリの一番上の Makefile が、`peercast` と一緒にビルドしてインストールします (ルートの README.md を参照)。
 
-    cd ui/linux
-    make                      # rtmp-server は Rust 版 (cargo が必要)
+    make                      # build/peercast-yt/ に peercast と rtmp-server ができる
     sudo make install         # /usr/local/bin に peercast と rtmp-server が入る
 
-C++ 版に戻すには `make WITH_RUST_RTMP=no` (切り替え時は先に `make clean`)。
-CMake と MSYS2 (`ui/mingui`) のビルドは、今のところ C++ 版のままです。
+単体でビルドする場合は `cargo build --release -p rtmp-server` (出力は `build/target/release/rtmp-server`)。
+PeerCast は自分の実行ファイルと同じディレクトリの `rtmp-server` を起動します。
 
-単体でビルドして差し替える場合:
-
-    cargo build --release
-    cp target/release/rtmp-server  <peercast の実行ファイルと同じディレクトリ>/rtmp-server
-
-Rust 1.75 以降 (1.75 で確認)。外部クレートには依存せず、ビルド中のネットワークアクセスも不要です。
-戻したいときは C++ 版のバイナリを置き直すだけです。
+Rust 1.70 以降 (1.70、1.75、1.85 で確認)。外部クレートには依存せず、ビルド中のネットワークアクセスも不要です。
 
 ## 検証
 
+下の表の C++ 版との比較は、C++ 版があったときに `tests/differential.py` (`develop-old` ブランチ) で行ったもの。
+
     cargo test --release                                   # 単体テスト + 結合テスト (23 件)
-    python3 tests/differential.py CPP_BIN RUST_BIN --fuzz 400   # C++ 版との出力比較
     python3 tests/robustness.py RUST_BIN                   # タイムアウト、出力先切断など
 
 | 項目 | 結果 |

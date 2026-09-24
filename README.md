@@ -7,7 +7,7 @@ PeerCast のフォークです。
 [plonk/peercast-yt](https://github.com/plonk/peercast-yt) をベースに、
 セキュリティ修正を加えたフォークです。本家は長く更新されていませんが、
 PeerCast はネットワークからの入力を扱うソフトなので、脆弱性の修正だけを行っています。
-新機能の追加はしません（技量的にできません）。主に Linux で使うことを想定しています。
+新機能の追加はしません。主に Linux で使うことを想定しています。
 
 ### 本家との違い
 
@@ -23,9 +23,6 @@ OBS などから RTMP で配信を受け付ける `rtmp-server` を、C++ から
 | エンコーダーが Shift_JIS などの非 UTF-8 文字列を送ってきた | 配信が切れる | 配信を続ける |
 | 出力先 (PeerCast 本体) に接続できない | プロセスごと異常終了する | その接続だけ切って待ち受けを続ける |
 | 巨大な未完了メッセージを大量に送りつけられた | 最大で約 1 GiB のメモリを確保する | 合計 64 MiB で打ち切る |
-
-Linux の `ui/linux` の Makefile では、これが既定です。C++ 版に戻すこともできます
-(→ [Linuxでのビルド](#linuxでのビルド))。
 
 **2. セキュリティ修正**
 
@@ -50,11 +47,16 @@ Linux の `ui/linux` の Makefile では、これが既定です。C++ 版に戻
 中身は解析せずにそのまま流れます。古い `peercast.ini` に `wmvProtocol` が残っていても、
 読み飛ばされるだけで問題ありません。
 
-**4. コアを少しずつ Rust に置き換えています**
+**4. PeerCast 本体も Rust で書き直しました**
 
-ネットワークからの入力を解釈する部分から順に、C++ のコアを Rust
-([`peercast-rs/`](peercast-rs/)) に置き換えています。計画と進み具合は
-[`docs/rust-migration.md`](docs/rust-migration.md) にあります。
+C++ のコアを段階的に Rust ([`peercast-rs/`](peercast-rs/)) に移し、このブランチ (`develop-rs`) では
+C++ のコードをすべて取り除きました。ネットワークとのやりとりや設定ファイル、HTML の管理画面、
+JSON-RPC などのふるまいは C++ 版と同じにしてあります (C++ 版と Rust 版に同じ要求を送って応答を
+比べて確かめました)。移行の記録は [`docs/rust-migration.md`](docs/rust-migration.md)、移行中に
+見つかった C++ 版の不具合は [`docs/cpp-known-issues.md`](docs/cpp-known-issues.md) にあります。
+
+このブランチは Linux 用です。Windows 版 (GUI) と macOS 版は C++ で書かれていたので、ここにはありません。
+C++ 版のコードは `develop-old` ブランチにあります。
 
 個々の変更は `git log` で確認できます。ライセンスは本家と同じ GPL です。
 
@@ -89,60 +91,55 @@ Linux の `ui/linux` の Makefile では、これが既定です。C++ 版に戻
 
 # Linuxでのビルド
 
-`ui/linux` の Makefile でビルドします (CMake でのビルドは [README_CMAKE.md](README_CMAKE.md))。
+リポジトリの一番上の Makefile でビルドします。中では `cargo` で Rust のコードをビルドし、Ruby で
+HTML を作ります。
 
 ## 1. 必要なものを入れる
 
 Ubuntu / Debian なら、次の 1 行で揃います。
 
 ```sh
-sudo apt install build-essential pkg-config libssl-dev librtmp-dev ruby python3 cargo
+sudo apt install cargo pkg-config libssl-dev librtmp-dev ruby python3
 ```
 
 | パッケージ | 何に使うか | 備考 |
 |---|---|---|
-| `build-essential` | C++ コンパイラ | C++11 対応なら何でも可 (GCC 4.9 以降、Clang 3.4 以降) |
+| `cargo` | Rust のコンパイラとビルド | Rust 1.70 以降 (1.70、1.75、1.85 で確認)。`rustup` で入れてもよい |
 | `pkg-config` `libssl-dev` | TLS (OpenSSL) | |
-| `librtmp-dev` | RTMP fetch (他サーバーからの取得) | 不要なら `WITH_RTMP = no` にする |
-| `ruby` | ビルド時の HTML 生成 | |
+| `librtmp-dev` | RTMP fetch (他サーバーからの取得) | 不要なら `make WITH_RTMP=no` |
+| `ruby` | ビルド時の HTML 生成と、bvt (テスト) | |
 | `python3` | 実行時の CGI スクリプト | |
-| `cargo` | RTMP 受信サーバー (Rust 版) のビルド | Rust 1.75 で確認。C++ 版でよければ不要 |
-| `libgtest-dev` | 単体テスト | テストを動かす場合だけ |
 
-`cargo` は `rustup` で入れてもかまいません。
+外部のクレート (Rust のライブラリ) は使っていないので、ビルド中にネットワークからは何も取ってきません。
 
 ## 2. ビルドしてインストールする
 
 ```sh
 git clone https://github.com/amiami5/peercast-yt.git
-cd peercast-yt/ui/linux
+cd peercast-yt
 make
 sudo make install
 ```
 
 * `make` は**一般ユーザー**で実行し、`sudo` は `make install` だけにしてください。
   (`rustup` で入れた cargo は `sudo` 環境では見つからず、ビルドに失敗します。)
+* `make` で `build/peercast-yt/` に、実行ファイル (`peercast`、`rtmp-server`) と HTML などをまとめた
+  ものができます。インストールせずに `cd build/peercast-yt && ./peercast -P .` で動かすこともできます。
 * インストール先は `/usr/local` です。変えるには `sudo make install PREFIX=/opt/peercast` のようにします。
   `peercast` と `rtmp-server` は `bin/` に一緒に入ります。PeerCast は、自分の実行ファイルと同じ
   ディレクトリにある `rtmp-server` を起動するので、別々の場所に置かないでください。
-
-### RTMP 受信サーバーを C++ 版にする
-
-既定では Rust 版の `rtmp-server` がビルドされます。cargo が使えない環境などでは、C++ 版を選べます。
-
-```sh
-make WITH_RUST_RTMP=no
-```
-
-毎回指定したくないときは、`ui/linux/Makefile.local` に `WITH_RUST_RTMP = no` と書いておきます。
-Rust 版と C++ 版を切り替えるときは、先に `make clean` してください。
+  消すときは `sudo make uninstall` です。
+* ほかに `make dist` (tar.gz)、`make appimage`、`make clean` があります。変数は `Makefile.local` に
+  書いておくこともできます。
+* Rust のコードだけなら `cargo build --release` でもビルドできます (出力は `build/target/release/`)。
 
 ## 3. テスト (任意)
 
 ```sh
-cd ui/linux/tests && make && ./test-all      # PeerCast 本体の単体テスト
-cd rtmp-server-rs && cargo test --release    # Rust 版 rtmp-server のテスト
+make check    # Rust の単体テストと、実際に起動して試す bvt
 ```
+
+中継や配信元の種類ごとの確認などは [`peercast-rs/tests/server/`](peercast-rs/tests/server/) にあります。
 
 # 実行
 
@@ -156,6 +153,5 @@ RTMP をサポートするストリーミングサーバーからストリーム
 チャンネルを作成したい場合、PeerCast YT が RTMP fetch サポート付きでビ
 ルドされている必要があります。
 
-Linux (`ui/linux`) では既定でオンです (`Makefile` の先頭の `WITH_RTMP = yes`)。
-`librtmp` をリンクする必要があるので、インストールしておいてください。
-使わない場合は `WITH_RTMP = no` にしてビルドします。
+既定でオンです (`librtmp` をリンクするので、インストールしておいてください)。
+使わない場合は `make WITH_RTMP=no` でビルドします。

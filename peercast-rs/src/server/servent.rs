@@ -417,7 +417,7 @@ fn spawn(pc: &Arc<Peercast>, sv: &Arc<Servent>, name: &str, sock: Option<ClientS
     let sv2 = sv.clone();
     sys::start_thread(&sv.thread, name, move || {
         let mut c = Conn { pc: &pc2, sv: &sv2, sock };
-        f(&mut c);
+        sys::catch_panic("Servent", || f(&mut c));
         if let Some(mut s) = c.sock.take() {
             s.close();
         }
@@ -445,7 +445,7 @@ pub fn init_server(pc: &Arc<Peercast>, sv: &Arc<Servent>, h: Host) -> bool {
     let pc2 = pc.clone();
     let sv2 = sv.clone();
     let ok = sys::start_thread(&sv.thread, "LISTEN", move || {
-        server_proc(&pc2, &sv2, listener);
+        sys::catch_panic("Server", || server_proc(&pc2, &sv2, listener));
         sv2.kill();
     });
     if !ok {

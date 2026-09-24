@@ -138,6 +138,25 @@ impl ThreadFlag {
     }
 }
 
+/// `f` を呼び、panic したら捕まえてログに書く (C++ 版のスレッドが例外を捕まえてログに書いていたのと
+/// 同じく、そのスレッドの処理だけを終わらせてサーバーは続ける)。panic したら `None`。
+pub fn catch_panic<R>(what: &str, f: impl FnOnce() -> R) -> Option<R> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown".to_string()
+            };
+            crate::log_error!("{}: internal error (panic): {}", what, msg);
+            None
+        }
+    }
+}
+
 /// `Sys::startThread`: 旗を立ててスレッドを始める。始められなければ false。
 pub fn start_thread<F>(flag: &ThreadFlag, name: &str, f: F) -> bool
 where
@@ -145,7 +164,10 @@ where
 {
     flag.set_active(true);
     let name: String = name.chars().take(15).collect();
-    match std::thread::Builder::new().name(name).spawn(f) {
+    let what = name.clone();
+    match std::thread::Builder::new().name(name).spawn(move || {
+        catch_panic(&what, f);
+    }) {
         Ok(_) => true,
         Err(_) => {
             crate::log_error!("Error creating thread");
