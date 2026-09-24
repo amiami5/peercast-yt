@@ -214,9 +214,48 @@ pub fn is_safe_local_path(path: &[u8]) -> bool {
     !path.iter().any(|&c| c < 0x20 || c == 0x7f)
 }
 
+/// 他人から届いた URL (コンタクト URL など) を画面のリンクにするとき用。`http://` か `https://` で
+/// 始まるものはそのまま、それ以外 (`javascript:` や `data:` など) は空にする。ブラウザーは前後の空白と
+/// 制御文字、途中のタブと改行を無視するので、それらを除いてから見る。
+pub fn link_url(url: &[u8]) -> &[u8] {
+    let trimmed = match url.iter().position(|&c| c > 0x20) {
+        Some(i) => &url[i..],
+        None => return b"",
+    };
+    let head: Vec<u8> = trimmed.iter().filter(|&&c| !matches!(c, b'\t' | b'\n' | b'\r')).take(8).map(|c| c.to_ascii_lowercase()).collect();
+    if head.starts_with(b"http://") || head.starts_with(b"https://") {
+        url
+    } else {
+        b""
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_url_allows_only_http() {
+        for ok in [&b"http://a.example/"[..], b"https://a.example/x?y=1", b"HTTPS://A.EXAMPLE/", b" http://a/", b"ht\ttp://a/"] {
+            assert_eq!(link_url(ok), ok, "{:?}", String::from_utf8_lossy(ok));
+        }
+        for ng in [
+            &b"javascript:alert(1)"[..],
+            b"JavaScript:alert(1)",
+            b" \x01javascript:alert(1)",
+            b"java\tscript:alert(1)",
+            b"java\nscript:alert(1)",
+            b"data:text/html,<script>alert(1)</script>",
+            b"vbscript:x",
+            b"www.example.com",
+            b"//evil.example/",
+            b"http:/a",
+            b"",
+            b"   ",
+        ] {
+            assert_eq!(link_url(ng), b"", "{:?}", String::from_utf8_lossy(ng));
+        }
+    }
 
     fn all_bytes() -> Vec<u8> {
         (0..=255u8).collect()

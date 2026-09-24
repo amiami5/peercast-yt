@@ -707,10 +707,11 @@ impl Channel {
                     ("artist", uni(&info.track.artist)),
                     ("album", uni(&info.track.album)),
                     ("genre", uni(&info.track.genre)),
-                    ("contactURL", uni(&info.track.contact)),
+                    ("contactURL", s(crate::cgi::link_url(&info.track.contact.converted(StrType::Unicode)))),
                 ]),
             ),
-            ("contactURL", s(&info.url.data)),
+            // 他人から届く値なので、`javascript:` などはリンクにしない
+            ("contactURL", s(crate::cgi::link_url(&info.url.data))),
             ("streamPos", s(crate::strutil::group_digits(stream_pos.to_string().as_bytes(), b","))),
             ("sourceType", s(self.src_type_str())),
             ("sourceProtocol", s(ci::protocol_str(info.src_protocol))),

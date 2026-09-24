@@ -71,6 +71,26 @@ fn json_at<'a>(v: &'a Json, path: &[&str]) -> Option<&'a Json> {
     Some(cur)
 }
 
+/// `path` の文字列が `http://` / `https://` でなければ空にする (`cgi::link_url`)。コンタクト URL は
+/// 他人から届く値で、公開ページではリンクになるので、`javascript:` などを残さない
+fn json_sanitize_link(v: &mut Json, path: &[&str]) {
+    let mut cur = v;
+    for p in path {
+        cur = match cur {
+            Json::Object(o) => match o.get_mut(p.as_bytes()) {
+                Some(c) => c,
+                None => return,
+            },
+            _ => return,
+        };
+    }
+    if let Json::Str(s) = cur {
+        if crate::cgi::link_url(s).is_empty() {
+            s.clear();
+        }
+    }
+}
+
 /// json の数の比較 (`a < b`)
 fn json_num(v: Option<&Json>) -> f64 {
     match v {
@@ -149,8 +169,17 @@ pub fn public_controller(pc: &Arc<Peercast>, req: &Request) -> Result<Response> 
                             .partial_cmp(&json_num(json_at(b, &["status", "totalDirects"])))
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
+                    for c in &mut broadcasting {
+                        json_sanitize_link(c, &["info", "url"]);
+                        json_sanitize_link(c, &["track", "url"]);
+                    }
                     locals.insert(b"broadcastingChannels".to_vec(), json_to_value(&Json::Array(broadcasting)));
-                    let found = super::jrpc_host::invoke(pc, "getChannelsFound").map_err(|e| Error::general(String::from_utf8_lossy(&e).into_owned()))?;
+                    let mut found = super::jrpc_host::invoke(pc, "getChannelsFound").map_err(|e| Error::general(String::from_utf8_lossy(&e).into_owned()))?;
+                    if let Json::Array(a) = &mut found {
+                        for c in a {
+                            json_sanitize_link(c, &["url"]);
+                        }
+                    }
                     locals.insert(b"channelsFound".to_vec(), json_to_value(&found));
                     let mut t = Template::new(pc, data, &req.query_string);
                     t.prepend_scope(super::html::root_scope(pc));
@@ -221,4 +250,24 @@ pub fn assets_controller(pc: &Arc<Peercast>, req: &Request) -> Result<Response> 
         h.set(b"Last-Modified", rfc1123_time(last_modified).as_bytes());
     }
     Ok(Response::ok(h, body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_link() {
+        let ch = |url: &[u8]| Json::object([("info", Json::object([("url", Json::str(url)), ("name", Json::str(b"n"))]))]);
+        for (url, want) in [(&b"javascript:alert(1)"[..], &b""[..]), (b"http://a.example/", b"http://a.example/")] {
+            let mut c = ch(url);
+            json_sanitize_link(&mut c, &["info", "url"]);
+            assert_eq!(json_at(&c, &["info", "url"]), Some(&Json::str(want)));
+            assert_eq!(json_at(&c, &["info", "name"]), Some(&Json::str(b"n")));
+        }
+        // 欄がなければ何もしない
+        let mut c = Json::object([("info", Json::Null)]);
+        json_sanitize_link(&mut c, &["info", "url"]);
+        assert_eq!(c, Json::object([("info", Json::Null)]));
+    }
 }
