@@ -300,7 +300,9 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                 }
                 http.read_headers()?;
                 handshake_flv(ctx, http)
-            } else if handshake_auth(ctx, http, fn_, false)? {
+            } else if handshake_auth(ctx, http, fn_, true)? {
+                // 掲示板ビューワーは管理画面からしか呼ばれない。post.cgi はこの PeerCast の IP から
+                // 掲示板へ書き込むので、ほかのサイトのページからの要求 (CSRF) は断る
                 handshake_bbs(http)
             } else {
                 Ok(())
