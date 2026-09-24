@@ -178,6 +178,15 @@ pub fn source_protocol(url: &[u8]) -> (SourceProtocol, usize) {
     (SourceProtocol::File, 0)
 }
 
+/// ネットワークから受け取った入力元の URL (中継元のリダイレクト先や、HTTP で取ったプレイリストの
+/// 中身) として使ってよいか。`http://`、`pcp://`、`rtmp://` で始まるものだけ。`pipe:` (外部の
+/// プログラムを起こす) と、ファイル (`file://` やスキームのないもの) は、管理者が入力した URL に限る。
+pub fn is_remote_safe_source(url: &[u8]) -> bool {
+    let url = until_nul(url);
+    let (proto, n) = source_protocol(url);
+    n > 0 && matches!(proto, SourceProtocol::Http | SourceProtocol::Pcp | SourceProtocol::Rtmp)
+}
+
 /// `http://` または `https://` で始まるか (スキームの大文字小文字は区別しない)。
 pub fn is_http_url(url: &[u8]) -> bool {
     let starts_with_ignore_case = |prefix: &[u8]| {
@@ -263,5 +272,25 @@ mod tests {
         assert_eq!(source_protocol(b"file:///tmp/a"), (SourceProtocol::File, 7));
         // mms:// はサポートをやめたので、ファイル名として扱う (読み飛ばさない)
         assert_eq!(source_protocol(b"mms://host/x"), (SourceProtocol::File, 0));
+    }
+
+    #[test]
+    fn remote_safe_sources() {
+        for u in [&b"http://host/x"[..], b"HTTP://host", b"pcp://host:7144/id", b"rtmp://host/app"] {
+            assert!(is_remote_safe_source(u), "{}", String::from_utf8_lossy(u));
+        }
+        for u in [
+            &b"pipe:sh -c id"[..],
+            b"PIPE:id",
+            b"file:///etc/passwd",
+            b"/etc/passwd",
+            b"relative/path",
+            b"",
+            b"https://host/x", // 入力元としては未対応 (ファイル扱いになる)
+            b"mms://host/x",
+            b"\0http://host/",
+        ] {
+            assert!(!is_remote_safe_source(u), "{}", String::from_utf8_lossy(u));
+        }
     }
 }

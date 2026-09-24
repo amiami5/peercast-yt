@@ -857,10 +857,12 @@ fn source_protocol(url: &[u8]) -> (i32, &[u8]) {
 fn url_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>, base: &[u8]) {
     let mut url: Vec<u8> = Vec::new();
     while ch.thread.active() && !pc.is_quitting() {
-        if url.is_empty() {
+        // 管理者が入力した URL だけを信じる。返ってきたのはリダイレクト先 (中継元が書いたもの)
+        let trusted = url.is_empty();
+        if trusted {
             url = base.to_vec();
         }
-        url = stream_url(pc, ch, &url, 0);
+        url = stream_url(pc, ch, &url, 0, trusted);
     }
 }
 
@@ -889,8 +891,13 @@ impl Input {
 /// プレイリストの入れ子の上限 (C++ 版には上限がなく、プレイリストを指すプレイリストで再帰が深くなった)
 const MAX_PLAYLIST_DEPTH: i32 = 8;
 
-/// `URLSource::streamURL`: 次に読む URL (リダイレクト先) を返す
-fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32) -> Vec<u8> {
+/// `URLSource::streamURL`: 次に読む URL (リダイレクト先) を返す。
+///
+/// `trusted` は、URL が管理者の入力したものか (ローカルのプレイリストの中身を含む)。そうでない
+/// (リダイレクト先や HTTP で取ったプレイリストの中身) なら、`pipe:` やファイルを指す URL で
+/// 外部のプログラムを起こしたりローカルのファイルを読んだりしないよう、ネットワークの URL だけを
+/// 受け付ける (C++ 版は区別しなかった)。
+fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32, trusted: bool) -> Vec<u8> {
     let mut next_url = Vec::new();
     if pc.is_quitting() || !ch.thread.active() {
         return next_url;
@@ -900,6 +907,9 @@ fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32) -> 
     crate::log_info!("Fetch URL={}", String::from_utf8_lossy(url));
 
     let r: Result<()> = (|| {
+        if !trusted && !crate::url::is_remote_safe_source(url) {
+            return Err(Error::stream("Refusing a non-network URL given by the source"));
+        }
         let (proto, file_name) = source_protocol(url);
         {
             let mut st = ch.st();
@@ -1041,6 +1051,10 @@ fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32) -> 
             set_src_stat(ch, None);
             let mut url_num = 0usize;
             let mut u: Vec<u8> = Vec::new();
+            // 中身を信じてよいのは、管理者が入力した URL のローカルのプレイリストだけ。
+            // HTTP で取ったものは中継元が書いたもの
+            let entries_trusted = trusted && proto == ci::SP_FILE;
+            let mut u_trusted = false;
             crate::log_info!("Playlist: {} URLs", pl.urls.len());
             if depth >= MAX_PLAYLIST_DEPTH {
                 return Err(Error::stream("Playlist nesting too deep"));
@@ -1049,8 +1063,11 @@ fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32) -> 
                 if u.is_empty() {
                     u = pl.urls[url_num % pl.urls.len()].clone();
                     url_num += 1;
+                    u_trusted = entries_trusted;
                 }
-                u = stream_url(pc, ch, &u, depth + 1);
+                u = stream_url(pc, ch, &u, depth + 1, u_trusted);
+                // 返ってきたのはリダイレクト先 (中継元が書いたもの)
+                u_trusted = false;
             }
         } else {
             // 配信元が ID を送ってこなければ、自分で作る (最初の配信)
