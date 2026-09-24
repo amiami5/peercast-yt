@@ -638,6 +638,53 @@ fn handshake_fetch(pc: &Arc<Peercast>, ch: &Channel, sock: &mut ClientSocket) ->
     Ok(0)
 }
 
+/// 入力元がすぐに終わったときに、つなぎ直すまで待つ時間を決める (Rust 版で足した)。
+///
+/// C++ 版は、入力元がエラーなしですぐに終わると待たずにつなぎ直した。このため、すぐに終わる
+/// 入力元 (中身のない応答、自分自身へのリダイレクト、すぐに終わる外部のプログラム、つないで
+/// すぐに切るノードなど) で、接続やプログラムの起動を休みなく繰り返した。
+/// すぐに (`QUICK_MS` 未満で) 終わるのが続くと、2 回目から 1 秒、2 秒、4 秒と延ばす (最大 30 秒)。
+/// 1 回目は待たないので、1 回のリダイレクトなどは今までと同じ。長く続いたあとに終わったなら戻す。
+#[derive(Debug, Default)]
+struct RetryDelay {
+    quick_ends: u32,
+}
+
+impl RetryDelay {
+    const QUICK_MS: u128 = 10_000;
+    const MAX_MS: u32 = 30_000;
+
+    /// 入力が `elapsed_ms` のあいだ続いて終わったとき、次につなぐまで待つ時間 (ms)
+    fn next(&mut self, elapsed_ms: u128) -> u32 {
+        if elapsed_ms >= Self::QUICK_MS {
+            self.quick_ends = 0;
+            return 0;
+        }
+        self.quick_ends = self.quick_ends.saturating_add(1);
+        match self.quick_ends {
+            1 => 0,
+            n => (1000u32 << (n - 2).min(5)).min(Self::MAX_MS),
+        }
+    }
+
+    /// `start` から続いた入力が終わったあと、決めた時間だけ待つ。`stop` が true になったらやめる
+    fn wait(&mut self, start: std::time::Instant, stop: impl Fn() -> bool) {
+        let ms = self.next(start.elapsed().as_millis());
+        if ms == 0 {
+            return;
+        }
+        crate::log_info!("Channel source ended quickly; retrying in {} sec", ms / 1000);
+        let end = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+        while !stop() {
+            let now = std::time::Instant::now();
+            if now >= end {
+                break;
+            }
+            sys::sleep((end - now).as_millis().min(200) as u32);
+        }
+    }
+}
+
 /// `PeercastSource::stream`: ほかのノードから中継する
 fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
     if !pc.servmgr.settings().server_host.ip.is_global() {
@@ -651,6 +698,7 @@ fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
     }
 
     let mut num_yp_tries = 0;
+    let mut retry = RetryDelay::default();
     while ch.thread.active() {
         ch.st().source_host = super::chanhit::ChanHit::new();
         ch.set_status(pc, chn::S_SEARCHING);
@@ -766,6 +814,7 @@ fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
         };
         let mut error = -1;
         let mut source: Option<SourceStream> = None;
+        let started = std::time::Instant::now();
         let r: Result<()> = (|| {
             ch.set_status(pc, chn::S_CONNECTING);
             if sock.is_none() {
@@ -790,11 +839,14 @@ fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
             crate::log_info!("Channel closed normally");
             Ok(())
         })();
-        if let Err(e) = r {
+        // 同じ相手にまたつなぐか (dead_hit にしなかった)。そうでなければ次の候補を待たずに探す
+        let mut retry_same = true;
+        if let Err(e) = &r {
             ch.set_status(pc, chn::S_ERROR);
             crate::log_error!("Channel to {} {} : {}", ipstr, ty, e);
             if !sh.tracker || (error != 503 && sh.tracker) {
                 pc.chanmgr.dead_hit(&sh);
+                retry_same = false;
             }
         }
 
@@ -837,6 +889,14 @@ fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
             sys::sleep(200);
         }
         sys::sleep_idle();
+        if retry_same {
+            // 再接続 (bump) やプッシュの接続が来たら、すぐにつなぐ
+            retry.wait(started, || {
+                !ch.thread.active()
+                    || ch.push_sock.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+                    || ch.st().designated_host.host.ip.is_set()
+            });
+        }
     }
 }
 
@@ -856,13 +916,16 @@ fn source_protocol(url: &[u8]) -> (i32, &[u8]) {
 /// `URLSource::stream`
 fn url_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>, base: &[u8]) {
     let mut url: Vec<u8> = Vec::new();
+    let mut retry = RetryDelay::default();
     while ch.thread.active() && !pc.is_quitting() {
         // 管理者が入力した URL だけを信じる。返ってきたのはリダイレクト先 (中継元が書いたもの)
         let trusted = url.is_empty();
         if trusted {
             url = base.to_vec();
         }
+        let started = std::time::Instant::now();
         url = stream_url(pc, ch, &url, 0, trusted);
+        retry.wait(started, || !ch.thread.active() || pc.is_quitting());
     }
 }
 
@@ -1059,15 +1122,18 @@ fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32, tru
             if depth >= MAX_PLAYLIST_DEPTH {
                 return Err(Error::stream("Playlist nesting too deep"));
             }
+            let mut retry = RetryDelay::default();
             while ch.thread.active() && !pl.urls.is_empty() && !pc.is_quitting() {
                 if u.is_empty() {
                     u = pl.urls[url_num % pl.urls.len()].clone();
                     url_num += 1;
                     u_trusted = entries_trusted;
                 }
+                let started = std::time::Instant::now();
                 u = stream_url(pc, ch, &u, depth + 1, u_trusted);
                 // 返ってきたのはリダイレクト先 (中継元が書いたもの)
                 u_trusted = false;
+                retry.wait(started, || !ch.thread.active() || pc.is_quitting());
             }
         } else {
             // 配信元が ID を送ってこなければ、自分で作る (最初の配信)
@@ -1109,3 +1175,32 @@ fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32, tru
 
 #[allow(dead_code)]
 fn _unused(_: ChanInfo) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_delay() {
+        let mut r = RetryDelay::default();
+        // すぐに終わるのが続くと、2 回目から 1、2、4、8、16 秒、そのあとは 30 秒
+        let waits: Vec<u32> = (0..9).map(|_| r.next(50)).collect();
+        assert_eq!(waits, [0, 1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+        // 長く続いたあとに終わったら待たず、次にすぐに終わっても 1 回目の扱い
+        assert_eq!(r.next(RetryDelay::QUICK_MS), 0);
+        assert_eq!(r.next(9_999), 0);
+        assert_eq!(r.next(0), 1000);
+        // 何度続いても桁あふれしない
+        r.quick_ends = u32::MAX - 1;
+        assert_eq!((r.next(0), r.next(0)), (30000, 30000));
+    }
+
+    #[test]
+    fn retry_wait_stops() {
+        let mut r = RetryDelay::default();
+        r.quick_ends = 5;
+        let t = std::time::Instant::now();
+        r.wait(t, || true);
+        assert!(t.elapsed().as_millis() < 1000);
+    }
+}
