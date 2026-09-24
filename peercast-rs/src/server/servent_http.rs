@@ -298,9 +298,9 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                     return Err(http_error(HTTP_SC_FORBIDDEN, 403));
                 }
                 http.read_headers()?;
-                invoke_cgi_script(ctx, http)
+                handshake_flv(ctx, http)
             } else if handshake_auth(ctx, http, fn_, false)? {
-                invoke_cgi_script(ctx, http)
+                handshake_bbs(http)
             } else {
                 Ok(())
             }
@@ -759,90 +759,79 @@ fn handshake_local_file(ctx: &Ctx, http: &mut Http, fn_: &[u8]) -> Result<()> {
     http.stream.write(out.str())
 }
 
-// ---------------------------------------------------------------- CGI スクリプト
+// ---------------------------------------------------------------- /cgi-bin (もとは CGI スクリプト)
 
-/// `invokeCGIScript`
-fn invoke_cgi_script(ctx: &Ctx, http: &mut Http) -> Result<()> {
-    let pc = ctx.pc;
+/// 掲示板ビューワー (`/cgi-bin/board.cgi`、`thread.cgi`、`post.cgi`)。ほかの `/cgi-bin/` は 404
+fn handshake_bbs(http: &mut Http) -> Result<()> {
     let req = http.get_request().map_err(|_| http_error(HTTP_SC_BADREQUEST, 400))?;
-    let mapper = super::public::Mapper::new(b"/cgi-bin", &[&pc.app.html_path[..], b"cgi-bin"].concat())?;
-    let (file_path, _) = mapper.local_file_path(&req.path, &[]);
-    let mut env = super::subprog::Environment::default();
-    env.set(b"SCRIPT_NAME", &req.path);
-    env.set(b"SCRIPT_FILENAME", &file_path);
-    env.set(b"GATEWAY_INTERFACE", b"CGI/1.1");
-    env.set(b"DOCUMENT_ROOT", &pc.app.html_path);
-    env.set(b"QUERY_STRING", &req.query_string);
-    env.set(b"REQUEST_METHOD", b"GET");
-    env.set(b"REQUEST_URI", &req.url);
-    env.set(b"SERVER_PROTOCOL", b"HTTP/1.0");
-    env.set(b"SERVER_SOFTWARE", PCX_AGENT.as_bytes());
-    // Host ヘッダーは利用者が自由に決められるので、全体が host:port の形のときだけ使う
-    let server_host = pc.servmgr.settings().server_host;
-    match servhs::cgi_server_name(&req.headers.get(b"Host")) {
-        Some(name) => env.set(b"SERVER_NAME", &name),
-        None => {
-            crate::log_error!("Host header missing");
-            env.set(b"SERVER_NAME", server_host.ip_str().as_bytes());
+    let script = match req.path.strip_prefix(&b"/cgi-bin/"[..]) {
+        Some(s @ (b"board.cgi" | b"thread.cgi" | b"post.cgi")) => String::from_utf8_lossy(s).into_owned(),
+        _ => return Err(http_error(HTTP_SC_NOTFOUND, 404)),
+    };
+    match crate::bbs::handle(&script, &req.query_string, &mut super::bbs_http::Fetcher) {
+        Ok(reply) => {
+            let mut res = Response::new(reply.status as i32, Headers::from(&[("Content-Type", reply.content_type.as_bytes())]));
+            res.body = reply.body;
+            http.send_response(res)
+        }
+        Err(e) => {
+            crate::log_error!("{}: {}", script, e.0);
+            Err(http_error(HTTP_SC_SERVERERROR, 500))
         }
     }
-    env.set(b"SERVER_PORT", server_host.port.to_string().as_bytes());
-    let var = |n: &str| std::env::var_os(n).map(|v| sys::path_to_bytes(std::path::Path::new(&v)));
-    env.set(b"PATH", &var("PATH").unwrap_or_default());
-    if let Some(v) = var("SYSTEMROOT") {
-        env.set(b"SYSTEMROOT", &v);
-    }
-    if file_path.is_empty() {
+}
+
+/// `/cgi-bin/flv.cgi`: チャンネルのストリームを ffmpeg で FLV (H.264) にして送る。接続が切れたら
+/// ffmpeg を止める
+fn handshake_flv(ctx: &Ctx, http: &mut Http) -> Result<()> {
+    let req = http.get_request().map_err(|_| http_error(HTTP_SC_BADREQUEST, 400))?;
+    if req.path != b"/cgi-bin/flv.cgi" {
         return Err(http_error(HTTP_SC_NOTFOUND, 404));
     }
-    let mut script = super::subprog::Subprogram::new(&file_path, true, false);
-    if !script.start(&[], &env) {
-        crate::log_error!("failed to start script `{}`", b(&file_path));
-        return Err(http_error(HTTP_SC_SERVERERROR, 500));
-    }
-    let pid = script.pid();
-    crate::log_debug!("script started (pid = {})", pid);
-    let mut stream = script.input_stream()?;
-    let mut headers = Headers::new();
-    let mut status = 200;
-    let r = (|| -> Result<()> {
-        loop {
-            let line = stream.read_line(8192)?;
-            if line.is_empty() {
-                break;
-            }
-            crate::log_debug!("Line: {}", b(&line));
-            match servhs::cgi_header_line(&line) {
-                None => crate::log_error!("Invalid header: \"{}\"", b(&line)),
-                Some((name, value)) => {
-                    if crate::strutil::capitalize(&name) == b"Status" {
-                        status = crate::http::atoi(&value);
-                    } else {
-                        headers.set(&name, &value);
-                    }
-                }
-            }
-        }
-        Ok(())
-    })();
-    if let Err(e) = r {
-        if e.is_stream() {
-            crate::log_error!("CGI script did not finish the headers");
+    let port = ctx.pc.servmgr.settings().server_host.port;
+    let args = match servhs::flv_ffmpeg_args(&req.query_string, port) {
+        Some(a) => a,
+        None => return Err(http_error(HTTP_SC_BADREQUEST, 400)),
+    };
+    let mut child = match std::process::Command::new("ffmpeg")
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            crate::log_error!("failed to start ffmpeg: {}", e);
             return Err(http_error(HTTP_SC_SERVERERROR, 500));
         }
-        return Err(e);
-    }
-    if !headers.get(b"Location").is_empty() {
-        status = 302;
-    }
-    let mut res = Response::new(status, headers);
-    res.stream = Some(Box::new(stream));
-    http.send_response(res)?;
-    match script.wait() {
-        Some(code) => crate::log_debug!("child process (PID {}) exited normally (status {})", pid, code),
-        None => crate::log_error!("child process (PID {}) terminated abnormally", pid),
-    }
-    Ok(())
+    };
+    crate::log_debug!("ffmpeg started (pid = {})", child.id());
+    let r = (|| -> Result<()> {
+        let s = &mut *http.stream;
+        s.write_line("HTTP/1.0 200 OK")?;
+        s.write_line(format!("Server: {}", PCX_AGENT))?;
+        s.write_line("Connection: close")?;
+        s.write_line("Content-Type: video/x-flv")?;
+        s.write_line("")?;
+        let mut out = match child.stdout.take() {
+            Some(o) => o,
+            None => return Ok(()),
+        };
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            match std::io::Read::read(&mut out, &mut buf) {
+                Ok(0) => return Ok(()),
+                Ok(n) => s.write(&buf[..n])?,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return Ok(()),
+            }
+        }
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    crate::log_debug!("ffmpeg finished");
+    r
 }
 
 // ---------------------------------------------------------------- 管理の要求 (/admin?cmd=...)

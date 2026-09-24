@@ -672,38 +672,51 @@ pub fn local_file_name(document_root: &[u8], fn_: &[u8]) -> Vec<u8> {
     name
 }
 
-// ---------------------------------------------------------------- CGI スクリプト、JSON-RPC
+// ---------------------------------------------------------------- /cgi-bin/flv.cgi、JSON-RPC
 
-/// `invokeCGIScript` の SERVER_NAME: Host ヘッダーが全体で `^[A-Za-z0-9\-_.]+:\d+$` なら `:` の前。
-pub fn cgi_server_name(host: &[u8]) -> Option<Vec<u8>> {
-    let colon = host.iter().position(|&c| c == b':')?;
-    let (name, port) = (&host[..colon], &host[colon + 1..]);
-    let name_ok = !name.is_empty() && name.iter().all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'));
-    let port_ok = !port.is_empty() && port.iter().all(|c| c.is_ascii_digit());
-    if name_ok && port_ok {
-        // str::split(host, ":")[0]
-        Some(name.to_vec())
-    } else {
-        None
-    }
-}
-
-/// CGI スクリプトの出力のヘッダーの行 (`^([A-Za-z\-]+):\s*(.*)$`)。名前と値。
-pub fn cgi_header_line(line: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let colon = line.iter().position(|&c| !(c.is_ascii_alphabetic() || c == b'-'))?;
-    if colon == 0 || line[colon] != b':' {
+/// `/cgi-bin/flv.cgi` (もとは Python の CGI スクリプト) の ffmpeg の引数。引数が足りないか不正なら `None`
+/// (400)。認証なしで (LAN 内から) 呼べるので、値を厳密に確かめる: `id` は 32 桁の 16 進数
+/// (チャンネル ID)、`preset` と `audio_codec` は英数字と '_' だけ。PeerCast 自身へは常にループバックで
+/// 接続する。
+pub fn flv_ffmpeg_args(query: &[u8], server_port: u16) -> Option<Vec<String>> {
+    let form = crate::bbs::Form::parse(query);
+    let (id, preset, audio_codec) = (form.get("id")?, form.get("preset")?, form.get("audio_codec")?);
+    form.get("type")?;
+    let word = |s: &str| !s.is_empty() && s.len() <= 32 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_');
+    if !(id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()) && word(preset) && word(audio_codec)) {
         return None;
     }
-    let mut v = colon + 1;
-    while v < line.len() && matches!(line[v], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
-        v += 1;
-    }
-    let value = &line[v..];
-    // . は改行 (\n と \r) にだけ一致しない
-    if value.iter().any(|&c| c == b'\n' || c == b'\r') {
-        return None;
-    }
-    Some((line[..colon].to_vec(), value.to_vec()))
+    // チャンネルのビットレートを映像のビットレートにする。正しくなければ 500kbps
+    let r = match form.get("bitrate").and_then(crate::bbs::py::int) {
+        Some(r) if r > 0 && r <= 100000 => r,
+        _ => 500,
+    };
+    let args = [
+        "-nostdin".to_string(),
+        "-v".into(),
+        "-8".into(), // quiet
+        "-y".into(), // confirm overwriting
+        "-i".into(),
+        format!("http://127.0.0.1:{}/stream/{}", server_port, id),
+        "-strict".into(),
+        "-2".into(),
+        "-acodec".into(),
+        audio_codec.into(),
+        "-async".into(),
+        "1".into(),
+        "-ar".into(),
+        "44100".into(),
+        "-vcodec".into(),
+        "libx264".into(),
+        "-x264-params".into(),
+        format!("bitrate={0}:vbv-maxrate={0}:vbv-bufsize={1}", r, 2 * r),
+        "-preset".into(),
+        preset.into(),
+        "-f".into(),
+        "flv".into(),
+        "-".into(), // to stdout
+    ];
+    Some(args.to_vec())
 }
 
 /// `handshakeJRPC` の本体の長さ。`Err` は返す状態の行と番号 (411、400、413)。

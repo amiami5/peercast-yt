@@ -34,8 +34,10 @@ cargo build --release --features peercast-rs/rtmp   # rtmp:// の取得 (librtmp
 cargo test --release
 ```
 
-`cargo test` には、サーバーを実際に起動して試すテスト (`tests/bvt.rs`、もとは Ruby の bvt/) も入っている。
-中継、配信元の種類ごと、C++ 版との応答の比較などの Python のテストは [`tests/server/`](tests/server/) にある。
+`cargo test` には、サーバーを実際に起動して試すテスト (`tests/bvt.rs`、もとは Ruby の bvt/ と Python の
+tests/server/) も入っている。管理画面、JSON-RPC、PCP のハンドシェイク、HTTP Push の配信と直接の視聴と
+PCP の中継、HTTP の取得、ShoutCast と Icecast の放送、`/cgi-bin/` を試す。C++ 版と応答を比べるテスト
+(`tests/server/server_diff.py`) は `develop-old` ブランチにある。
 
 ## 移行の記録 (C++ 版との違い)
 
@@ -641,7 +643,7 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 | `redirect_url`、`rewrite_referer`、`is_decimal`、`is_valid_html_path` | `CMD_redirect`、`CMD_chooseLanguage`、`isDecimal`、`ServMgr::isValidHtmlPath` |
 | `icy_header`、`icy_content_type` | `readICYHeader` |
 | `mime_type_for`、`local_file`、`local_file_name` | `fileNameToMimeType`、`handshakeLocalFile` のページの種類と `id` |
-| `cgi_server_name`、`cgi_header_line` | `invokeCGIScript` の Host ヘッダーと、スクリプトの出力のヘッダー |
+| (`cgi_server_name`、`cgi_header_line`) | `invokeCGIScript` の Host ヘッダーと、スクリプトの出力のヘッダー。CGI の仕組みをなくしたときに消した |
 | `jrpc_body_length` | `handshakeJRPC` の Content-Length |
 
 * ソケットの読み書き、サーバーやチャンネルの状態を触ること、ファイルやスクリプトは C++ のまま。

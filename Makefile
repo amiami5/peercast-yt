@@ -46,8 +46,7 @@ all: cargo-build
 	rm -rf $(DISTDIR)
 	mkdir -p $(DISTDIR)
 	$(TARGET_DIR)/peercast-ui-gen ui $(DISTDIR)
-	cp -R ui/assets ui/cgi-bin licenses LICENSE $(DISTDIR)/
-	rm -rf $(DISTDIR)/cgi-bin/__pycache__ $(DISTDIR)/cgi-bin/.gitignore
+	cp -R ui/assets licenses LICENSE $(DISTDIR)/
 	cp $(TARGET_DIR)/peercast $(TARGET_DIR)/rtmp-server $(DISTDIR)/
 
 cargo-build:
@@ -59,7 +58,8 @@ install:
 	@test -x $(DISTDIR)/peercast || { echo "error: $(DISTDIR) がありません。先に (sudo を付けずに) make してください。" >&2; exit 1; }
 	mkdir -p $(bindir) $(sharedir) $(docdir) $(appdir) $(pixmapdir)
 	install -m 755 $(DISTDIR)/peercast $(DISTDIR)/rtmp-server $(bindir)/
-	cp -R $(DISTDIR)/html $(DISTDIR)/public $(DISTDIR)/assets $(DISTDIR)/cgi-bin $(sharedir)/
+	cp -R $(DISTDIR)/html $(DISTDIR)/public $(DISTDIR)/assets $(sharedir)/
+	rm -rf $(sharedir)/cgi-bin
 	cp -R licenses LICENSE $(docdir)/
 	cp ui/linux/peercast.desktop $(appdir)/
 	cp ui/linux/peercast.png $(pixmapdir)/

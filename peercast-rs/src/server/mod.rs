@@ -7,6 +7,7 @@
 //! 要素のロック (`st()` など) を持ったまま、ほかのものを呼ばない。
 
 pub mod app;
+pub mod bbs_http;
 pub mod chanhit;
 pub mod chaninfo;
 pub mod chanmgr;

@@ -186,16 +186,7 @@ fn local_files() {
 }
 
 #[test]
-fn cgi_and_jrpc() {
-    assert_eq!(cgi_server_name(b"localhost:7144"), Some(b"localhost".to_vec()));
-    assert_eq!(cgi_server_name(b"a b:80"), None);
-    assert_eq!(cgi_server_name(b"[::1]:7144"), None);
-    assert_eq!(cgi_server_name(b"x:"), None);
-    assert_eq!(cgi_header_line(b"Content-Type:  text/html"), Some((b"Content-Type".to_vec(), b"text/html".to_vec())));
-    assert_eq!(cgi_header_line(b"Status:"), Some((b"Status".to_vec(), Vec::new())));
-    assert_eq!(cgi_header_line(b"X_Y: z"), None);
-    assert_eq!(cgi_header_line(b": z"), None);
-    assert_eq!(cgi_header_line(b"A: b\rc"), None);
+fn jrpc() {
     assert_eq!(jrpc_body_length(b"", 100), Err(("HTTP/1.0 411 Length required", 411)));
     assert_eq!(jrpc_body_length(b"-1", 100), Err(("HTTP/1.0 411 Length required", 411)));
     assert_eq!(jrpc_body_length(b"0", 100), Err(("HTTP/1.0 400 Bad Request", 400)));
@@ -203,6 +194,28 @@ fn cgi_and_jrpc() {
     assert_eq!(jrpc_body_length(b" 42x", 100), Ok(42));
     // C++ 版は x86-64 で (int)LONG_MAX の -1 になり 411 だった
     assert_eq!(jrpc_body_length(b"99999999999999999999", 100), Err(("HTTP/1.0 413 Request Entity Too Large", 413)));
+}
+
+#[test]
+fn flv() {
+    let id = "0123456789abcdef0123456789ABCDEF";
+    let args = flv_ffmpeg_args(format!("id={}&preset=ultrafast&audio_codec=aac&type=FLV&bitrate=1200", id).as_bytes(), 7144).unwrap();
+    assert_eq!(args[5], format!("http://127.0.0.1:7144/stream/{}", id));
+    assert_eq!((args[9].as_str(), args[17].as_str(), args[19].as_str()), ("aac", "bitrate=1200:vbv-maxrate=1200:vbv-bufsize=2400", "ultrafast"));
+    for bitrate in ["", "&bitrate=0", "&bitrate=100001", "&bitrate=x"] {
+        let q = format!("id={}&preset=p&audio_codec=a&type=t{}", id, bitrate);
+        assert_eq!(flv_ffmpeg_args(q.as_bytes(), 1).unwrap()[17], "bitrate=500:vbv-maxrate=500:vbv-bufsize=1000");
+    }
+    for q in [
+        "preset=p&audio_codec=a&type=t".to_string(),
+        format!("id={}&preset=p&audio_codec=a", id),
+        format!("id={}x&preset=p&audio_codec=a&type=t", id),
+        format!("id={}&preset=-i&audio_codec=a&type=t", id),
+        format!("id={}&preset=p&audio_codec=a%20b&type=t", id),
+        format!("id={}&preset={}&audio_codec=a&type=t", id, "p".repeat(33)),
+    ] {
+        assert_eq!(flv_ffmpeg_args(q.as_bytes(), 7144), None, "{}", q);
+    }
 }
 
 /// 乱数の入力でパニックしない
@@ -233,8 +246,7 @@ fn fuzz() {
         let _ = icy_header(&s);
         let _ = icy_content_type(&s);
         let _ = local_file(&s);
-        let _ = cgi_server_name(&s);
-        let _ = cgi_header_line(&s);
+        let _ = flv_ffmpeg_args(&s, 7144);
         let _ = jrpc_body_length(&s, 1 << 20);
         let _ = atoi(&s);
     }

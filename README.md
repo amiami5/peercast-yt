@@ -99,7 +99,7 @@ HTML も作ります (これも Rust の小さなツール `tools/ui-gen`)。
 Ubuntu / Debian なら、次の 1 行で揃います。
 
 ```sh
-sudo apt install cargo pkg-config libssl-dev librtmp-dev python3
+sudo apt install cargo pkg-config libssl-dev librtmp-dev
 ```
 
 | パッケージ | 何に使うか | 備考 |
@@ -107,7 +107,7 @@ sudo apt install cargo pkg-config libssl-dev librtmp-dev python3
 | `cargo` | Rust のコンパイラとビルド | Rust 1.70 以降 (1.70、1.75、1.85 で確認)。`rustup` で入れてもよい |
 | `pkg-config` `libssl-dev` | TLS (OpenSSL) | |
 | `librtmp-dev` | RTMP fetch (他サーバーからの取得) | 不要なら `make WITH_RTMP=no` |
-| `python3` | 実行時の CGI スクリプト | |
+| `ffmpeg` | 管理画面のプレーヤーで、H.264 の FLV に変換して見るとき (`/cgi-bin/flv.cgi`) | 任意。ビルドには不要 |
 
 外部のクレート (Rust のライブラリ) は使っていないので、ビルド中にネットワークからは何も取ってきません。
 
@@ -138,7 +138,8 @@ sudo make install
 make check    # 単体テストと、サーバーを実際に起動して試すテスト (cargo test --release --workspace)
 ```
 
-中継や配信元の種類ごとの確認 (Python) は [`peercast-rs/tests/server/`](peercast-rs/tests/server/) にあります。
+サーバーを実際に起動して試すテストは、中継、HTTP の取得、ShoutCast と Icecast の放送、掲示板ビューワーの
+引数の検査などを含みます (外のホストにはつなぎません)。
 
 # 実行
 
