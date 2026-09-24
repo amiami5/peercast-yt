@@ -119,7 +119,7 @@ class Board:
   def threads(self):
     threads = []
     lines = self.thread_list().splitlines()
-    p = re.compile("^(\d+)\.cgi,(.+?)\((\d+)\)$" if self.shitaraba else "^(\d+)\.dat<>(.+?)\s\((\d+)\)$")
+    p = re.compile(r"^(\d+)\.cgi,(.+?)\((\d+)\)$" if self.shitaraba else r"^(\d+)\.dat<>(.+?)\s\((\d+)\)$")
     for i, line in enumerate(lines):
       if line == "": # したらばでスレッドがない場合、空行だけになる。
         continue

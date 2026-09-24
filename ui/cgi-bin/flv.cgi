@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import cgi, os, re, subprocess, sys
+import os, re, subprocess, sys
+
+import cgiform
 
 if __name__ == "__main__":
-  form = cgi.FieldStorage()
+  form = cgiform.FieldStorage()
 
   for param in ["id", "preset", "audio_codec", "type"]:
     if param not in form:

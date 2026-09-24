@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import cgi, json, sys
+import json, sys
 
 sys.path.append('cgi-bin')
 import bbs_reader
+import cgiform
 
 import urllib.request
 import urllib.parse
@@ -54,7 +55,7 @@ def post_message_shitaraba(fqdn, category, board_num, thread_id, name, mail, bod
   else:
     return {'status':'error','code':response.getcode()}
 
-form = cgi.FieldStorage()
+form = cgiform.FieldStorage()
 
 # 2ch掲示板の場合は category は板名。name, mail は空文字列でよい。
 for key in ['fqdn', 'category', 'id', 'body']:

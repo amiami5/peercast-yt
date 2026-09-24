@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import cgi, json, sys
+import json, sys
 
 sys.path.append('cgi-bin')
 
 import bbs_reader
+import cgiform
 
-form = cgi.FieldStorage()
+form = cgiform.FieldStorage()
 
 if "fqdn" not in form or "category" not in form:
   bbs_reader.print_bad_request("bad parameter")
