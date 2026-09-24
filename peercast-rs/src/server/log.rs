@@ -187,9 +187,15 @@ fn logger() -> &'static Logger {
     })
 }
 
+/// `AUX_LOG_FUNC_VECTOR` の 1 つ
+enum AuxSink {
+    Collect(Vec<(Level, Vec<u8>)>),
+    Func(Box<dyn FnMut(Level, &[u8])>),
+}
+
 thread_local! {
     /// `AUX_LOG_FUNC_VECTOR`: ログの水準によらず、このスレッドのログを受け取るもの
-    static AUX: RefCell<Vec<Vec<(Level, Vec<u8>)>>> = RefCell::new(Vec::new());
+    static AUX: RefCell<Vec<AuxSink>> = RefCell::new(Vec::new());
 }
 
 /// `ServMgr::logLevel()`
@@ -246,10 +252,20 @@ pub fn add_log(ty: Level, msg: &[u8]) {
     let tmp = if crate::utf8::validate(msg) { msg.to_vec() } else { log_escape(msg) };
     let tmp = crate::utf8::truncate(&tmp, MAX_LINELEN).unwrap_or(tmp);
 
-    AUX.with(|a| {
-        for v in a.borrow_mut().iter_mut() {
-            v.push((ty, tmp.clone()));
+    // 受け取る関数の中でログを書いても、ここには戻らない
+    let sinks = AUX.with(|a| std::mem::take(&mut *a.borrow_mut()));
+    let mut sinks = sinks;
+    for v in sinks.iter_mut() {
+        match v {
+            AuxSink::Collect(v) => v.push((ty, tmp.clone())),
+            AuxSink::Func(f) => f(ty, &tmp),
         }
+    }
+    AUX.with(|a| {
+        let mut a = a.borrow_mut();
+        let added = std::mem::take(&mut *a);
+        *a = sinks;
+        a.extend(added);
     });
 
     if l.level.load(Ordering::Relaxed) > ty as i32 {
@@ -266,7 +282,7 @@ pub fn add_log(ty: Level, msg: &[u8]) {
 /// `body` を実行する間にこのスレッドで書かれたログを、水準によらず集める
 /// (`AUX_LOG_FUNC_VECTOR` に関数を足すのと同じ)
 pub fn capture<R>(body: impl FnOnce() -> R) -> (R, Vec<(Level, Vec<u8>)>) {
-    AUX.with(|a| a.borrow_mut().push(Vec::new()));
+    AUX.with(|a| a.borrow_mut().push(AuxSink::Collect(Vec::new())));
     struct Pop;
     impl Drop for Pop {
         fn drop(&mut self) {
@@ -277,9 +293,27 @@ pub fn capture<R>(body: impl FnOnce() -> R) -> (R, Vec<(Level, Vec<u8>)>) {
     }
     let guard = Pop;
     let r = body();
-    let lines = AUX.with(|a| a.borrow_mut().last_mut().map(std::mem::take).unwrap_or_default());
+    let lines = AUX.with(|a| match a.borrow_mut().last_mut() {
+        Some(AuxSink::Collect(v)) => std::mem::take(v),
+        _ => Vec::new(),
+    });
     drop(guard);
     (r, lines)
+}
+
+/// `body` を実行する間にこのスレッドで書かれたログを、水準によらず `f` に渡す
+pub fn with_aux<R>(f: Box<dyn FnMut(Level, &[u8])>, body: impl FnOnce() -> R) -> R {
+    AUX.with(|a| a.borrow_mut().push(AuxSink::Func(f)));
+    struct Pop;
+    impl Drop for Pop {
+        fn drop(&mut self) {
+            AUX.with(|a| {
+                a.borrow_mut().pop();
+            });
+        }
+    }
+    let _guard = Pop;
+    body()
 }
 
 #[macro_export]

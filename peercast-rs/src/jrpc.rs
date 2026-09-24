@@ -1158,7 +1158,7 @@ fn at<'a>(v: &'a Value, keys: &[&str]) -> &'a Value {
     })
 }
 
-fn call_what(e: CallError) -> Vec<u8> {
+pub fn call_what(e: CallError) -> Vec<u8> {
     match e {
         CallError::MethodNotFound(w) | CallError::InvalidParams(w) | CallError::Application(_, w) | CallError::Internal(w) => {
             c_str(&w).to_vec()

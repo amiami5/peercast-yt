@@ -85,5 +85,20 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   もの (`fe80::1%eth0` などのスコープ付きのアドレス) で `FormatException` を投げる。設定ファイルのフィルター
   なら `loadSettings` がそこで止まる。Rust 版は `::` として続ける。
 * 段階 9a: `LogBuffer::write` が途中までの UTF-8 で終わらない件 (上) も、Rust 版は進まなくなったらやめる。
+* 段階 9b: `RTMPClientStream::read` は `RTMP_Read` の -1 (エラー) を読んだ量として扱い、残りが増えて
+  バッファーの前に書き戻す。Rust 版はエラーにする。
+* 段階 9b: `PlayList::readSCPLS` と `readPLS` は空の行で読むのをやめる (`readLine` が 0 を返すため)。
+  プレイリストの途中の空の行より後の URL は読まれない。Rust 版も同じ。
+* 段階 9c: コンソールの `get` コマンドは、位置引数でなく `argv[0]` を URL として使う (`get -- URL` で "--" を
+  取りに行く)。Rust 版も同じ。
+* 段階 9c: `POST /admin` に Content-Length がないと、`HTTP::getRequest` の `GeneralException` を
+  `incomingProc` が捕まえず (捕まえるのは `HTTPException` と `StreamException` だけ)、スレッドの外側で
+  ログに書かれるだけで、応答を返さずに切る。Rust 版も応答は返さない。
+* 段階 9c: `CMD_stop_servent` などの `std::stoi` は、`int` に収まらない番号で `std::out_of_range` を投げ、
+  応答を返さずに切る。Rust 版は、`stop_servent` は見付からない (404)、`*_speedtest` は同じく切る。
+* 段階 9d: ui/linux/main.cpp は `-i` などの引数を `String::setFromString` で読むので、空白を含むパスは
+  空白の手前で切れる (引用符も外す)。Rust 版は引数をそのまま使う。
+* 段階 9d: ui/linux/main.cpp のシグナルハンドラーはログを書く (メモリの確保を伴うので、シグナル
+  ハンドラーの中では安全でない)。Rust 版はフラグを立てるだけにして、ログは後で書く。
 * 全体: `char` の符号や `double` から `int` への変換など、CPU によって結果が変わる箇所
   (Rust 版は CPU によらず x86 と同じ結果にしている)。

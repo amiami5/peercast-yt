@@ -53,6 +53,14 @@ impl Value {
         Value::Object(m)
     }
 
+    /// オブジェクトのキーの値 (オブジェクトでなければ None)
+    pub fn get(&self, key: &[u8]) -> Option<&Value> {
+        match self {
+            Value::Object(o) => o.get(key),
+            _ => None,
+        }
+    }
+
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }

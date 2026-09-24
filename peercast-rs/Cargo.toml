@@ -11,6 +11,10 @@ publish = false
 # 外部クレートには依存しない (サプライチェーンの面積を増やさないため)。
 [dependencies]
 
+[features]
+# 入力元の rtmp:// を librtmp で読む (C++ 版の WITH_RTMP)
+rtmp = []
+
 [lib]
 name = "peercast_rs"
 path = "src/lib.rs"

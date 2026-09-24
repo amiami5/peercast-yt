@@ -458,12 +458,12 @@ pub struct FileStream {
     file: Option<std::fs::File>,
     at_eof: bool,
     crlf: bool,
-    stat: Stat,
+    stat: std::sync::Arc<Stat>,
 }
 
 impl Default for FileStream {
     fn default() -> Self {
-        FileStream { file: None, at_eof: false, crlf: true, stat: Stat::default() }
+        FileStream { file: None, at_eof: false, crlf: true, stat: std::sync::Arc::new(Stat::default()) }
     }
 }
 
@@ -491,6 +491,11 @@ impl FileStream {
 
     pub fn from_file(f: std::fs::File) -> FileStream {
         FileStream { file: Some(f), ..Default::default() }
+    }
+
+    /// ほかのスレッドから読み書きの量を見るため
+    pub fn shared_stat(&self) -> std::sync::Arc<Stat> {
+        self.stat.clone()
     }
 
     pub fn set_crlf(&mut self, v: bool) {

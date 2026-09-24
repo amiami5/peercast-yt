@@ -49,7 +49,14 @@ pub const MIME_JS: &str = "application/javascript; charset=utf-8";
 
 /// `HTTPException`: 返す状態の行と番号
 pub fn http_error(status_line: &str, code: i32) -> Error {
-    Error::new(Kind::Stream, status_line).with_err(code)
+    Error::new(Kind::Http, status_line).with_err(code)
+}
+
+/// `HTTPException(m, c, message)`
+pub fn http_error_msg(status_line: &str, code: i32, message: &str) -> Error {
+    let mut e = http_error(status_line, code);
+    e.detail = message.to_string();
+    e
 }
 
 /// `HTTPHeaders`: 名前は大文字にして持つ

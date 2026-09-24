@@ -14,6 +14,8 @@ pub enum Kind {
     Sock,
     Eof,
     Timeout,
+    /// `HTTPException` (`StreamException` の派生)。`msg` は状態の行、`err` は番号
+    Http,
 }
 
 /// `GeneralException`
@@ -22,13 +24,15 @@ pub struct Error {
     pub kind: Kind,
     pub msg: String,
     pub err: i32,
+    /// `HTTPException::additionalMessage`
+    pub detail: String,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub fn new(kind: Kind, msg: impl Into<String>) -> Error {
-        Error { kind, msg: msg.into(), err: 0 }
+        Error { kind, msg: msg.into(), err: 0, detail: String::new() }
     }
 
     pub fn general(msg: impl Into<String>) -> Error {
@@ -67,12 +71,17 @@ impl Error {
 
     /// `catch (StreamException&)` に当たるか
     pub fn is_stream(&self) -> bool {
-        matches!(self.kind, Kind::Stream | Kind::Sock | Kind::Eof | Kind::Timeout)
+        matches!(self.kind, Kind::Stream | Kind::Sock | Kind::Eof | Kind::Timeout | Kind::Http)
     }
 
     /// `catch (SockException&)`
     pub fn is_sock(&self) -> bool {
         self.kind == Kind::Sock
+    }
+
+    /// `catch (HTTPException&)`
+    pub fn is_http(&self) -> bool {
+        self.kind == Kind::Http
     }
 
     pub fn is_timeout(&self) -> bool {

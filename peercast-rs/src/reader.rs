@@ -22,6 +22,21 @@ pub trait Reader {
     fn eof(&mut self) -> Result<bool, Abort>;
 }
 
+impl<R: Reader + ?Sized> Reader for &mut R {
+    fn read_char(&mut self) -> Result<u8, Abort> {
+        (**self).read_char()
+    }
+    fn read_exact(&mut self, n: usize) -> Result<Vec<u8>, Abort> {
+        (**self).read_exact(n)
+    }
+    fn read_some(&mut self, n: usize) -> Result<Vec<u8>, Abort> {
+        (**self).read_some(n)
+    }
+    fn eof(&mut self) -> Result<bool, Abort> {
+        (**self).eof()
+    }
+}
+
 /// バイト列から読む。C++ の `MemoryStream` と同じく、データが尽きると
 /// `read_char` と `read_some` は 0 (空) を返し、`read_exact` は中断する。
 pub struct SliceReader<'a> {

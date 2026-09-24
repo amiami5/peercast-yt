@@ -91,6 +91,14 @@ pub fn update() {
     }
 }
 
+/// `Stats::clearRange`
+pub fn clear_range(s: Stat, e: Stat) {
+    let mut g = lock();
+    for i in s as usize..=e as usize {
+        g.current[i] = 0;
+    }
+}
+
 pub fn per_second(s: Stat) -> u32 {
     lock().per_sec[s as usize]
 }

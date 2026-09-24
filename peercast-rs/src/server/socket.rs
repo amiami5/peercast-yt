@@ -158,6 +158,11 @@ impl ClientSocket {
         self.stat.clone()
     }
 
+    /// `readTimeout`
+    pub fn read_timeout(&self) -> u32 {
+        self.read_timeout
+    }
+
     pub fn is_tls(&self) -> bool {
         #[cfg(unix)]
         {
