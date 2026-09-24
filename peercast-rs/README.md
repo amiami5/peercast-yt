@@ -676,6 +676,56 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
   だけを見ていたので、名前の先頭が同じ隣のディレクトリ (`.../public` に対する `.../public2`) を指す
   シンボリックリンクなどを通していた。Rust 版は、続きがパスの区切りであることも確かめる。
 
+## 段階9a で追加したもの (サーバーの土台)
+
+段階 9 では、C++ に残っている状態とスレッドとソケットの部分を、Rust だけで動くサーバー
+(`src/server/`) として作り、最後に Linux のビルドの実行ファイルを切り替える (docs/rust-migration.md の
+「段階 9 の進め方」)。9a は、その土台の部品。まだ実行ファイルからは使わない。
+
+| モジュール | 内容 (C++ 版) |
+|---|---|
+| `server::regex` | 正規表現 (`Regexp`。C++ 版は `std::regex` の ECMAScript)。外部クレートを使わずに書いた |
+| `server::host` | `IP` と `Host` (文字列との変換、`fromStrIP`、`fromStrName`、`isMemberOf` など) |
+| `server::log` | `ADDLOG` と `LOG_*`、`LogBuffer` |
+| `server::sys`、`server::os` | 時刻、`peercast::Random`、スレッドの旗 (`ThreadInfo`)、パス、地方時、シグナルなど (`Sys`、`USys`) |
+| `server::error` | 例外 (`GeneralException` とその派生クラス) |
+| `server::stream` | `Stream` と `StringStream`、`MemoryStream`、`FileStream`、`WriteBufferedStream` |
+| `server::socket`、`server::tls` | `UClientSocket`、`SslClientSocket` (OpenSSL を C ABI で呼ぶ) |
+| `server::http` | `HTTP`、`HTTPHeaders`、`HTTPRequest`、`HTTPResponse`、`http::get` |
+| `server::ini` | 設定ファイルの書き出し (`ini::Document`) と読み出し (`IniFileBase`) |
+| `server::stats`、`server::notif`、`server::cookie`、`server::servfilter`、`server::flag`、`server::subprog` | `Stats`、`NotificationBuffer`、`CookieList`、`ServFilter`、`FlagRegistory`、`Subprogram` と `Environment` |
+
+* `unsafe` を使うのは、C のライブラリを呼ぶ `server::os` (地方時、シグナル、デーモン化など) と
+  `server::tls` (OpenSSL) だけ。`struct tm` などは glibc の配置で、`long` は `c_long` にしている。
+* スレッドとブロッキングのソケットという作りは C++ 版と同じ。C++ 版は非ブロッキングのソケットを
+  `select` で待っていたが、Rust 版はブロッキングのソケットにタイムアウトを付ける。ほかのスレッドから
+  接続を切るとき (`Servent::abort` など) は `socket::Closer` で `shutdown` する。
+* 正規表現は、libstdc++ の `std::regex` と同じふるまいにした: 量指定子を重ねたもの (`a**`) を受け付ける、
+  まだ閉じていないグループへの後方参照は誤り、一致しなかったグループへの後方参照は失敗する、空に一致する
+  繰り返しは同じ位置から 2 回まで、文字クラスの中の `[:name:]` `[.c.]` `[=c=]`、`[]` は何にも一致しない。
+* libpeercast_rs.a に OpenSSL を呼ぶ部分が入ったので、これをリンクするもの (差分テスト) は OpenSSL も
+  リンクする (C++ 版の本体は元から OpenSSL をリンクしている)。
+
+### C++ 版との違い
+
+* **応答の本体の長さ** (`HTTP::getResponse`): C++ 版は Content-Length の有無の条件が逆で、Content-Length
+  があるときに接続が閉じるまで読み、ないときに 0 バイトだけ読んでいた。Rust 版は、あればその長さを、
+  なければ閉じるまで読む。
+* **ネットマスク /0 のフィルター**: C++ 版は `0xffffffff << (32 - netmask)` を計算するので、/0 は 32 ビット
+  ずらす未定義の動作になり、x86 ではずらさない (`0.0.0.0/0` が 0.0.0.0 にしか一致しない)。Rust 版は /0 を
+  すべての IPv4 アドレスに一致させる。
+* **スコープ付きの IPv6 アドレス** (`fe80::1%eth0`): C++ 版は IPv6 の正規表現には合うが `inet_pton` で
+  読めないので、`Host::fromStrName` と `ServFilter::setPattern` が `FormatException` を投げる (設定の読み込み
+  なら、そこで止まる)。Rust 版は `::` として続ける。
+* **環境変数の置き換え** (`Environment::set`): C++ 版は、あるものを置き換えるときに `名前=` を付けずに値だけを
+  入れていた。Rust 版は `名前=値` にする。
+* **ログの行の分け方** (`LogBuffer::write`): C++ 版は途中までの UTF-8 で終わる文字列で終わらなかった。Rust 版は
+  進まなくなったらやめる。
+* **数の読み取り** (`atoi`): ポートやネットマスクなどが `int` に収まらないとき、C++ 版は glibc の `atoi`
+  の切り詰め、Rust 版は段階 3a と同じく端の値にする。
+* ログに書く文字列のうち、UTF-8 として正しくない部分は、C++ 版は行全体を `[XX]` の形にしていたが、Rust 版の
+  書式付きのログ (`log_debug!` など) では置き換え文字になる (ログの中身だけの違い)。
+
 ## 差分テスト
 
 ```sh
@@ -707,6 +757,8 @@ make
 ./diff_jrpc                      # JSON-RPC: 乱数の状態への要求とその変異 10万件、メソッドを直接呼ぶもの 2.5万件、
                                  # index.txt 2.5万件
 ./diff_servhs                    # HTTP の要求の解釈と判断: 乱数の入力 (約220万件)
+./diff_regex                     # 正規表現: C++ 版が使う正規表現とそれらしい入力、乱数の正規表現 (約42万件)
+./diff_host                      # IP アドレス、ホストの文字列、フィルター (約110万件)
 ```
 
 `diff_servhs` の C++ 版は、外から呼べるもの (`nextCGIarg`、`Servent::hasValidAuthToken` など) は

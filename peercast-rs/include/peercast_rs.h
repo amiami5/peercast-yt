@@ -848,6 +848,19 @@ void pcrs_http_split_url(const uint8_t *url, size_t n, pcrs_buf *path, pcrs_buf 
 /* PublicController::createChannelIndex。0 なら out に index.txt、1 なら例外の what() */
 int pcrs_public_channel_index(const pcrs_jrpc_host *host, const uint8_t *tip, size_t n, pcrs_buf *out);
 
+/* ---- 段階 9a ---- */
+
+/* Regexp::exec。-1 正規表現の誤り、0 一致しない、1 一致 (*out に各グループ) */
+int32_t pcrs_regex_exec(const uint8_t *pattern, size_t pn, const uint8_t *subject, size_t sn, pcrs_vec *out);
+/* IP::tryParse (*out に 16 バイト) と IP::str */
+bool pcrs_ip_parse(const uint8_t *s, size_t n, uint8_t *out);
+pcrs_buf pcrs_ip_str(const uint8_t *ip);
+/* Host::fromStrIP (name が false) か Host::fromStrName (true) */
+void pcrs_host_from_str(const uint8_t *s, size_t n, uint16_t default_port, bool name, uint8_t *ip, uint16_t *port);
+/* ServFilter の setPattern、getPattern、matches、isGlobal、isSet */
+bool pcrs_servfilter_probe(const uint8_t *pattern, size_t n, uint32_t flags, const uint8_t *ip, uint16_t port, uint32_t fl,
+                           pcrs_buf *out, bool *global, bool *set);
+
 #ifdef __cplusplus
 }
 #endif

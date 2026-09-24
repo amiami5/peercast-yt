@@ -34,6 +34,7 @@ pub mod pcp;
 pub mod pcstring;
 pub mod public;
 pub mod reader;
+pub mod server;
 pub mod servhs;
 pub mod strtod;
 pub mod strutil;

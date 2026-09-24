@@ -4206,3 +4206,108 @@ pub unsafe extern "C" fn pcrs_public_channel_index(host: *const CJrpcHost, tip: 
         code
     }
 }
+
+// ---- 段階 9a: 正規表現 (差分テストで std::regex と比べるため) ----
+
+/// 。正規表現の誤りなら -1、一致しなければ 0、一致すれば 1 で  に各グループ
+/// (一致しなかったグループは空)。
+///
+/// # Safety
+///  と  はそれぞれの長さ読め、 は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_regex_exec(pattern: *const u8, pn: usize, subject: *const u8, sn: usize, out: *mut PcrsVec) -> i32 {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        match crate::server::regex::Regex::new(bytes(pattern, pn)) {
+            Err(_) => {
+                *out = into_vec(Vec::new());
+                -1
+            }
+            Ok(r) => {
+                let v = r.exec(bytes(subject, sn));
+                let found = !v.is_empty();
+                *out = into_vec(v);
+                found as i32
+            }
+        }
+    }
+}
+
+// ---- 段階 9a: IP アドレス、ホスト、フィルター (差分テストで C++ 版と比べるため) ----
+
+use crate::server::host::{Host as SHost, Ip as SIp};
+
+/// `IP::tryParse`。読めれば true で `*out` に 16 バイト。
+///
+/// # Safety
+/// `s` は `n` バイト読め、`out` は 16 バイト書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_ip_parse(s: *const u8, n: usize, out: *mut u8) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        match SIp::parse(bytes(s, n)) {
+            Some(ip) => {
+                std::ptr::copy_nonoverlapping(ip.0.as_ptr(), out, 16);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// `IP::str`
+///
+/// # Safety
+/// `ip` は 16 バイト読めること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_ip_str(ip: *const u8) -> PcrsBuf {
+    let mut a = [0u8; 16];
+    // SAFETY: 関数の Safety 節
+    unsafe { std::ptr::copy_nonoverlapping(ip, a.as_mut_ptr(), 16) };
+    into_buf(SIp(a).str().into_bytes())
+}
+
+/// `Host::fromStrIP` (`name` が false) か `Host::fromStrName` (true)。`*ip` に 16 バイト、`*port` にポート。
+///
+/// # Safety
+/// `s` は `n` バイト読め、`ip` は 16 バイト、`port` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_host_from_str(s: *const u8, n: usize, default_port: u16, name: bool, ip: *mut u8, port: *mut u16) {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let h = if name { SHost::from_str_name(bytes(s, n), default_port) } else { SHost::from_str_ip(bytes(s, n), default_port) };
+        std::ptr::copy_nonoverlapping(h.ip.0.as_ptr(), ip, 16);
+        *port = h.port;
+    }
+}
+
+/// `ServFilter`: `pattern` を `setPattern` したものの `getPattern` と、`flags` を付けたときに `fl` で
+/// ホスト (`ip`、`port`) に一致するか (`matches`)。`*global` に `isGlobal`、`*set` に `isSet`。
+///
+/// # Safety
+/// `pattern` は `n` バイト、`ip` は 16 バイト読め、`out`、`global`、`set` は書けること。
+#[no_mangle]
+pub unsafe extern "C" fn pcrs_servfilter_probe(
+    pattern: *const u8,
+    n: usize,
+    flags: u32,
+    ip: *const u8,
+    port: u16,
+    fl: u32,
+    out: *mut PcrsBuf,
+    global: *mut bool,
+    set: *mut bool,
+) -> bool {
+    // SAFETY: 関数の Safety 節
+    unsafe {
+        let mut f = crate::server::servfilter::ServFilter::default();
+        f.set_pattern(bytes(pattern, n));
+        f.flags = flags;
+        let mut a = [0u8; 16];
+        std::ptr::copy_nonoverlapping(ip, a.as_mut_ptr(), 16);
+        put(out, f.pattern());
+        *global = f.is_global();
+        *set = f.is_set();
+        f.matches(fl, &SHost::new(SIp(a), port))
+    }
+}

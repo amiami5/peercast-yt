@@ -55,6 +55,30 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 ものは、バイト列を受け取る形にします。詳しくは `peercast-rs/README.md` の段階 3b を参照。
 段階 9 は影響範囲が最も大きいので、それまでの段階で C++ 側の依存を減らしておきます。
 
+## 段階 9 の進め方
+
+段階 8 までは、C++ の関数を 1 つずつ Rust の呼び出しに置き換えた。残る部分 (`Servent`、`ServMgr`、
+`ChanMgr`、`Channel` の状態とスレッド、ソケット、`main`) は、グローバルなポインタと共有ポインタで
+互いの欄を直接読み書きしているので、クラスごとに境界を作ると、消す予定の C++ 側の書き換えが
+大きくなる。そこで段階 9 は次のように進める。
+
+* `peercast-rs` の中に、Rust だけで動くサーバー (`src/server/`) と実行ファイル (`src/bin/peercast.rs`)
+  を作る。段階 1〜8 で移した解析と判断 (PCP、HTTP、テンプレート、JSON-RPC など) はそのまま使い、
+  それぞれの `Host` トレイトをサーバーの状態に対して実装する。
+* スレッドとブロッキングのソケット (タイムアウト付き) という C++ 版の作りはそのままにする
+  (非同期のランタイムは使わない)。外部クレートは使わない。TLS (HTTPS の取得と SSL での受け付け)
+  と RTMP の取得は、C++ 版と同じく OpenSSL と librtmp を C ABI で呼ぶ (`unsafe` はそのモジュール
+  だけ)。正規表現 (`std::regex` の ECMAScript の文法) も Rust で書く。
+* 途中のコミットでは、C++ 版のビルド (`WITH_RUST_CORE`) はそのまま動く。Rust のサーバーは、全部
+  そろったところで Linux のビルドの実行ファイルとして切り替え、そこで C++ を外す。
+* 段階を 9a (土台: ログ、時刻と乱数、ソケットと TLS、`Stream`、正規表現、ini、統計、通知、Cookie、
+  フィルター、フラグなど)、9b (チャンネル: ヒットリスト、`ChanMgr`、`Channel` と配信元、YP)、
+  9c (接続: `Servent` の各ハンドシェイクと中継、`ServMgr`、JSON-RPC とテンプレートの状態、管理画面の
+  コマンド)、9d (`main`、ビルドの切り替え、C++ の削除) に分ける。
+* 確認: 移した部品ごとの単体テストと、C++ がある間は C++ 版の部品との差分テスト (ini、正規表現、
+  ホストの文字列など)。サーバー全体は、C++ 版と Rust 版の両方を起動して同じ要求を送り、応答を
+  比べるテストと、`bvt/` で確かめる。
+
 ## 今は対象にしないもの
 
 次のものは、C++ を Rust に置き換える作業とは別に、あとで判断します。
@@ -76,7 +100,7 @@ PeerCast YT の C++ 実装を、動く状態を保ったまま少しずつ Rust 
 | 6 | 完了。6a (受け取ったパケットの処理: `procAtom` 以下と `ChanInfo::readInfoAtoms` / `readTrackAtoms`)、6b (ハンドシェイクで受け取る `helo` / `oleh` と `readVersion`)、6c (`ChanPacketBuffer`)。チャンネルやサーバーの状態は `pcrs_pcp_host` のコールバックで触り、返事を書くことと読んだ値を使った処理は C++ に残る。差分テストは 6a が 10 万件、6b が 20 万件、6c が約 290 万回の比較で、説明のつかない違いなし。atom を書く側 (`AtomStream` の write 系、`writeInfoAtoms` など) と `PCPStream` のソケットの読み書きは、それを使うチャンネルや接続の処理と一緒に段階 7〜9 で扱う |
 | 7 | 完了。7a (イエローページの index.txt の解釈、`chatUrl` / `statsUrl` など)、7b (`ChanInfo` と `TrackInfo`、`ChanHit` と `ChanHitList` の状態を持たない部分。atom を書く側の `writeInfoAtoms` / `writeTrackAtoms` / `ChanHit::writeAtoms` を含む)、7c (`HostGraph` の親子の決め方、帯域測定の yp4g.xml の読み取りなど)、7d (`Channel` と `ChanMgr` の、ICY のメタデータの解釈、トラッカーへの更新などの atom、状態の画面の文字列、`authToken` など)。差分テストは 7a が約 120 万件、7b が約 265 万件、7c が約 70 万件、7d が約 40 万件で、説明のつかない違いなし。チャンネルのスレッドと、チャンネルとヒットリストの連結リストの管理は段階 9、`createXML` と `getState` は段階 9 で扱う (状態を書き出すだけなので、状態を持つクラスと一緒に移す)。7a の差分テストで、段階 1c の `GnuID::fromStr` が `strtoul` の空白と符号の読み方を再現していなかったことがわかり、Rust 版を直した |
 | 8 | 完了。8a (JSON-RPC の `JrpcApi`。JSON は nlohmann::json 3.7.3 と同じふるまいのものを `src/json` に作った)、8b (HTTP の要求の解釈と判断: 要求の行とパスの振り分け、認証の Cookie、CGI の引数、`CMD_apply`、ICY のヘッダー、ローカルのファイルのパスなど)、8c (`/public` と `/assets`: `FileSystemMapper`、振り分けと MIME タイプ、If-Modified-Since、index.txt、`HTTPRequest` の URL の分割)。差分テストは 8a が 12.5 万件、8b が約 220 万件、8c が約 160 万件と index.txt 2.5 万件で、説明のつかない違いなし。8c で、`FileSystemMapper` が隣のディレクトリ (`public2` など) へのトラバーサルを通していたことを Rust 版で直した。状態を書き出すだけの `getState`、`createXML`、`CMD_dump_hitlists` は、状態を持つクラスと一緒に段階 9 で扱う |
-| 9 | 未着手 |
+| 9 | 途中。9a (サーバーの土台: 正規表現、IP アドレスとホスト、ログ、時刻と乱数、ソケットと TLS、`Stream`、HTTP のやりとり、ini、統計、通知、Cookie、フィルター、旗、外部のプログラム)。差分テストは正規表現が約 42 万件、ホストとフィルターが約 110 万件で、説明のつかない違いなし。9a で、`HTTP::getResponse` の Content-Length の条件が逆なこと、/0 のフィルター、`Environment::set` を Rust 版で直した |
 
 ### 確認環境についての注記
 

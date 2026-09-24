@@ -6,8 +6,6 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
 
 ## まだ Rust に移していない部分 (移すときに扱う)
 
-* `HTTP::getResponse` の `if (contentLengthStr.empty())` は条件が逆。Content-Length があるときに
-  接続が閉じるまで読み、ないときに 0 バイトだけ読む (段階 9)。
 * `URLSource::streamURL` は、プレイリストの中の URL を再帰呼び出しで読むので、プレイリストを指す
   プレイリストが続くと再帰が深くなる (段階 7〜9)。
 * `GeneralException` (と派生クラス) はコピーすると、`msg` がコピー元の `msgbuf` を指したままになる。
@@ -78,5 +76,14 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   返してしまう。Rust 版は、続きがパスの区切りであることも確かめる。
 * 段階 8b: `/api/1` の Content-Length が `int` に収まらないと、`atoi` の切り詰めで負の数になり 411 を
   返す (値によっては正の数になり、違う長さを読む)。Rust 版は端の値にするので 413。
+* 段階 9a: `HTTP::getResponse` の `if (contentLengthStr.empty())` は条件が逆。Content-Length があるときに
+  接続が閉じるまで読み、ないときに 0 バイトだけ読む。
+* 段階 9a: `ServFilter` の IPv4 のネットマスクは `(uint32_t)-1 << (32 - netmask)` なので、/0 は 32 ビット
+  ずらす未定義の動作で、x86 ではずらさない (`0.0.0.0/0` が 0.0.0.0 にしか一致しない)。
+* 段階 9a: `Environment::set` は、ある変数を置き換えるときに `名前=` を付けずに値だけを入れる。
+* 段階 9a: `Host::fromStrName` と `ServFilter::setPattern` は、IPv6 の正規表現に合うが `inet_pton` で読めない
+  もの (`fe80::1%eth0` などのスコープ付きのアドレス) で `FormatException` を投げる。設定ファイルのフィルター
+  なら `loadSettings` がそこで止まる。Rust 版は `::` として続ける。
+* 段階 9a: `LogBuffer::write` が途中までの UTF-8 で終わらない件 (上) も、Rust 版は進まなくなったらやめる。
 * 全体: `char` の符号や `double` から `int` への変換など、CPU によって結果が変わる箇所
   (Rust 版は CPU によらず x86 と同じ結果にしている)。
