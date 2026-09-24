@@ -92,7 +92,6 @@ impl PcpStream {
                 let p = self.shared.out_data.read_packet()?;
                 p.write_raw(io)?;
             }
-            error = PCP_ERROR_GENERAL;
             if self.shared.out_data.will_skip() {
                 error = PCP_ERROR_WRITE + PCP_ERROR_SKIP;
                 return Err(Error::stream("Send too slow"));
