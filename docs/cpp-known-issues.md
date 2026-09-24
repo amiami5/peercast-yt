@@ -107,3 +107,8 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   このため中継元が `pipe:コマンド` を返すと外部のプログラムが起動し、スキームのない文字列 (`/etc/passwd`
   など) を返すとローカルのファイルを読んで配信する。Rust 版は、ネットワークから受け取った URL は
   `http://`、`pcp://`、`rtmp://` だけを受け付ける (`url::is_remote_safe_source`)。
+* 移行後のセキュリティの見直し: `Servent::handshakeICY` のパスワードの確認は `loginPassword != password` の
+  ときだけ localhost かを見るので、サーバーのパスワードが空 (既定) だと、どこからでもパスワードなしで
+  ShoutCast / Icecast の放送を始められ、同じ ID の放送があれば止めてしまう。Rust 版は、localhost 以外からは
+  パスワードが設定されていて一致するときだけ受け付ける (`servhs::icy_password_ok`)。HTTP Push
+  (rtmp-server の経路) は変わらない。

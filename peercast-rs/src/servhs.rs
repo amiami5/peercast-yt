@@ -264,6 +264,20 @@ pub fn source(line: &[u8]) -> Source {
     }
 }
 
+/// `handshakeICY` のパスワードの確認 (ShoutCast と Icecast の放送)。`sent` は送られてきたもの、
+/// `password` はサーバーのパスワード。localhost からは、パスワードなしか一致するものを受け付ける。
+/// それ以外からは、パスワードが設定されていて一致するものだけ。
+///
+/// C++ 版は `sent != password` のときだけ localhost かを見ていたので、サーバーのパスワードが空 (既定)
+/// だと、どこからでもパスワードなしで放送を始められた。
+pub fn icy_password_ok(sent: &[u8], password: &[u8], localhost: bool) -> bool {
+    if localhost {
+        sent.is_empty() || sent == password
+    } else {
+        !password.is_empty() && sent == password
+    }
+}
+
 /// `Servent::hasValidAuthToken`。`request_filename` はパスの後ろ (`<チャンネル ID>...?auth=...`)。
 pub fn valid_auth_token(request_filename: &[u8], broadcast_id: &[u8; 16]) -> bool {
     let vec = strutil::split(request_filename, b"?");

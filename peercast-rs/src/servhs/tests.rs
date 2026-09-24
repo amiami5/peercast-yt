@@ -73,6 +73,21 @@ fn source_lines() {
 }
 
 #[test]
+fn icy_passwords() {
+    // localhost: パスワードなしか、一致するもの
+    assert!(icy_password_ok(b"", b"", true));
+    assert!(icy_password_ok(b"", b"secret", true));
+    assert!(icy_password_ok(b"secret", b"secret", true));
+    assert!(!icy_password_ok(b"wrong", b"secret", true));
+    assert!(!icy_password_ok(b"x", b"", true));
+    // それ以外: パスワードが設定されていて一致するものだけ (C++ 版は空どうしを通していた)
+    assert!(!icy_password_ok(b"", b"", false));
+    assert!(!icy_password_ok(b"", b"secret", false));
+    assert!(!icy_password_ok(b"wrong", b"secret", false));
+    assert!(icy_password_ok(b"secret", b"secret", false));
+}
+
+#[test]
 fn giv_and_auth_token() {
     let id = [0x12u8; 16];
     let hex: Vec<u8> = gnuid::to_str(&id).to_vec();

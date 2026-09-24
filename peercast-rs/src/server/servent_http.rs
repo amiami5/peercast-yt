@@ -542,7 +542,7 @@ fn handshake_icy(c: &mut Conn, src_type: i32, is_http: bool) -> Result<()> {
     }
     c.sv.st().login_password = pwd.clone();
     let password = pc.servmgr.settings().password.clone();
-    if pwd.data != password && (!is_localhost(&c.sv.host()) || !pwd.is_empty()) {
+    if !servhs::icy_password_ok(&pwd.data, &password, is_localhost(&c.sv.host())) {
         return Err(http_error(HTTP_SC_UNAUTHORIZED, 401));
     }
     // 始める前に正しい IP アドレスが要る
