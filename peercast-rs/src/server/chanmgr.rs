@@ -47,22 +47,19 @@ pub struct ChanMgr {
     pub s: Mutex<ChanMgrSettings>,
 }
 
-/// `GnuID::generate`: 乱数の ID (先頭のバイトは旗)
+/// `GnuID::generate`: 乱数の ID (先頭のバイトは旗)。ログインの Cookie などにも使うので、
+/// C++ 版の `sys->rnd()` でなく `sys::secure_random` で作る
 pub fn generate_id(flags: u8) -> [u8; 16] {
     let mut id = [0u8; 16];
-    for b in id.iter_mut() {
-        *b = sys::rnd() as u8;
-    }
+    sys::secure_random(&mut id);
     id[0] = flags;
     id
 }
 
-/// `GnuID::random`: 0 にならない乱数の ID
+/// `GnuID::random`: 0 にならない乱数の ID (`generate_id` と同じく `sys::secure_random` で作る)
 pub fn random_id() -> [u8; 16] {
     let mut id = [0u8; 16];
-    for b in id.iter_mut() {
-        *b = sys::rnd() as u8;
-    }
+    sys::secure_random(&mut id);
     if !ci::is_set(&id) {
         id[15] = 1;
     }

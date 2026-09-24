@@ -114,6 +114,21 @@ pub fn rnd() -> u32 {
     rnd_gen().lock().unwrap_or_else(|e| e.into_inner()).next()
 }
 
+/// 推測されてはいけない値 (ログインの Cookie、セッション ID、放送 ID など) のための乱数。
+///
+/// C++ 版はこれらも `rnd` で作っていたが、`rnd` の数列は 32 ビットの種だけで決まるので、PCP で
+/// ほかのノードに送るセッション ID から種を割り出すと、ログインの Cookie などを予測できた。
+/// Rust 版は毎回 /dev/urandom から読む。読めない環境 (/dev/urandom がない) では `rnd` にする。
+pub fn secure_random(buf: &mut [u8]) {
+    use std::io::Read;
+    if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(buf)).is_ok() {
+        return;
+    }
+    for b in buf.iter_mut() {
+        *b = rnd() as u8;
+    }
+}
+
 /// `ThreadInfo` の、スレッドを止めるための旗
 #[derive(Clone, Debug, Default)]
 pub struct ThreadFlag(Arc<AtomicBool>);
@@ -310,6 +325,15 @@ mod tests {
         assert_eq!(r.next(), ((a << 16) + b) as u32);
         let mut r = Random::new(-1);
         r.next();
+    }
+
+    #[test]
+    fn secure_random_differs() {
+        let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+        secure_random(&mut a);
+        secure_random(&mut b);
+        assert_ne!(a, [0u8; 32]);
+        assert_ne!(a, b);
     }
 
     #[test]
