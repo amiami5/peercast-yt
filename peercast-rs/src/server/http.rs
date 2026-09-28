@@ -677,7 +677,7 @@ mod tests {
         assert!(out.starts_with("HTTP/1.0 200 OK\r\n"));
         assert!(out.contains("Content-Length: 2\r\n"));
         assert!(out.contains("Content-Type: text/plain\r\n"));
-        assert!(out.contains("Server: PeerCast/0.1218 (YT50-rs3)\r\n"));
+        assert!(out.contains(&format!("Server: {}\r\n", PCX_AGENT)));
         assert!(out.ends_with("\r\n\r\nhi"));
 
         // Content-Length のある応答

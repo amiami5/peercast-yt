@@ -677,7 +677,7 @@ pub fn continuation_packet_support(agent: &[u8]) -> Support {
         let ver: Vec<i32> = crate::strutil::split(&m[1], b".").iter().map(|x| crate::http::atoi(x)).collect();
         return if ver >= vec![2, 8, 0] { Support::Supported } else { Support::Unsupported };
     }
-    let m = caps("^PeerCast/0.1218 \\(YT(\\d+)\\)$");
+    let m = caps("^PeerCast/0.1218 \\(YT(\\d+)(-rs\\d+)?\\)$");
     if !m.is_empty() {
         return if crate::http::atoi(&m[1]) < 15 { Support::Unsupported } else { Support::Supported };
     }
@@ -1903,6 +1903,9 @@ mod tests {
         assert_eq!(continuation_packet_support(b"PeerCastStation/2.7.9"), Support::Unsupported);
         assert_eq!(continuation_packet_support(b"PeerCast/0.1218 (YT14)"), Support::Unsupported);
         assert_eq!(continuation_packet_support(b"PeerCast/0.1218 (YT50)"), Support::Supported);
+        assert_eq!(continuation_packet_support(b"PeerCast/0.1218 (YT50-rs3)"), Support::Supported);
+        assert_eq!(continuation_packet_support(b"PeerCast/0.1218 (YT50-rsx)"), Support::Unknown);
+        assert_eq!(continuation_packet_support(PCX_AGENT.as_bytes()), Support::Supported);
         assert_eq!(continuation_packet_support(b"PeerCast/0.1218(VP28)"), Support::Unknown);
         assert_eq!(continuation_packet_support(b"PeerCast/0.1218"), Support::Unsupported);
         assert_eq!(continuation_packet_support(b"foo"), Support::Unknown);
