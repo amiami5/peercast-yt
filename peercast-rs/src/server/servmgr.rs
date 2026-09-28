@@ -151,6 +151,10 @@ pub struct ServSettings {
     /// 最初に締め出す秒数。間違え続けると倍にしていく
     pub auth_lock_seconds: u32,
     pub rtmp_port: u16,
+    /// rtmp-server をこの PC (127.0.0.1 と ::1) からの接続だけで待ち受けるか。Rust 版で足した
+    pub rtmp_local_only: bool,
+    /// 空でなければ、配信ソフトのストリームキーがこれと一致するときだけ受け付ける。Rust 版で足した
+    pub rtmp_stream_key: Vec<u8>,
     pub default_channel_info: ChanInfo,
     pub chat: bool,
     pub preferred_theme: Vec<u8>,
@@ -235,6 +239,8 @@ impl ServMgr {
                 auth_fail_limit: 5,
                 auth_lock_seconds: 60,
                 rtmp_port: 1935,
+                rtmp_local_only: true,
+                rtmp_stream_key: Vec::new(),
                 default_channel_info: ChanInfo::new(),
                 chat: true,
                 preferred_theme: b"system".to_vec(),
@@ -918,6 +924,8 @@ impl ServMgr {
                 .key("maxServIn", s.max_serv_in)
                 .key("handshakeTimeout", s.handshake_timeout)
                 .key("maxHandshakesPerIP", s.max_handshakes_per_ip)
+                .key("rtmpLocalOnly", s.rtmp_local_only)
+                .key("rtmpStreamKey", &s.rtmp_stream_key[..])
                 .key("chanLog", &s.chan_log.data[..])
                 .key("publicDirectory", s.public_directory_enabled)
                 .key("networkID", ci::id_str(&s.network_id)),
@@ -1197,6 +1205,10 @@ impl ServMgr {
             set!(|s: &mut ServSettings| s.handshake_timeout = iv.max(0) as u32);
         } else if is("maxHandshakesPerIP") {
             set!(|s: &mut ServSettings| s.max_handshakes_per_ip = iv.max(0) as u32);
+        } else if is("rtmpLocalOnly") {
+            set!(|s: &mut ServSettings| s.rtmp_local_only = bv);
+        } else if is("rtmpStreamKey") {
+            set!(|s: &mut ServSettings| s.rtmp_stream_key = v[..v.len().min(255)].to_vec());
         } else if is("chanLog") {
             set!(|s: &mut ServSettings| s.chan_log.set(&v, StrType::Ascii));
         } else if is("publicDirectory") {
@@ -1558,6 +1570,8 @@ impl ServMgr {
             ("defaultChannelInfo", s.default_channel_info.state()),
             ("rtmpServerMonitor", self.rtmp_monitor.state()),
             ("rtmpPort", ts(s.rtmp_port as u32)),
+            ("rtmpLocalOnly", flag(s.rtmp_local_only)),
+            ("rtmpStreamKey", super::state::s(&s.rtmp_stream_key)),
             ("hasUnsafeFilterSettings", flag(self.has_unsafe_filter_settings())),
             ("chat", flag(s.chat)),
             ("randomizeBroadcastingChannelID", flag(self.flags.get("randomizeBroadcastingChannelID"))),
@@ -1570,8 +1584,22 @@ impl ServMgr {
         ])
     }
 
-    /// `rtmpServerMonitor.update` に渡す起動の引数 (`-p port url`)
-    pub fn rtmp_server_args(&self, ip_version: i32) -> Vec<Vec<u8>> {
+    /// `rtmpServerMonitor.update` に渡す起動の引数 (`-p port [-b addr ...] url`) と、ストリームキー。
+    /// キーはコマンドラインに載せず (ほかのユーザーからも見えるため)、環境変数で渡す
+    pub fn rtmp_server_launch(&self, ip_version: i32) -> (Vec<Vec<u8>>, Vec<u8>) {
+        let mut args = vec![b"-p".to_vec(), self.settings().rtmp_port.to_string().into_bytes()];
+        if self.settings().rtmp_local_only {
+            for a in [&b"127.0.0.1"[..], b"::1"] {
+                args.push(b"-b".to_vec());
+                args.push(a.to_vec());
+            }
+        }
+        args.push(self.rtmp_server_url(ip_version));
+        (args, self.settings().rtmp_stream_key.clone())
+    }
+
+    /// rtmp-server の出力先 (この PeerCast への HTTP Push の URL)
+    fn rtmp_server_url(&self, ip_version: i32) -> Vec<u8> {
         let s = self.settings();
         let info = &s.default_channel_info;
         let mut q: Vec<(&[u8], Vec<u8>)> = vec![
@@ -1586,8 +1614,7 @@ impl ServMgr {
         // cgi::Query::str は名前の順
         q.sort_by(|a, b| a.0.cmp(b.0));
         let qs: Vec<Vec<u8>> = q.iter().map(|(k, v)| [&crate::cgi::escape(k)[..], b"=", &crate::cgi::escape(v)].concat()).collect();
-        let url = [format!("http://localhost:{}/?", s.server_host.port).as_bytes(), &crate::strutil::join(b"&", &qs)].concat();
-        vec![b"-p".to_vec(), s.rtmp_port.to_string().into_bytes(), url]
+        [format!("http://localhost:{}/?", s.server_host.port).as_bytes(), &crate::strutil::join(b"&", &qs)].concat()
     }
 }
 
@@ -1690,7 +1717,7 @@ fn idle_proc(pc: &Arc<Peercast>) {
         }
         let port = sm.settings().server_host.port;
         sm.channel_directory.update(port, super::directory::UpdateMode::Auto);
-        sm.rtmp_monitor.update(|ipv| sm.rtmp_server_args(ipv));
+        sm.rtmp_monitor.update(|ipv| sm.rtmp_server_launch(ipv));
         sm.uptest.update();
         sys::sleep(500);
     }
@@ -1737,4 +1764,33 @@ fn server_proc(pc: &Arc<Peercast>) {
 fn _unused(_: &dyn Stream) -> Option<String> {
     let _ = s("");
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ServMgr;
+
+    #[test]
+    fn rtmp_server_launch() {
+        let sm = ServMgr::new(b"rtmp-server");
+        // 既定: この PC (127.0.0.1 と ::1) だけで待ち受け、キーは確かめない
+        let (args, key) = sm.rtmp_server_launch(4);
+        assert_eq!(&args[..6], &[&b"-p"[..], b"1935", b"-b", b"127.0.0.1", b"-b", b"::1"].map(|a| a.to_vec()));
+        assert!(args[6].starts_with(b"http://localhost:7144/?"));
+        assert_eq!(args.len(), 7);
+        assert!(key.is_empty());
+
+        // オフなら今までどおり全アドレス。キーは引数に載せずに返す
+        {
+            let mut s = sm.settings();
+            s.rtmp_local_only = false;
+            s.rtmp_stream_key = b"secret".to_vec();
+            s.rtmp_port = 1936;
+        }
+        let (args, key) = sm.rtmp_server_launch(6);
+        assert_eq!(&args[..2], &[b"-p".to_vec(), b"1936".to_vec()]);
+        assert_eq!(args.len(), 3);
+        assert!(!args.iter().any(|a| a.windows(6).any(|w| w == b"secret")));
+        assert_eq!(key, b"secret");
+    }
 }

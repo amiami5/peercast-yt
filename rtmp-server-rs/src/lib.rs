@@ -1,7 +1,7 @@
 //! PeerCast YT 付属の RTMP 受信サーバー (rtmp-server) の Rust 実装。
 //!
 //! 元の C++ 版 (../rtmp-server) と同じコマンドライン
-//! `rtmp-server [-p PORT] URL...` で動き、受信した RTMP の音声・映像を
+//! `rtmp-server [-p PORT] URL...` (Rust 版で `-b ADDR` と `-t SECONDS` を足した) で動き、受信した RTMP の音声・映像を
 //! FLV にして URL (http:// の POST、file://、通常のファイルパス) へ書き出す。
 //!
 //! 元のプログラムは GPL (v2 以降) なので、この移植も同じ条件で配布する。

@@ -1,7 +1,9 @@
 //! 実際に rtmp-server を起動して試す、運用上の頑健性のテスト (もとは Python の tests/robustness.py)。
-//!   1. 何も送らずに居座るクライアント (slowloris) が読み取りのタイムアウト (30 秒) で切られ、次の配信を受けられる
+//!   1. 何も送らずに居座るクライアント (slowloris) が配信開始までの期限 (既定 10 秒) で切られ、次の配信を受けられる。
+//!      少しずつ送り続けるクライアントも期限で切られる
 //!   2. 出力先 (PeerCast) が途中で切断しても、サーバーが落ちずに次の配信を受けられる
 //!   3. 出力先に接続できなくても、サーバーが落ちない
+//!   4. ストリームキー (環境変数) が違う配信は断り、出力先 (PeerCast) に接続しない
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -90,9 +92,20 @@ struct Server(Child);
 
 impl Server {
     fn start(port: u16, url: &str) -> Server {
-        let child = Command::new(env!("CARGO_BIN_EXE_rtmp-server"))
+        Server::start_with(port, url, &[], None)
+    }
+
+    /// `extra` は追加の引数、`key` はストリームキーの環境変数
+    fn start_with(port: u16, url: &str, extra: &[&str], key: Option<&str>) -> Server {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_rtmp-server"));
+        cmd.env_remove("PEERCAST_RTMP_STREAM_KEY");
+        if let Some(k) = key {
+            cmd.env("PEERCAST_RTMP_STREAM_KEY", k);
+        }
+        let child = cmd
             .arg("-p")
             .arg(port.to_string())
+            .args(extra)
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -175,7 +188,7 @@ fn slowloris_is_timed_out() {
     let waited = t0.elapsed();
     std::thread::sleep(Duration::from_millis(300));
     let flv = conns.lock().unwrap().iter().filter(|c| c.windows(3).any(|w| w == b"FLV")).count();
-    assert!(waited >= Duration::from_secs(25) && waited <= Duration::from_secs(40), "waited {:?}", waited);
+    assert!(waited >= Duration::from_secs(8) && waited <= Duration::from_secs(16), "waited {:?}", waited);
     assert_eq!(flv, 1);
     assert!(srv.alive());
     drop(slow);
@@ -214,4 +227,50 @@ fn survives_unreachable_sink() {
     drop(c);
     std::thread::sleep(Duration::from_millis(300));
     assert!(srv.alive());
+}
+
+#[test]
+fn drip_feeder_is_timed_out() {
+    let (sport, _conns) = sink();
+    let port = free_port();
+    let mut srv = Server::start_with(port, &format!("http://127.0.0.1:{}/?name=t", sport), &["-t", "3"], None);
+    // C0 と C1 を 1 バイトずつ、0.5 秒おきに送る (読み取りのタイムアウトには掛からない)
+    let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let t0 = Instant::now();
+    let mut data = vec![3u8];
+    data.extend(std::iter::repeat(0).take(1536));
+    for b in data {
+        if c.write_all(&[b]).is_err() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        if t0.elapsed() > Duration::from_secs(20) {
+            break;
+        }
+    }
+    let cut = t0.elapsed();
+    assert!(cut >= Duration::from_secs(3) && cut <= Duration::from_secs(8), "cut {:?}", cut);
+    assert!(srv.alive());
+}
+
+#[test]
+fn wrong_stream_key_is_rejected() {
+    // normal() の publish の名前は "key"
+    let (sport, conns) = sink();
+    let port = free_port();
+    let url = format!("http://127.0.0.1:{}/?name=t", sport);
+    {
+        let mut srv = Server::start_with(port, &url, &[], Some("secret"));
+        send_all(port, &normal(), Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(srv.alive());
+        // 出力先には接続もしない
+        assert_eq!(conns.lock().unwrap().len(), 0);
+    }
+    let port = free_port();
+    let _srv = Server::start_with(port, &url, &[], Some("key"));
+    send_all(port, &normal(), Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+    let flv = conns.lock().unwrap().iter().filter(|c| c.windows(3).any(|w| w == b"FLV")).count();
+    assert_eq!(flv, 1);
 }

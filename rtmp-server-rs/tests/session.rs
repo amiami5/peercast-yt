@@ -5,6 +5,7 @@ use rtmpserver::session::Session;
 use rtmpserver::{Error, Result};
 use std::io::{self, Cursor, Read, Write};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// 読み出しは固定バイト列、書き込みは全部溜める疑似ソケット。
 struct Duplex {
@@ -231,4 +232,61 @@ fn arbitrary_garbage_never_panics() {
         d.truncate(cut.max(1));
         let _ = run(d); // 結果は問わない
     }
+}
+
+fn full_publish() -> Vec<u8> {
+    let mut input = handshake_bytes();
+    input.extend(publish_prefix());
+    input.extend(metadata(true));
+    input.extend(chunked(5, 40, 0x08, 1, &[0xaf, 1, 9, 9], 128));
+    input.extend(chunked(3, 0, 0x14, 0, &cmd(&[amf_str("deleteStream"), amf_num(5.0), amf_null(), amf_num(1.0)]), 128));
+    input
+}
+
+fn run_with(input: Vec<u8>, setup: impl FnOnce(&mut Session<Duplex, Shared>)) -> (Result<()>, Vec<u8>, Vec<u8>) {
+    let sink = Shared::default();
+    let mut s = Session::new(Duplex { input: Cursor::new(input), output: Vec::new() }, sink.clone());
+    setup(&mut s);
+    let r = s.run();
+    let (client, _) = s.into_parts();
+    let flv = sink.0.lock().unwrap().clone();
+    (r, client.output, flv)
+}
+
+#[test]
+fn stream_key_must_match() {
+    // 一致すれば今までどおり
+    let (r, _, flv) = run_with(full_publish(), |s| s.set_stream_key(b"key"));
+    r.unwrap();
+    assert!(flv.starts_with(b"FLV"));
+
+    // 違えば断り、出力先には何も書かない
+    for wrong in [&b"kez"[..], b"ke", b"key2", b""] {
+        let (r, resp, flv) = run_with(full_publish(), |s| s.set_stream_key(wrong));
+        assert!(matches!(r, Err(Error::Protocol(ref m)) if m == "wrong stream key"), "{:?}", wrong);
+        assert!(flv.is_empty());
+        assert!(resp.windows(25).any(|w| w == b"NetStream.Publish.BadName"));
+    }
+}
+
+#[test]
+fn publish_deadline() {
+    // 期限を過ぎていれば、最初の読み取りで切る
+    let called = Arc::new(Mutex::new(0));
+    let c = called.clone();
+    let (r, _, flv) = run_with(full_publish(), |s| {
+        s.set_publish_deadline(Instant::now(), Box::new(move || *c.lock().unwrap() += 1))
+    });
+    assert!(matches!(r, Err(Error::Protocol(ref m)) if m == "publish timeout"));
+    assert!(flv.is_empty());
+    assert_eq!(*called.lock().unwrap(), 0);
+
+    // 期限内に publish が来れば期限を外し、知らせる (1 回だけ)
+    let c = called.clone();
+    let (r, _, flv) = run_with(full_publish(), |s| {
+        s.set_publish_deadline(Instant::now() + Duration::from_secs(60), Box::new(move || *c.lock().unwrap() += 1))
+    });
+    r.unwrap();
+    assert!(flv.starts_with(b"FLV"));
+    assert_eq!(*called.lock().unwrap(), 1);
 }

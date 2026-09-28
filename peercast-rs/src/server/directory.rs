@@ -621,6 +621,9 @@ struct RtmpInner {
     enabled: bool,
 }
 
+/// rtmp-server にストリームキーを渡す環境変数 (rtmp-server-rs/src/main.rs と同じ名前)
+const RTMP_STREAM_KEY_ENV: &[u8] = b"PEERCAST_RTMP_STREAM_KEY";
+
 /// `RTMPServerMonitor`
 pub struct RtmpServerMonitor {
     inner: Mutex<RtmpInner>,
@@ -651,16 +654,22 @@ impl RtmpServerMonitor {
         self.lock().ip_version = v;
     }
 
-    /// `update`: 止まっていたら起動し直す。`args` は起動の引数 (`-p port url`)
-    pub fn update(&self, args: impl FnOnce(i32) -> Vec<Vec<u8>>) {
+    /// `update`: 止まっていたら起動し直す。`launch` は起動の引数 (`-p port ... url`) とストリームキー
+    pub fn update(&self, launch: impl FnOnce(i32) -> (Vec<Vec<u8>>, Vec<u8>)) {
         let mut g = self.lock();
         if !g.enabled {
             return;
         }
         if !g.server.is_alive() {
             crate::log_error!("RTMP server is down! Restarting... ");
-            let a = args(g.ip_version);
-            let env = Environment::from_current_process();
+            let (a, key) = launch(g.ip_version);
+            let mut env = Environment::from_current_process();
+            // 空なら確かめない (親の環境に同じ名前があっても引き継がない)
+            if key.is_empty() {
+                env.unset(RTMP_STREAM_KEY_ENV);
+            } else {
+                env.set(RTMP_STREAM_KEY_ENV, &key);
+            }
             g.server.start(&a, &env);
         }
     }

@@ -6,11 +6,13 @@
 //!  - 未完了のメッセージが溜められる合計サイズに上限を設けた (MAX_BUFFERED_BYTES)。
 //!  - 送信側で 1 チャンクに収まらないメッセージの 2 個目以降のチャンクが正しく作られる
 //!    (C++ 版は先頭チャンクのヘッダーも fmt 3 になっていた。現在の応答は全て 1 チャンクに収まるので実害なし)。
+//!  - 配信 (publish) が始まるまでの期限と、ストリームキーの確認を足した (どちらも使う側が設定したときだけ)。
 
 use crate::amf0::{Reader, Value};
 use crate::flv::FlvWriter;
 use crate::{log, Error, Result};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
+use std::time::Instant;
 
 /// 音声・映像以外 (コマンド、メタデータ、制御メッセージ) の 1 メッセージの長さの上限。
 pub const MAX_CONTROL_MESSAGE_LENGTH: usize = 1024 * 1024;
@@ -50,10 +52,26 @@ pub struct Session<C: Read + Write, W: Write> {
     max_incoming_chunk_size: usize,
     max_outgoing_chunk_size: usize,
     quitting: bool,
+    /// この時刻までに publish が来なければ切る。publish を受け付けたら None
+    deadline: Option<Instant>,
+    /// Some なら、publish の名前 (ストリームキー) がこれと一致するときだけ受け付ける
+    stream_key: Option<Vec<u8>>,
+    /// publish を受け付けたときに呼ぶ (読み取りのタイムアウトを戻すためなど)
+    on_publish_start: Option<Box<dyn FnMut()>>,
 }
 
 fn be32(v: u32) -> [u8; 4] {
     v.to_be_bytes()
+}
+
+/// 長さが同じなら、どこで違っても同じだけ時間をかけて比べる (キーを 1 文字ずつ当てられないように)。
+fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// 引数にストリームの名前 (= ストリームキー) が入るコマンド
+fn carries_stream_name(command: &Value) -> bool {
+    matches!(command.as_string(), Ok(b"publish" | b"FCPublish" | b"releaseStream" | b"FCUnpublish"))
 }
 
 /// ログに出す文字列を短く切る。
@@ -78,6 +96,41 @@ impl<C: Read + Write, W: Write> Session<C, W> {
             max_incoming_chunk_size: 128,
             max_outgoing_chunk_size: 128,
             quitting: false,
+            deadline: None,
+            stream_key: None,
+            on_publish_start: None,
+        }
+    }
+
+    /// `deadline` までに publish が来なければ、エラーにして切る。
+    /// publish を受け付けたら期限を外し、`on_start` を呼ぶ。
+    pub fn set_publish_deadline(&mut self, deadline: Instant, on_start: Box<dyn FnMut()>) {
+        self.deadline = Some(deadline);
+        self.on_publish_start = Some(on_start);
+    }
+
+    /// publish の名前 (配信ソフトの「ストリームキー」) が `key` と一致するときだけ受け付ける。
+    pub fn set_stream_key(&mut self, key: &[u8]) {
+        self.stream_key = Some(key.to_vec());
+    }
+
+    fn check_deadline(&self) -> Result<()> {
+        match self.deadline {
+            Some(d) if Instant::now() >= d => Err(Error::protocol("publish timeout")),
+            _ => Ok(()),
+        }
+    }
+
+    /// 1 回の read。publish 前なら、読むたびに期限を確かめる
+    /// (少しずつ送り続けて居座るクライアントは、読み取りのタイムアウトだけでは切れないため)。
+    fn read_some(&mut self, buf: &mut [u8]) -> Result<usize> {
+        loop {
+            self.check_deadline()?;
+            match self.client.read(buf) {
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.into()),
+            }
         }
     }
 
@@ -87,15 +140,29 @@ impl<C: Read + Write, W: Write> Session<C, W> {
 
     fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
         let mut b = [0u8; N];
-        self.client.read_exact(&mut b)?;
+        let mut done = 0;
+        while done < N {
+            match self.read_some(&mut b[done..])? {
+                0 => return Err(Error::Eof),
+                k => done += k,
+            }
+        }
         Ok(b)
     }
 
     fn read_into(&mut self, dst: &mut Vec<u8>, n: usize) -> Result<()> {
         // 宣言された長さ分を先に確保せず、実際に届いた分だけ伸ばす。
-        let got = (&mut self.client).take(n as u64).read_to_end(dst)?;
-        if got != n {
-            return Err(Error::Eof);
+        let mut buf = [0u8; 8192];
+        let mut left = n;
+        while left > 0 {
+            let want = left.min(buf.len());
+            match self.read_some(&mut buf[..want])? {
+                0 => return Err(Error::Eof),
+                k => {
+                    dst.extend_from_slice(&buf[..k]);
+                    left -= k;
+                }
+            }
         }
         Ok(())
     }
@@ -273,7 +340,28 @@ impl<C: Read + Write, W: Write> Session<C, W> {
         self.send_command(0, 3, &[&Value::string("_result"), tid, &Value::Null, &Value::Number(1.0)])
     }
 
-    fn on_publish(&mut self) -> Result<()> {
+    fn on_publish(&mut self, params: &[Value]) -> Result<()> {
+        if let Some(expected) = &self.stream_key {
+            // publish の引数は (null, 名前, 種類)。名前が配信ソフトの「ストリームキー」
+            let ok = match params.get(1).map(|v| v.as_string()) {
+                Some(Ok(name)) => same_bytes(name, expected),
+                _ => false,
+            };
+            if !ok {
+                log!("publish rejected: wrong stream key");
+                let info = Value::object(&[
+                    ("level", Value::string("error")),
+                    ("code", Value::string("NetStream.Publish.BadName")),
+                    ("description", Value::string("Wrong stream key")),
+                ]);
+                let _ = self.send_command(1, 8, &[&Value::string("onStatus"), &Value::Number(0.0), &Value::Null, &info]);
+                return Err(Error::protocol("wrong stream key"));
+            }
+        }
+        self.deadline = None;
+        if let Some(mut f) = self.on_publish_start.take() {
+            f();
+        }
         let info = Value::object(&[
             ("level", Value::string("status")),
             ("code", Value::string("NetStream.Publish.Start")),
@@ -291,7 +379,12 @@ impl<C: Read + Write, W: Write> Session<C, W> {
         let mut params = Vec::new();
         while !r.eof() {
             let p = r.read_value()?;
-            log!("param{} = {}", params.len() + 1, brief(p.inspect()));
+            // ストリームキーを確かめるときは、キーが入る引数をログに出さない
+            if self.stream_key.is_some() && carries_stream_name(&command) {
+                log!("param{} = (hidden)", params.len() + 1);
+            } else {
+                log!("param{} = {}", params.len() + 1, brief(p.inspect()));
+            }
             params.push(p);
         }
 
@@ -299,7 +392,7 @@ impl<C: Read + Write, W: Write> Session<C, W> {
             b"connect" => self.on_connect(&tid),
             b"FCPublish" => self.on_fcpublish(&tid, &params),
             b"createStream" => self.on_create_stream(&tid),
-            b"publish" => self.on_publish(),
+            b"publish" => self.on_publish(&params),
             b"deleteStream" => {
                 self.quitting = true;
                 Ok(())

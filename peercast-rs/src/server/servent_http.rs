@@ -1098,6 +1098,10 @@ fn run_cmd(ctx: &Ctx, http: &mut Http, cmd: &[u8], query: &[u8], jump: &mut Vec<
                 {
                     let mut s = pc.servmgr.settings();
                     s.rtmp_port = port;
+                    // チェックボックスは、外すと送られてこない
+                    s.rtmp_local_only = q.get(b"localonly") == b"1";
+                    let key = q.get(b"streamkey");
+                    s.rtmp_stream_key = key[..key.len().min(255)].to_vec();
                     let info = &mut s.default_channel_info;
                     info.name = utf8_field(&q.get(b"name"));
                     info.genre = utf8_field(&q.get(b"genre"));
@@ -1105,6 +1109,8 @@ fn run_cmd(ctx: &Ctx, http: &mut Http, cmd: &[u8], query: &[u8], jump: &mut Vec<
                     info.url = utf8_field(&q.get(b"url"));
                     info.comment = utf8_field(&q.get(b"comment"));
                 }
+                // 待ち受けの範囲とストリームキーは次に起動したときも使う
+                pc.save_settings();
                 pc.servmgr.rtmp_monitor.set_ip_version(if q.get(b"ipv") == b"6" { 6 } else { 4 });
                 pc.servmgr.rtmp_monitor.enable();
                 // サーバーのスレッドがプロセスを始めるのを待つ
