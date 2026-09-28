@@ -139,6 +139,16 @@ fn cookies() {
 }
 
 #[test]
+fn login_cookie_secure_on_tls() {
+    assert_eq!(login_cookie(7144, "AB", false, false), "7144_id=AB; path=/; HttpOnly; SameSite=Strict");
+    assert_eq!(login_cookie(7144, "AB", false, true), "7144_id=AB; path=/; HttpOnly; Secure; SameSite=Strict");
+    assert_eq!(
+        login_cookie(8000, "AB", true, true),
+        "8000_id=AB; path=/; expires=\"Mon, 01-Jan-3000 00:00:00 GMT\"; HttpOnly; Secure; SameSite=Strict"
+    );
+}
+
+#[test]
 fn query_and_cgi_args() {
     let q = Query::new(b"a=1&a=2&b&c=x%20y=z&&=e");
     assert_eq!(q.get(b"a"), b"1");
