@@ -292,6 +292,13 @@
             <br><small>{#How many connections from the same IP address may still be sending their request at once. 0 means no limit. This PC (localhost) is not counted, and can connect even when the connections are full.}</small>
           </td>
         </tr>
+        <tr>
+          <th class="left-heading">{#Own Address Check Interval}</th>
+          <td>
+            <input size="5" value="{$servMgr.selfIPCheckInterval}" name="self_ip_check_interval">
+            <br><small>{#Seconds between looking up this PC's own address, which is used to tell whether a connection comes from this PC. 0 looks it up only at startup.}</small>
+          </td>
+        </tr>
       </table>
 
       <table class="table-panel" width="100%" align="center" border="0">

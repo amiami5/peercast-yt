@@ -645,6 +645,7 @@ pub enum ApplyKey {
     AuthLockSeconds = 46, // 数 (Rust 版で足した。負の数は 0)
     HandshakeTimeout = 47, // 秒 (Rust 版で足した。負の数は 0)
     MaxHandshakesPerIp = 48, // 数 (Rust 版で足した。負の数は 0)
+    SelfIpCheckInterval = 49, // 秒 (Rust 版で足した。負の数は 0)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -734,6 +735,7 @@ pub fn apply_ops(cmd: &[u8]) -> Vec<ApplyOp> {
             b"auth_lock_seconds" => op(AuthLockSeconds, n.max(0), Vec::new()),
             b"handshake_timeout" => op(HandshakeTimeout, n.max(0), Vec::new()),
             b"max_handshakes_per_ip" => op(MaxHandshakesPerIp, n.max(0), Vec::new()),
+            b"self_ip_check_interval" => op(SelfIpCheckInterval, n.max(0), Vec::new()),
             b"preferredTheme" => op(PreferredTheme, 0, arg.clone()),
             b"accentColor" => op(AccentColor, 0, arg.clone()),
             _ => None,

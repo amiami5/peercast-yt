@@ -107,6 +107,8 @@ pub struct ServSettings {
     pub handshake_timeout: u32,
     /// 同じ IP アドレスからの、要求を読み終えていない接続の数の上限 (0 なら上限なし)。Rust 版で足した
     pub max_handshakes_per_ip: u32,
+    /// 自分のホスト名のアドレス (localhost の判定に使う) を引き直す間隔 (秒。0 なら起動時だけ)。Rust 版で足した
+    pub self_ip_check_interval: u32,
     pub is_disabled: bool,
     pub server_host: Host,
     pub server_host_ipv6: Host,
@@ -199,6 +201,7 @@ impl ServMgr {
                 max_serv_in: 50,
                 handshake_timeout: 15,
                 max_handshakes_per_ip: 8,
+                self_ip_check_interval: 60,
                 is_disabled: false,
                 server_host: Host::from_str_ip(b"127.0.0.1", DEFAULT_PORT),
                 server_host_ipv6: Host::new(Ip::parse(b"::1").unwrap_or_default(), DEFAULT_PORT),
@@ -924,6 +927,7 @@ impl ServMgr {
                 .key("maxServIn", s.max_serv_in)
                 .key("handshakeTimeout", s.handshake_timeout)
                 .key("maxHandshakesPerIP", s.max_handshakes_per_ip)
+                .key("selfIPCheckInterval", s.self_ip_check_interval)
                 .key("rtmpLocalOnly", s.rtmp_local_only)
                 .key("rtmpStreamKey", &s.rtmp_stream_key[..])
                 .key("chanLog", &s.chan_log.data[..])
@@ -1205,6 +1209,8 @@ impl ServMgr {
             set!(|s: &mut ServSettings| s.handshake_timeout = iv.max(0) as u32);
         } else if is("maxHandshakesPerIP") {
             set!(|s: &mut ServSettings| s.max_handshakes_per_ip = iv.max(0) as u32);
+        } else if is("selfIPCheckInterval") {
+            set!(|s: &mut ServSettings| s.self_ip_check_interval = iv.max(0) as u32);
         } else if is("rtmpLocalOnly") {
             set!(|s: &mut ServSettings| s.rtmp_local_only = bv);
         } else if is("rtmpStreamKey") {
@@ -1464,6 +1470,8 @@ impl ServMgr {
             }
         }
         self.check_force_ip();
+        // 待ち受けを始める前に一度引いておく。そのあとは idle_proc が別のスレッドで引き直す
+        servent::refresh_self_ip();
         let p = pc.clone();
         if !sys::start_thread(&self.server_thread, "SERVER", move || server_proc(&p)) {
             return false;
@@ -1525,6 +1533,7 @@ impl ServMgr {
             ("maxServIn", ts(s.max_serv_in)),
             ("handshakeTimeout", ts(s.handshake_timeout)),
             ("maxHandshakesPerIP", ts(s.max_handshakes_per_ip)),
+            ("selfIPCheckInterval", ts(s.self_ip_check_interval)),
             ("numFilters", super::state::s((nf as i32 + 1).to_string())),
             ("filters", arr(filters)),
             ("numActive1", ts(self.num_active_on_port(s.server_host.port as i32))),
@@ -1689,9 +1698,15 @@ fn idle_proc(pc: &Arc<Peercast>) {
     let mut last_broadcast_connect = 0u32;
     let mut last_root_broadcast = 0u32;
     let mut last_force_ip_check = 0u32;
+    let mut last_self_ip_check = sys::get_time();
     while sm.idle_thread.active() {
         super::stats::update();
         let ctime = sys::get_time();
+        let self_ip_interval = sm.settings().self_ip_check_interval;
+        if self_ip_interval != 0 && ctime.wrapping_sub(last_self_ip_check) >= self_ip_interval {
+            servent::refresh_self_ip_in_background();
+            last_self_ip_check = ctime;
+        }
         if !sm.settings().force_ip.is_empty() && ctime.wrapping_sub(last_force_ip_check) > 60 {
             if sm.check_force_ip() {
                 pc.chanmgr.broadcast_tracker_update(pc, &[0; 16], true);

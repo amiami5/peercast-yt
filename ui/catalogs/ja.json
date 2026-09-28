@@ -293,6 +293,8 @@
     "Seconds allowed from connecting until the request has been fully received. Slow clients that take longer are disconnected. 0 turns the limit off." : "つないでから要求を受け取り終えるまでに待つ秒数です。これより遅いクライアントは切ります。0 にすると期限をなくします。",
     "Max. Unfinished Requests Per IP" : "IP ごとの受信途中の要求の上限",
     "How many connections from the same IP address may still be sending their request at once. 0 means no limit. This PC (localhost) is not counted, and can connect even when the connections are full." : "同じ IP アドレスから、要求を送っている途中の接続をいくつまで同時に受け付けるかです。0 にすると上限をなくします。このパソコン (localhost) は数えず、接続数が上限に達していてもつなげます。",
+    "Own Address Check Interval" : "自分のアドレスを調べ直す間隔",
+    "Seconds between looking up this PC's own address, which is used to tell whether a connection comes from this PC. 0 looks it up only at startup." : "このパソコン自身のアドレスを調べ直す秒数です。接続がこのパソコンからのものかを見分けるのに使います。0 にすると起動したときだけ調べます。",
     "This PC Only"            : "この PC からだけ",
     "When checked, only encoders on this PC (rtmp://localhost/) can connect. To broadcast from OBS on another PC, uncheck it and also set a stream key." : "オンのときは、この PC の配信ソフト (rtmp://localhost/) だけがつなげます。別の PC の OBS などから配信するときはオフにし、あわせてストリームキーを設定してください。",
     "Stream Key"              : "ストリームキー",

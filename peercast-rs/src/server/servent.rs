@@ -3,7 +3,7 @@
 //! ソケットは、その接続のスレッドだけが持つ (`Conn`)。ほかのスレッドが使うもの (状態、送るパケット、
 //! 接続を切るためのもの、読み書きの量) は `Servent` に置く。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::chanhit::{ChanHit, ChanHitSearch};
@@ -381,9 +381,33 @@ impl Servent {
     }
 }
 
+/// 自分のホスト名の IPv4 アドレス (引けなければ 0)。C++ 版は判定のたびに DNS を引いていたが、
+/// 接続の処理が名前解決で待たされないよう、`refresh_self_ip` で引いたものを覚えておく
+static SELF_IP: AtomicU32 = AtomicU32::new(0);
+static SELF_IP_RESOLVING: AtomicBool = AtomicBool::new(false);
+
 /// `Host::isLocalhost`: ループバックか、自分のインターフェースのアドレス
 pub fn is_localhost(h: &Host) -> bool {
-    h.loopback_ip() || h.ip == Ip::from_v4(super::host::get_ip(&sys::hostname()))
+    h.loopback_ip() || h.ip == Ip::from_v4(SELF_IP.load(Ordering::Relaxed))
+}
+
+/// 自分のホスト名を引き直して覚える。DNS を待つので、接続の処理の中では呼ばない
+pub fn refresh_self_ip() {
+    SELF_IP.store(super::host::get_ip(&sys::hostname()), Ordering::Relaxed);
+}
+
+/// `refresh_self_ip` を別のスレッドで行う。前のものがまだ終わっていなければ何もしない
+pub fn refresh_self_ip_in_background() {
+    if SELF_IP_RESOLVING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let r = std::thread::Builder::new().name("SELFIP".into()).spawn(|| {
+        refresh_self_ip();
+        SELF_IP_RESOLVING.store(false, Ordering::Release);
+    });
+    if r.is_err() {
+        SELF_IP_RESOLVING.store(false, Ordering::Release);
+    }
 }
 
 // ---------------------------------------------------------------- スレッドの始め方

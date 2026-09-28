@@ -200,6 +200,12 @@ fn apply() {
         ops.iter().map(|o| (o.key, o.int)).collect::<Vec<_>>(),
         vec![(ApplyKey::HandshakeTimeout, 15), (ApplyKey::HandshakeTimeout, 0), (ApplyKey::MaxHandshakesPerIp, 8)]
     );
+
+    let ops = apply_ops(b"self_ip_check_interval=60&self_ip_check_interval=-5");
+    assert_eq!(
+        ops.iter().map(|o| (o.key, o.int)).collect::<Vec<_>>(),
+        vec![(ApplyKey::SelfIpCheckInterval, 60), (ApplyKey::SelfIpCheckInterval, 0)]
+    );
 }
 
 #[test]

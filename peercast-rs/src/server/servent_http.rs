@@ -1492,6 +1492,7 @@ fn cmd_apply(ctx: &Ctx, http: &mut Http, query: &[u8], jump: &mut Vec<u8>) -> Re
             K::AuthLockSeconds => sm.settings().auth_lock_seconds = v as u32,
             K::HandshakeTimeout => sm.settings().handshake_timeout = v as u32,
             K::MaxHandshakesPerIp => sm.settings().max_handshakes_per_ip = v as u32,
+            K::SelfIpCheckInterval => sm.settings().self_ip_check_interval = v as u32,
             K::PreferredTheme => sm.settings().preferred_theme = op.str.clone(),
             K::AccentColor => sm.settings().accent_color = op.str.clone(),
         }
