@@ -5,7 +5,8 @@
 
 use std::sync::OnceLock;
 
-use super::host::{get_ip, Host, Ip, IPV6_PATTERN};
+use super::dnscache;
+use super::host::{Host, Ip, IPV6_PATTERN};
 use super::regex::Regex;
 use super::state::{flag, obj, s, Value};
 
@@ -94,6 +95,7 @@ impl ServFilter {
         } else {
             self.ty = Type::Hostname;
             self.pattern = p.to_vec();
+            dnscache::prefetch_name(p);
         }
     }
 
@@ -115,8 +117,9 @@ impl ServFilter {
         match self.ty {
             Type::Ip => h.is_member_of(&self.host).unwrap_or(false),
             Type::Ipv6 => self.host.ip == h.ip,
-            Type::Hostname => h.ip == Ip::from_v4(get_ip(&self.pattern)),
-            Type::Suffix => match super::sys::hostname_by_address(&h.ip) {
+            // C++ 版は判定のたびに名前解決していた。覚えたものを使い、DNS が遅くても長く待たない
+            Type::Hostname => h.ip == Ip::from_v4(dnscache::ip_of(&self.pattern)),
+            Type::Suffix => match dnscache::name_of(&h.ip) {
                 Some(name) => name.ends_with(&self.pattern),
                 None => false,
             },

@@ -15,6 +15,7 @@ pub mod channel;
 pub mod commands;
 pub mod cookie;
 pub mod directory;
+pub mod dnscache;
 pub mod error;
 pub mod flag;
 pub mod host;
