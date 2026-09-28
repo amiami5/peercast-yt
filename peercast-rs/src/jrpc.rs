@@ -315,35 +315,6 @@ fn int(i: i32) -> Value {
 
 // ---------------------------------------------------------------- 呼び出し
 
-/// JSON のネストの深さ (`[` と `{` の入れ子) が max を超えていないかを調べる。
-/// 文字列リテラルの中の括弧は数えない。
-fn json_nesting_is_too_deep(s: &[u8], max: i32) -> bool {
-    let mut depth = 0;
-    let mut in_string = false;
-    let mut i = 0;
-    while i < s.len() {
-        let c = s[i];
-        if in_string {
-            if c == b'\\' {
-                i += 1; // エスケープされた文字を飛ばす
-            } else if c == b'"' {
-                in_string = false;
-            }
-        } else if c == b'"' {
-            in_string = true;
-        } else if c == b'[' || c == b'{' {
-            depth += 1;
-            if depth > max {
-                return true;
-            }
-        } else if (c == b']' || c == b'}') && depth > 0 {
-            depth -= 1;
-        }
-        i += 1;
-    }
-    false
-}
-
 fn error_object(code: i32, message: &[u8], id: Value, data: Value) -> Value {
     let mut err = Object::new();
     err.insert(b"code".to_vec(), int(code));
@@ -371,7 +342,7 @@ fn call_internal(input: &[u8], host: &mut dyn Host) -> Value {
 
     // json のコピーやデストラクタは入れ子の深さだけ再帰するので、深い入力で
     // スタックを使い果たして落ちる。正当なリクエストは数段しかない。
-    if json_nesting_is_too_deep(input, 64) {
+    if json::nesting_is_too_deep(input, 64) {
         return error_object(PARSE_ERROR, b"Parse error", Value::Null, Value::Null);
     }
 

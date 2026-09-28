@@ -13,7 +13,7 @@ mod dump;
 mod parse;
 
 pub use dump::dump;
-pub use parse::{parse, ParseError};
+pub use parse::{nesting_is_too_deep, parse, ParseError};
 
 use std::collections::BTreeMap;
 

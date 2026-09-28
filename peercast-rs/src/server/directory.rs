@@ -734,6 +734,11 @@ pub fn ipv6_port_check(session_id: &[u8; 16], port: u16) -> Result<PortCheckResu
         return Err(Error::general(format!("HTTP request failed: {}", res.status_code)).with_err(res.status_code));
     }
     crate::log_debug!("Response: {}", String::from_utf8_lossy(&res.body));
+    // 平文の HTTP なので途中で書き換えられうる。json は捨てるときに入れ子の深さだけ再帰するので、
+    // 深すぎる応答でスタックを使い果たして落ちないよう先に弾く。正当な応答は 2 段しかない。
+    if crate::json::nesting_is_too_deep(&res.body, 16) {
+        return Err(Error::general("portcheck: response JSON is nested too deeply"));
+    }
     let data = crate::json::parse(&res.body).map_err(|e| Error::general(String::from_utf8_lossy(&e.what()).into_owned()))?;
     let ipstr = match data.get(b"ip") {
         Some(crate::json::Value::Str(s)) => s.clone(),

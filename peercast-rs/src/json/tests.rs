@@ -13,6 +13,16 @@ fn perr(s: &[u8]) -> String {
 }
 
 #[test]
+fn nesting_depth_check() {
+    assert!(!nesting_is_too_deep(br#"{"ip":"::1","ports":[7144]}"#, 2));
+    assert!(nesting_is_too_deep(br#"{"ports":[[7144]]}"#, 2));
+    // 文字列の中の括弧とエスケープした引用符は数えない
+    assert!(!nesting_is_too_deep(br#"{"a":"[[[\"[[["}"#, 1));
+    let deep = "[".repeat(200000) + &"]".repeat(200000);
+    assert!(nesting_is_too_deep(deep.as_bytes(), 16));
+}
+
+#[test]
 fn dump_floats_like_nlohmann() {
     for (x, want) in [
         (1.0, "1.0"),

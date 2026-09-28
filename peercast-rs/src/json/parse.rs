@@ -733,7 +733,7 @@ impl<'a> Parser<'a> {
 /// `json::parse(input)`。最後まで 1 つの値でなければ `parse_error`。
 ///
 /// 入れ子の深さに上限はない (nlohmann と同じ)。できた値を捨てるときなどは深さの分だけ再帰するので、
-/// 信頼できない入力は呼ぶ側で深さを確かめること (`jrpc` は 64 段を超えるものを先に弾く)。
+/// 信頼できない入力は呼ぶ側で `nesting_is_too_deep` で先に弾くこと。
 pub fn parse(input: &[u8]) -> Result<Value, ParseError> {
     let mut p = Parser { lexer: Lexer::new(input), last_token: Tok::Uninitialized };
     p.get_token();
@@ -743,4 +743,33 @@ pub fn parse(input: &[u8]) -> Result<Value, ParseError> {
         return Err(p.error(Tok::EndOfInput, "value"));
     }
     Ok(b.root)
+}
+
+/// JSON のネストの深さ (`[` と `{` の入れ子) が max を超えていないかを調べる。
+/// 文字列リテラルの中の括弧は数えない。
+pub fn nesting_is_too_deep(s: &[u8], max: i32) -> bool {
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        if in_string {
+            if c == b'\\' {
+                i += 1; // エスケープされた文字を飛ばす
+            } else if c == b'"' {
+                in_string = false;
+            }
+        } else if c == b'"' {
+            in_string = true;
+        } else if c == b'[' || c == b'{' {
+            depth += 1;
+            if depth > max {
+                return true;
+            }
+        } else if (c == b']' || c == b'}') && depth > 0 {
+            depth -= 1;
+        }
+        i += 1;
+    }
+    false
 }
