@@ -25,6 +25,12 @@ use super::sys;
 use crate::pcp::write::AtomBuf;
 
 pub const DEFAULT_PORT: u16 = 7144;
+
+/// 設定で受け取ったポート番号。1〜65535 のほかは `None`
+/// (C++ 版は 16 ビットに切り詰めており、70000 が 4464 番になっていた)
+pub fn valid_port(n: i32) -> Option<u16> {
+    u16::try_from(n).ok().filter(|&p| p != 0)
+}
 pub const MIN_YP_RETRY: u32 = 20;
 pub const MIN_TRACKER_RETRY: u32 = 10;
 pub const MIN_RELAY_RETRY: u32 = 5;
@@ -1172,9 +1178,13 @@ impl ServMgr {
         if is("serverName") {
             set!(|s: &mut ServSettings| s.server_name.assign(&v));
         } else if is("serverPort") {
+            let port = valid_port(iv).unwrap_or_else(|| {
+                crate::log_warn!("serverPort {} is out of range; using {}", iv, DEFAULT_PORT);
+                DEFAULT_PORT
+            });
             set!(|s: &mut ServSettings| {
-                s.server_host.port = iv as u16;
-                s.server_host_ipv6.port = iv as u16;
+                s.server_host.port = port;
+                s.server_host_ipv6.port = port;
             });
         } else if is("autoServe") {
             set!(|s: &mut ServSettings| s.auto_serve = bv);
@@ -1801,6 +1811,18 @@ fn _unused(_: &dyn Stream) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::ServMgr;
+
+    #[test]
+    fn valid_port_range() {
+        use super::valid_port;
+        assert_eq!(valid_port(1), Some(1));
+        assert_eq!(valid_port(7144), Some(7144));
+        assert_eq!(valid_port(65535), Some(65535));
+        // 16 ビットに切り詰めない (70000 は 4464 番にならない)
+        for n in [0, -1, 65536, 70000, i32::MAX, i32::MIN] {
+            assert_eq!(valid_port(n), None, "{}", n);
+        }
+    }
 
     #[test]
     fn rtmp_server_launch() {

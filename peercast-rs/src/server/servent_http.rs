@@ -1094,7 +1094,9 @@ fn run_cmd(ctx: &Ctx, http: &mut Http, cmd: &[u8], query: &[u8], jump: &mut Vec<
                 if q.get(b"name").is_empty() {
                     return Err(http_error(HTTP_SC_BADREQUEST, 400));
                 }
-                let port = crate::http::atoi(&q.get(b"port")) as u16;
+                let Some(port) = super::servmgr::valid_port(crate::http::atoi(&q.get(b"port"))) else {
+                    return Err(http_error(HTTP_SC_BADREQUEST, 400));
+                };
                 {
                     let mut s = pc.servmgr.settings();
                     s.rtmp_port = port;
@@ -1404,7 +1406,7 @@ fn cmd_apply(ctx: &Ctx, http: &mut Http, query: &[u8], jump: &mut Vec<u8>) -> Re
         s.public_directory_enabled = false;
         s.transcoding_enabled = false;
         s.chat = false;
-        s.server_host.port as i32
+        s.server_host.port
     };
     if let Some(f) = sm.flags.find(b"randomizeBroadcastingChannelID") {
         f.set(false);
@@ -1418,7 +1420,10 @@ fn cmd_apply(ctx: &Ctx, http: &mut Http, query: &[u8], jump: &mut Vec<u8>) -> Re
         match op.key {
             K::ServerName => sm.settings().server_name = pcs(&op.str),
             K::ServerActive => sm.settings().auto_serve = v != 0,
-            K::Port => new_port = v,
+            K::Port => match super::servmgr::valid_port(v) {
+                Some(p) => new_port = p,
+                None => crate::log_warn!("Ignoring invalid port {}", v),
+            },
             K::IcyMeta => pc.chanmgr.settings().icy_meta_interval = v,
             K::PassNew => sm.settings().password = op.str[..op.str.len().min(63)].to_vec(),
             K::Root => sm.set_root(v != 0),
@@ -1503,16 +1508,16 @@ fn cmd_apply(ctx: &Ctx, http: &mut Http, query: &[u8], jump: &mut Vec<u8>) -> Re
         s.allow_server1 = allow_server1;
         (s.server_host.port, s.html_path.clone())
     };
-    if port as i32 != new_port {
+    if port != new_port {
         let host_header = http.headers.get(b"Host");
         let ipstr = if !host_header.is_empty() {
             let first = crate::strutil::split(&host_header, b":").into_iter().next().unwrap_or_default();
             [&first[..], format!(":{}", new_port).as_bytes()].concat()
         } else {
-            Host::v4(super::host::get_ip(&sys::hostname()), new_port as u16).str().into_bytes()
+            Host::v4(super::host::get_ip(&sys::hostname()), new_port).str().into_bytes()
         };
         set_jump(jump, [&b"http://"[..], &ipstr, b"/", &hp, b"/settings.html"].concat());
-        pc.set_server_port(new_port as u16);
+        pc.set_server_port(new_port);
         // サーバーが始め直す時間
         sys::sleep(500);
     } else {

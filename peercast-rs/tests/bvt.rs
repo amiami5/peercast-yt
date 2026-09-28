@@ -310,6 +310,25 @@ fn helo() {
     assert!(child(&children, b"port").is_some(), "port");
 }
 
+/// 1〜65535 の外のポート番号は、16 ビットに切り詰めずに受け付けない
+#[test]
+fn port_out_of_range() {
+    let s = Server::start(17211);
+    let p = s.port;
+    // RTMP サーバーのコマンド: エラーを返す
+    for port in ["70000", "0", "-1"] {
+        assert_eq!(get(p, &format!("/admin?cmd=control_rtmp&action=start&name=x&port={}", port)).code, 400, "{}", port);
+    }
+    // 設定画面: ポートは変えずに、同じポートの設定画面に戻る
+    // (ほかの項目を送っていないので、HTML の許可などは外れる)
+    let r = get(p, "/admin?cmd=apply&port=70000");
+    assert_eq!(r.code, 302);
+    assert_eq!(r.header("Location"), Some("/html/en/settings.html"));
+    let ini = std::fs::read_to_string(s.dir.join("peercast.ini")).unwrap();
+    assert!(ini.contains("serverPort = 17211"), "{}", ini);
+    assert!(TcpStream::connect(("127.0.0.1", p)).is_ok());
+}
+
 /// /cgi-bin: 掲示板ビューワーと flv.cgi (もとは CGI スクリプト)。外のホストにはつながない
 #[test]
 fn cgi_bin() {
