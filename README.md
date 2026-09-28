@@ -171,7 +171,12 @@ peercast コマンドを起動したあと、ウェブブラウザで `http://lo
 ディレクトリに作られます。
 
 VPS などに置いて外から管理ページを開くときは、HTTPS にしてください
-(手順は [`docs/https.md`](docs/https.md))。
+(手順は [`docs/https.md`](docs/https.md))。HTTPS はオプションで、既定ではオフです。
+Let's Encrypt の証明書の取得から有効化までは、スクリプトで一括して行えます:
+
+```sh
+sudo tools/peercast-https-setup -d pc.example.com -m you@example.com
+```
 
 # RTMP サーバー (OBS などからの配信) の設定
 

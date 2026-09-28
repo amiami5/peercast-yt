@@ -1,0 +1,399 @@
+#!/bin/bash
+# PeerCast の管理ページを HTTPS にする (Let's Encrypt の証明書の取得から、enableSSLServer のオンまで)。
+#
+#   sudo peercast-https-setup -d pc.example.com -m you@example.com
+#
+# 使い方の詳細は docs/https.md の「スクリプトで一括して設定する」、または --help。
+# 何度実行してもかまわない (証明書は期限が近くなければ取り直さない)。
+
+set -eu
+umask 022
+
+PROG=peercast-https-setup
+HOOK_DIR=/etc/letsencrypt/renewal-hooks/deploy
+LIVE_DIR=/etc/letsencrypt/live
+
+DOMAIN=
+EMAIL=
+OWNER=
+CONFDIR=
+PORT=
+WEBROOT=
+STAGING=no
+FIREWALL=yes
+INSTALL=yes
+YES=no
+
+usage() {
+    cat <<EOF
+使い方: sudo $PROG -d ドメイン名 [オプション]
+
+Let's Encrypt から証明書を取り (certbot)、PeerCast の設定のディレクトリに server.crt と
+server.key としてコピーし、フラグ enableSSLServer をオンにします。更新のたびにコピーし直す
+certbot の deploy-hook も置きます。
+
+  -d, --domain 名前       証明書を取るドメイン名 (必須)。この VPS を指していること
+  -m, --email アドレス    Let's Encrypt に登録するメールアドレス (期限切れの知らせなどが届く)。
+                          省くとメールアドレスなしで登録する
+  -u, --user ユーザー     PeerCast を動かしているユーザー (省くと、動いている peercast から調べる)
+  -c, --config-dir DIR    peercast.ini のあるディレクトリ (省くと、動いている peercast から調べる)
+  -p, --port ポート       PeerCast のポート (省くと peercast.ini の serverPort、なければ 7144)
+  -w, --webroot DIR       80 番で nginx などが動いているとき、その公開ディレクトリ
+                          (省くと certbot が一時的に 80 番で待ち受ける standalone)
+      --staging           Let's Encrypt の試験用の環境を使う (ブラウザーは信頼しない証明書になる)
+      --no-firewall       ufw・firewalld のポートを開けない
+      --no-install        certbot・curl がなくても apt で入れない
+  -y, --yes               確かめずに進める
+  -h, --help              この説明
+EOF
+}
+
+die() { echo "$PROG: エラー: $*" >&2; exit 1; }
+warn() { echo "$PROG: 注意: $*" >&2; }
+step() { echo; echo "==> $*"; }
+
+# シェルの単一引用符で囲む (hook のスクリプトに値を埋め込むため)
+q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+confirm() {
+    [ "$YES" = yes ] && return 0
+    local ans
+    printf '%s [y/N] ' "$1"
+    read -r ans </dev/tty || return 1
+    case "$ans" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+need_arg() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 に値がありません"; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -d|--domain) need_arg "$@"; DOMAIN=$2; shift 2 ;;
+        -m|--email) need_arg "$@"; EMAIL=$2; shift 2 ;;
+        -u|--user) need_arg "$@"; OWNER=$2; shift 2 ;;
+        -c|--config-dir) need_arg "$@"; CONFDIR=$2; shift 2 ;;
+        -p|--port) need_arg "$@"; PORT=$2; shift 2 ;;
+        -w|--webroot) need_arg "$@"; WEBROOT=$2; shift 2 ;;
+        --staging) STAGING=yes; shift ;;
+        --no-firewall) FIREWALL=no; shift ;;
+        --no-install) INSTALL=no; shift ;;
+        -y|--yes) YES=yes; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; die "知らないオプション: $1" ;;
+    esac
+done
+
+# ---------------------------------------------------------------- 引数の確かめ
+
+[ -n "$DOMAIN" ] || { usage >&2; die "-d でドメイン名を指定してください"; }
+[ "$(uname -s)" = Linux ] || die "Linux 専用です"
+[ "$(id -u)" -eq 0 ] || die "root で実行してください (sudo $PROG …)"
+
+DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z')
+printf '%s' "$DOMAIN" | grep -Eq '^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z][a-z0-9-]*[a-z0-9]$' \
+    || die "ドメイン名が正しくありません: $DOMAIN"
+case "$DOMAIN" in *.local|localhost*) die "Let's Encrypt はこのドメイン名に証明書を出しません: $DOMAIN" ;; esac
+if [ -n "$EMAIL" ]; then
+    printf '%s' "$EMAIL" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' \
+        || die "メールアドレスが正しくありません: $EMAIL"
+fi
+if [ -n "$PORT" ]; then
+    printf '%s' "$PORT" | grep -Eq '^[0-9]+$' && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] \
+        || die "ポートが正しくありません: $PORT"
+fi
+if [ -n "$WEBROOT" ]; then
+    [ -d "$WEBROOT" ] || die "webroot のディレクトリがありません: $WEBROOT"
+fi
+
+# ---------------------------------------------------------------- PeerCast を探す
+
+# 動いている peercast のプロセスの、設定のディレクトリ (peercast.ini のディレクトリ)
+proc_confdir() {
+    local pid=$1 ini= i envdir= home
+    local -a args=()
+    mapfile -d '' args <"/proc/$pid/cmdline" || return 1
+    for ((i = 1; i < ${#args[@]}; i++)); do
+        case "${args[$i]}" in
+            -i|--inifile) ini=${args[$((i + 1))]:-} ;;
+        esac
+    done
+    if [ -n "$ini" ]; then
+        case "$ini" in /*) ;; *) ini="$(readlink "/proc/$pid/cwd")/$ini" ;; esac
+        dirname "$ini"
+        return 0
+    fi
+    envdir=$(tr '\0' '\n' <"/proc/$pid/environ" | sed -n 's/^XDG_CONFIG_HOME=//p' | head -n 1)
+    if [ -z "$envdir" ]; then
+        home=$(tr '\0' '\n' <"/proc/$pid/environ" | sed -n 's/^HOME=//p' | head -n 1)
+        [ -n "$home" ] || home=$(getent passwd "$(stat -c %U "/proc/$pid")" | cut -d: -f6)
+        envdir=$home/.config
+    fi
+    echo "$envdir/peercast"
+}
+
+PIDS=$(pgrep -x peercast || true)
+PID=
+if [ -n "$PIDS" ]; then
+    n=0
+    for p in $PIDS; do
+        d=$(proc_confdir "$p" || true)
+        [ -n "$d" ] || continue
+        if [ -z "$CONFDIR" ] || [ "$(readlink -f "$d")" = "$(readlink -f "$CONFDIR")" ]; then
+            PID=$p
+            PROC_CONFDIR=$d
+            n=$((n + 1))
+        fi
+    done
+    if [ "$n" -gt 1 ]; then
+        die "peercast が複数動いています。-c で設定のディレクトリを指定してください"
+    fi
+    if [ -n "$PID" ]; then
+        [ -n "$CONFDIR" ] || CONFDIR=$PROC_CONFDIR
+        [ -n "$OWNER" ] || OWNER=$(stat -c %U "/proc/$PID")
+    fi
+fi
+
+if [ -z "$OWNER" ]; then
+    OWNER=${SUDO_USER:-}
+    [ -n "$OWNER" ] || die "PeerCast を動かすユーザーがわかりません。-u で指定してください"
+fi
+getent passwd "$OWNER" >/dev/null || die "ユーザーがありません: $OWNER"
+GROUP=$(id -gn "$OWNER")
+if [ -z "$CONFDIR" ]; then
+    CONFDIR=$(getent passwd "$OWNER" | cut -d: -f6)/.config/peercast
+fi
+CONFDIR=$(readlink -f "$CONFDIR" 2>/dev/null || echo "$CONFDIR")
+INI=$CONFDIR/peercast.ini
+[ -f "$INI" ] || die "$INI がありません。PeerCast を一度起動して、管理ページでパスワードを設定してから実行してください (場所が違うときは -c)"
+
+# ini の [セクション] の中の値 (名前は大文字小文字を区別しない)
+ini_get() {
+    awk -v sec="[$1]" -v key="$2" '
+        { sub(/\r$/, "") }
+        /^[[:space:]]*\[/ { t = $0; gsub(/[[:space:]]/, "", t); insec = (tolower(t) == tolower(sec)); next }
+        insec {
+            i = index($0, "="); if (i == 0) next
+            k = substr($0, 1, i - 1); gsub(/[[:space:]]/, "", k)
+            if (tolower(k) == tolower(key)) { v = substr($0, i + 1); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v; exit }
+        }' "$INI"
+}
+
+# peercast.ini の [Flags] の enableSSLServer を Yes にする (なければ足す。[Flags] がなければ末尾に足す)
+ENABLE_SSL_AWK='
+    { line = $0; sub(/\r$/, "", line) }
+    line ~ /^[[:space:]]*\[/ {
+        t = line; gsub(/[[:space:]]/, "", t)
+        if (inflags && !done) { print "enableSSLServer = Yes"; done = 1 }
+        inflags = (tolower(t) == "[flags]")
+        print; next
+    }
+    inflags {
+        k = line; sub(/=.*/, "", k); gsub(/[[:space:]]/, "", k)
+        if (tolower(k) == "enablesslserver") { if (!done) print "enableSSLServer = Yes"; done = 1; next }
+    }
+    { print }
+    END {
+        if (inflags && !done) { print "enableSSLServer = Yes"; print "[End]"; done = 1 }
+        if (!done) { print "[Flags]"; print "enableSSLServer = Yes"; print "[End]" }
+    }'
+
+[ -n "$PORT" ] || PORT=$(ini_get Server serverPort)
+[ -n "$PORT" ] || PORT=7144
+
+# ---------------------------------------------------------------- 実行前の確かめ
+
+step "確かめています"
+
+if [ -z "$(ini_get Server password)" ]; then
+    warn "管理ページのパスワードが設定されていません。HTTPS にしても、外からだれでも管理ページに入れます。"
+    warn "先に管理ページの「設定」でパスワードを設定してください。"
+    confirm "このまま続けますか?" || die "中止しました"
+fi
+
+if [ "$OWNER" = root ]; then
+    warn "PeerCast を root で動かしています。一般ユーザーで動かすことをすすめます。"
+fi
+
+# ドメイン名がこの機械のアドレスを指しているか (NAT の内側などでは一致しないので、注意だけ)
+RESOLVED=$(getent ahosts "$DOMAIN" | awk '{ print $1 }' | sort -u || true)
+if [ -z "$RESOLVED" ]; then
+    die "$DOMAIN の名前が引けません。DNS に A (AAAA) レコードを作ってください"
+fi
+LOCAL_ADDRS=$(ip -o addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }')
+match=no
+for a in $RESOLVED; do
+    if printf '%s\n' "$LOCAL_ADDRS" | grep -Fxq "$a"; then match=yes; fi
+done
+if [ "$match" = no ]; then
+    warn "$DOMAIN のアドレス ($(echo $RESOLVED)) は、この機械のアドレスにありません。"
+    warn "ルーターの内側 (NAT) で、80 番と $PORT 番をこの機械に転送しているなら、そのまま進めてかまいません。"
+fi
+
+if [ -z "$WEBROOT" ] && command -v ss >/dev/null 2>&1; then
+    if [ -n "$(ss -Hltn 'sport = :80' 2>/dev/null)" ]; then
+        die "80 番でほかのプログラムが待ち受けています ($(ss -Hltnp 'sport = :80' 2>/dev/null | grep -o 'users:(("[^"]*' | head -n 1 | sed 's/.*"//')). そのサーバーの公開ディレクトリを -w で指定してください"
+    fi
+fi
+
+EXISTING=no
+if [ -f "$LIVE_DIR/$DOMAIN/cert.pem" ]; then
+    EXISTING=yes
+    if openssl x509 -in "$LIVE_DIR/$DOMAIN/cert.pem" -noout -issuer 2>/dev/null | grep -qi staging; then
+        EXISTING=staging
+    fi
+    if [ "$STAGING" = yes ] && [ "$EXISTING" = yes ]; then
+        die "$DOMAIN には本物の証明書がすでにあります。--staging で試験用のものに置き換えることはしません"
+    fi
+fi
+
+cat <<EOF
+
+  ドメイン名          $DOMAIN$( [ "$STAGING" = yes ] && echo ' (試験用の環境)')
+  メールアドレス      ${EMAIL:-(なし)}
+  PeerCast            $( [ -n "$PID" ] && echo "動いている (PID $PID)" || echo "止まっている")
+  ユーザー            $OWNER:$GROUP
+  設定のディレクトリ  $CONFDIR
+  ポート              $PORT
+  証明書の取り方      $( [ -n "$WEBROOT" ] && echo "webroot ($WEBROOT)" || echo "standalone (certbot が 80 番で待ち受ける)")
+  既存の証明書        $(case $EXISTING in yes) echo "あり (期限が近くなければそのまま使う)" ;; staging) echo "試験用のものあり (本物に取り直す)" ;; *) echo "なし" ;; esac)
+
+EOF
+confirm "この内容で HTTPS にしますか?" || die "中止しました"
+
+# ---------------------------------------------------------------- certbot と curl を入れる
+
+missing=
+command -v certbot >/dev/null 2>&1 || missing="$missing certbot"
+command -v curl >/dev/null 2>&1 || missing="$missing curl"
+command -v openssl >/dev/null 2>&1 || missing="$missing openssl"
+if [ -n "$missing" ]; then
+    if [ "$INSTALL" = yes ] && command -v apt-get >/dev/null 2>&1; then
+        step "入れています:$missing"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y $missing
+    else
+        die "次のコマンドを入れてください:$missing"
+    fi
+fi
+
+# ---------------------------------------------------------------- ファイアウォール
+
+if [ "$FIREWALL" = yes ]; then
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        step "ufw で 80 番と $PORT 番を開けています"
+        ufw allow 80/tcp
+        ufw allow "$PORT"/tcp
+    elif command -v firewall-cmd >/dev/null 2>&1 && [ "$(firewall-cmd --state 2>/dev/null)" = running ]; then
+        step "firewalld で 80 番と $PORT 番を開けています"
+        firewall-cmd --permanent --add-port=80/tcp --add-port="$PORT"/tcp
+        firewall-cmd --reload
+    fi
+fi
+
+# ---------------------------------------------------------------- deploy-hook を置く
+
+# certbot は、証明書を更新するたびに renewal-hooks/deploy のスクリプトをすべて実行する
+# (--deploy-hook と違い、すでにある証明書にも効く)。
+HOOK=$HOOK_DIR/peercast-$DOMAIN
+step "更新のたびに証明書をコピーするスクリプトを置いています: $HOOK"
+mkdir -p "$HOOK_DIR"
+tmp=$(mktemp "$HOOK_DIR/.peercast.XXXXXX")
+cat >"$tmp" <<EOF
+#!/bin/sh
+# $PROG が作ったもの。Let's Encrypt の証明書を取ったとき・更新したときに、
+# PeerCast の設定のディレクトリに server.crt と server.key としてコピーする。
+set -e
+DOMAIN=$(q "$DOMAIN")
+OWNER=$(q "$OWNER")
+GROUP=$(q "$GROUP")
+DIR=$(q "$CONFDIR")
+
+# ほかのドメインの証明書の更新では何もしない
+case " \$RENEWED_DOMAINS " in
+  *" \$DOMAIN "*) ;;
+  *) exit 0 ;;
+esac
+
+# 一時ファイルに書いてから名前を変える (PeerCast が書きかけのファイルを読まないように)
+install -o "\$OWNER" -g "\$GROUP" -m 600 "\$RENEWED_LINEAGE/privkey.pem"   "\$DIR/server.key.new"
+install -o "\$OWNER" -g "\$GROUP" -m 644 "\$RENEWED_LINEAGE/fullchain.pem" "\$DIR/server.crt.new"
+mv -f "\$DIR/server.key.new" "\$DIR/server.key"
+mv -f "\$DIR/server.crt.new" "\$DIR/server.crt"
+EOF
+chmod 755 "$tmp"
+mv -f "$tmp" "$HOOK"
+
+# ---------------------------------------------------------------- 証明書を取る
+
+step "Let's Encrypt から証明書を取っています"
+set -- certonly --non-interactive --agree-tos --cert-name "$DOMAIN" -d "$DOMAIN" --keep-until-expiring
+if [ -n "$WEBROOT" ]; then
+    set -- "$@" --webroot -w "$WEBROOT"
+else
+    set -- "$@" --standalone
+fi
+if [ -n "$EMAIL" ]; then
+    set -- "$@" -m "$EMAIL"
+else
+    set -- "$@" --register-unsafely-without-email
+fi
+[ "$STAGING" = yes ] && set -- "$@" --staging
+[ "$EXISTING" = staging ] && [ "$STAGING" = no ] && set -- "$@" --force-renewal
+certbot "$@" || die "証明書を取れませんでした。上の certbot のメッセージを見てください (80 番に外からつながるか、DNS が正しいか)"
+
+[ -f "$LIVE_DIR/$DOMAIN/fullchain.pem" ] || die "$LIVE_DIR/$DOMAIN/fullchain.pem がありません"
+
+# 初めて取ったときは renewal-hooks は実行されないので (期限が近くなくて取り直さなかったときも)、ここで実行する
+step "証明書を $CONFDIR にコピーしています"
+RENEWED_LINEAGE=$LIVE_DIR/$DOMAIN RENEWED_DOMAINS=$DOMAIN "$HOOK"
+
+# ---------------------------------------------------------------- enableSSLServer をオンにする
+
+step "フラグ enableSSLServer をオンにしています"
+if [ -n "$PID" ]; then
+    # localhost からの要求はパスワードなしで通る。フラグはその場で効き、peercast.ini にも保存される
+    out=$(curl -sS --max-time 10 "http://127.0.0.1:$PORT/cmd?q=flag%20set%20enableSSLServer%20true") \
+        || die "PeerCast (127.0.0.1:$PORT) につながりません。管理ページの「フラグ」で enableSSLServer をオンにしてください"
+    printf '%s\n' "$out" | grep -Eq '^enableSSLServer[[:space:]]+true' \
+        || die "フラグを変えられませんでした: $out"
+    echo "$out"
+else
+    # 止まっているときは peercast.ini を書き換える (動いているときに書き換えると、終わるときに上書きされる)
+    cp -p "$INI" "$INI.bak"
+    tmp=$(mktemp)
+    awk "$ENABLE_SSL_AWK" "$INI" >"$tmp"
+    # 持ち主と権限を変えないように、中身だけ書き戻す
+    cat "$tmp" >"$INI"
+    rm -f "$tmp"
+    echo "$INI を書き換えました (元のものは $INI.bak)"
+fi
+
+# ---------------------------------------------------------------- 確かめる
+
+if [ -n "$PID" ]; then
+    step "HTTPS でつながるか確かめています"
+    if [ "$STAGING" = yes ]; then k=-k; else k=; fi
+    code=$(curl -sS $k --max-time 15 --resolve "$DOMAIN:$PORT:127.0.0.1" -o /dev/null -w '%{http_code}' \
+        "https://$DOMAIN:$PORT/" 2>&1) || die "HTTPS でつながりませんでした: $code (PeerCast のログを見てください。docs/https.md の「確かめる」)"
+    echo "https://$DOMAIN:$PORT/ → HTTP $code"
+    openssl x509 -in "$CONFDIR/server.crt" -noout -subject -enddate
+fi
+
+if systemctl list-timers --all 2>/dev/null | grep -q 'certbot'; then
+    renew="certbot の timer が動いているので、更新は自動で行われます。"
+else
+    renew="certbot の timer が見つかりません。'certbot renew' を 1 日 1 回 cron などで実行してください。"
+fi
+
+cat <<EOF
+
+完了しました。
+
+  - ブラウザーで https://$DOMAIN:$PORT/ を開いてください。
+  - 平文の http:// でログインしていたときは、https:// で開いて一度ログアウトし、ログインし直してください
+    (前の Cookie が平文で送られることがあるため)。
+  - $renew
+    更新のたびに $HOOK が server.crt と server.key を差し替えます (PeerCast の再起動はいりません)。
+EOF
+[ -z "$WEBROOT" ] && echo "  - 更新のときも certbot が 80 番で待ち受けます。80 番を閉じたり、ほかのサーバーに使わせたりしないでください。"
+[ -z "$PID" ] && echo "  - PeerCast が止まっていたので、peercast.ini を書き換えました。PeerCast を起動してください。"
+[ "$STAGING" = yes ] && echo "  - 試験用の証明書です。本番にするときは --staging を付けずに、もう一度実行してください。"
+exit 0

@@ -6,6 +6,11 @@ VPS などに PeerCast を置いて、外から管理ページを開くときの
 証明書は Let's Encrypt から certbot で取り、PeerCast はそのファイルを読むだけです。
 HTTPS は同じポート (既定 7144) で受けるので、ポートを増やす必要はありません。
 
+HTTPS は**オプション**です。既定ではオフ (`enableSSLServer` が `No`) で、この文書の手順を行うか、
+下のスクリプトを実行したときだけオンになります。自分の PC だけで使う (`http://localhost:7144/`) なら不要です。
+
+手順を 1 つずつ行う代わりに、[スクリプトで一括して設定する](#スクリプトで一括して設定する) こともできます。
+
 ## しくみ
 
 - フラグ `enableSSLServer` をオンにすると、同じポートで TLS の接続と平文の接続の両方を受けます
@@ -28,6 +33,86 @@ HTTPS は同じポート (既定 7144) で受けるので、ポートを増や�
   HTTP でつないで確かめるためです。7144 番では確かめられません。
 - certbot (`sudo apt install certbot`)。Ubuntu / Debian のパッケージなら、更新の timer も一緒に入ります。
 - 管理ページのパスワードを設定しておくこと (設定のページの「パスワード」)。
+
+## スクリプトで一括して設定する
+
+リポジトリの [`tools/peercast-https-setup`](../tools/peercast-https-setup) を root で実行すると、
+下の 1〜4 をまとめて行います。`make install` では入らないので、使うときにリポジトリ (または展開した
+ソース) から直接実行してください。
+
+```sh
+sudo tools/peercast-https-setup -d pc.example.com -m you@example.com
+```
+
+先に済ませておくこと:
+
+- ドメイン名の A (AAAA) レコードを VPS のアドレスに向けておく。
+- PeerCast を一度起動して、管理ページでパスワードを設定しておく (`peercast.ini` が要ります)。
+- VPS の事業者のファイアウォール (セキュリティグループなど) で、80 番と 7144 番を開けておく
+  (VPS の中の ufw・firewalld はスクリプトが開けます)。
+
+スクリプトが行うこと:
+
+1. 動いている `peercast` のプロセスから、動かしているユーザーと設定のディレクトリ (`-i` の ini の
+   ディレクトリ、なければ `~/.config/peercast`) を調べ、`peercast.ini` からポートを読む。
+   PeerCast が止まっているときは、`sudo` したユーザーの `~/.config/peercast` を使う。
+2. パスワードが空でないか、ドメイン名がこの機械のアドレスを指しているか、80 番が空いているかを確かめ、
+   内容を表示して確認を求める。
+3. certbot・curl・openssl がなければ `apt-get` で入れる。ufw か firewalld が動いていれば、80 番と
+   PeerCast のポートを開ける。
+4. 更新のたびに `server.crt`・`server.key` を差し替えるスクリプトを
+   `/etc/letsencrypt/renewal-hooks/deploy/peercast-<ドメイン名>` に置く (中身は下の 2 と同じ)。
+   certbot は更新のたびにこのディレクトリのスクリプトを実行します。
+5. `certbot certonly` で証明書を取り、4 のスクリプトを 1 回実行して、PeerCast の設定のディレクトリに
+   コピーする。
+6. `enableSSLServer` をオンにする。PeerCast が動いていれば、`http://127.0.0.1:<ポート>/cmd` から
+   (その場で効き、`peercast.ini` にも保存されます)、止まっていれば `peercast.ini` を書き換える
+   (元のものは `peercast.ini.bak`)。
+7. PeerCast が動いていれば、`https://<ドメイン名>:<ポート>/` に証明書を検証してつながるかを確かめる。
+
+何度実行してもかまいません。証明書は期限が近くなければ取り直さず、コピーとフラグの設定だけをやり直します。
+
+| オプション | 意味 |
+|---|---|
+| `-d`, `--domain 名前` | 証明書を取るドメイン名 (必須) |
+| `-m`, `--email アドレス` | Let's Encrypt に登録するメールアドレス。省くとメールアドレスなしで登録する |
+| `-u`, `--user ユーザー` | PeerCast を動かすユーザー (省くと自動) |
+| `-c`, `--config-dir DIR` | `peercast.ini` のあるディレクトリ (省くと自動。peercast が複数動いているときは必須) |
+| `-p`, `--port ポート` | PeerCast のポート (省くと `peercast.ini` の `serverPort`、なければ 7144) |
+| `-w`, `--webroot DIR` | 80 番で nginx などが動いているとき、その公開ディレクトリ (省くと standalone) |
+| `--staging` | Let's Encrypt の試験用の環境を使う。回数の制限を気にせず試せるが、ブラウザーは信頼しない。あとで付けずに実行し直すと、本物の証明書に取り直す |
+| `--no-firewall` | ufw・firewalld を変えない |
+| `--no-install` | certbot などがなくても入れない (エラーで止まる) |
+| `-y`, `--yes` | 確認せずに進める |
+
+例:
+
+```sh
+# まず試験用の証明書で通しで試し、うまくいったら本物を取る
+sudo tools/peercast-https-setup -d pc.example.com -m you@example.com --staging
+sudo tools/peercast-https-setup -d pc.example.com -m you@example.com
+
+# 80 番で nginx が動いている
+sudo tools/peercast-https-setup -d pc.example.com -m you@example.com -w /var/www/html
+
+# PeerCast を systemd でユーザー peercast として動かしていて、今は止めている
+sudo tools/peercast-https-setup -d pc.example.com -u peercast -c /home/peercast/.config/peercast
+```
+
+終わったら、3 の最後の段落のとおり、https:// で開いて一度ログアウトし、ログインし直してください。
+standalone で取ったときは、更新のときも certbot が 80 番で待ち受けるので、80 番を開けたままにしておきます。
+
+### スクリプトで設定したものを元に戻す
+
+```sh
+# HTTPS をやめる (管理ページの「フラグ」で enableSSLServer をオフにするのと同じ)
+curl 'http://127.0.0.1:7144/cmd?q=flag%20set%20enableSSLServer%20false'   # VPS の上で実行する
+# 証明書の更新とコピーをやめる
+sudo rm /etc/letsencrypt/renewal-hooks/deploy/peercast-pc.example.com
+sudo certbot delete --cert-name pc.example.com
+```
+
+## 手で設定する
 
 以下では、PeerCast を一般ユーザー `peercast` で動かし、設定のディレクトリが
 `/home/peercast/.config/peercast/` だとします。自分の環境に合わせて読み替えてください。
