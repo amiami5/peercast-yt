@@ -1219,13 +1219,14 @@ fn run_cmd(ctx: &Ctx, http: &mut Http, cmd: &[u8], query: &[u8], jump: &mut Vec<
             };
             let s = &mut *http.stream;
             s.write_line(HTTP_SC_FOUND)?;
+            // ページの JS からは読まないので HttpOnly にして、XSS があってもトークンを盗まれないようにする
             if never {
                 s.write_line(format!(
-                    "Set-Cookie: {}_id={}; path=/; expires=\"Mon, 01-Jan-3000 00:00:00 GMT\"; SameSite=Strict",
+                    "Set-Cookie: {}_id={}; path=/; expires=\"Mon, 01-Jan-3000 00:00:00 GMT\"; HttpOnly; SameSite=Strict",
                     port, idstr
                 ))?;
             } else {
-                s.write_line(format!("Set-Cookie: {}_id={}; path=/; SameSite=Strict", port, idstr))?;
+                s.write_line(format!("Set-Cookie: {}_id={}; path=/; HttpOnly; SameSite=Strict", port, idstr))?;
             }
             let rp = q.get(b"requested_path");
             if crate::cgi::is_safe_local_path(&rp) {

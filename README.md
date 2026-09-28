@@ -26,7 +26,7 @@ OBS などから RTMP で配信を受け付ける `rtmp-server` を、C++ から
 
 **2. セキュリティ修正**
 
-* 管理画面・API: 同一オリジン検証 (CSRF 対策)、ログイン Cookie に `SameSite=Strict`、
+* 管理画面・API: 同一オリジン検証 (CSRF 対策)、ログイン Cookie に `HttpOnly` と `SameSite=Strict`、
   リダイレクト先や `htmlPath` の検証
 * 入力の検証: HTTP・チャンネル情報の URL は http(s) のみ許可 (SSRF 対策)、HTTP ヘッダー数と
   チャンクサイズの上限、JSON・AMF0・atom のネストの深さと値の数の上限
