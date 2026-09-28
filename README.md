@@ -170,6 +170,9 @@ peercast コマンドを起動したあと、ウェブブラウザで `http://lo
 を開くと操作できます。なお、設定ファイル `peercast.ini` は `~/.config/peercast/`
 ディレクトリに作られます。
 
+VPS などに置いて外から管理ページを開くときは、HTTPS にしてください
+(手順は [`docs/https.md`](docs/https.md))。
+
 # RTMP サーバー (OBS などからの配信) の設定
 
 管理画面の「RTMPサーバー」のページで、開始する前に次の 2 つを設定できます。
