@@ -6,8 +6,9 @@
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_long, c_ulong, c_void};
 use std::sync::Mutex;
+use std::time::Instant;
 
-use super::error::{Error, Result};
+use super::error::{Error, Kind, Result};
 
 #[allow(non_camel_case_types)]
 type SSL_CTX = c_void;
@@ -48,8 +49,30 @@ extern "C" {
     fn SSL_get_error(ssl: *const SSL, ret: c_int) -> c_int;
     fn SSL_shutdown(ssl: *mut SSL) -> c_int;
     fn ERR_get_error() -> c_ulong;
+    fn ERR_clear_error();
     fn ERR_error_string_n(e: c_ulong, buf: *mut c_char, len: usize);
 }
+
+/// `struct pollfd` (並びは POSIX で決まっている)
+#[repr(C)]
+struct PollFd {
+    fd: c_int,
+    events: i16,
+    revents: i16,
+}
+
+/// `nfds_t` (Linux の glibc と musl は unsigned long、macOS や BSD は unsigned int)
+#[cfg(target_os = "linux")]
+type NfdsT = c_ulong;
+#[cfg(not(target_os = "linux"))]
+type NfdsT = std::os::raw::c_uint;
+
+extern "C" {
+    fn poll(fds: *mut PollFd, nfds: NfdsT, timeout: c_int) -> c_int;
+}
+
+const POLLIN: i16 = 1;
+const POLLOUT: i16 = 4;
 
 const SSL_VERIFY_PEER: c_int = 1;
 const SSL_FILETYPE_PEM: c_int = 1;
@@ -59,6 +82,8 @@ const TLS1_2_VERSION: c_long = 0x0303;
 const TLSEXT_NAMETYPE_HOST_NAME: c_long = 0;
 const X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS: u32 = 0x4;
 const X509_V_OK: c_long = 0;
+const SSL_ERROR_WANT_READ: c_int = 2;
+const SSL_ERROR_WANT_WRITE: c_int = 3;
 const SSL_ERROR_ZERO_RETURN: c_int = 6;
 
 fn init() {
@@ -76,6 +101,7 @@ fn init() {
 pub struct Session {
     ctx: *mut SSL_CTX,
     ssl: *mut SSL,
+    fd: c_int,
 }
 
 // SSL と SSL_CTX は、1 つのスレッドからしか同時に使わない (Session は &mut でしか使わない)
@@ -116,6 +142,44 @@ fn cstr(b: &[u8]) -> CString {
     CString::new(b.iter().copied().take_while(|&c| c != 0).collect::<Vec<u8>>()).unwrap_or_default()
 }
 
+/// OpenSSL のエラーのキューの先頭の理由 (なければ空)。キューは空にする
+fn error_reason() -> String {
+    // SAFETY: buf は NUL で終わる文字列を書ける長さ
+    unsafe {
+        let err = ERR_get_error();
+        ERR_clear_error();
+        if err == 0 {
+            return String::new();
+        }
+        let mut buf = [0 as c_char; 120];
+        ERR_error_string_n(err, buf.as_mut_ptr(), buf.len());
+        std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned()
+    }
+}
+
+/// `fd` が読める (`write` なら書ける) ようになるまで、`deadline` まで待つ。過ぎたら `TimeoutException`。
+/// 閉じられたときやエラーのときも戻る (続けて呼ぶ SSL の関数が失敗を返す)
+fn wait_fd(fd: c_int, write: bool, deadline: Instant) -> Result<()> {
+    loop {
+        let rest = deadline.saturating_duration_since(Instant::now()).as_millis();
+        if rest == 0 {
+            return Err(Error::new(Kind::Timeout, "Handshake timeout"));
+        }
+        let mut p = PollFd { fd, events: if write { POLLOUT } else { POLLIN }, revents: 0 };
+        // SAFETY: p は 1 つの pollfd
+        let r = unsafe { poll(&mut p, 1, rest.min(c_int::MAX as u128) as c_int) };
+        if r > 0 {
+            return Ok(());
+        }
+        if r < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::Interrupted {
+                return Err(e.into());
+            }
+        }
+    }
+}
+
 impl Session {
     /// `SslClientSocket::open` と `connect` の TLS の部分: 接続したソケットの上でハンドシェイクする。
     /// `hostname` が空でなければ、SNI を送り、証明書とホスト名を検証する。
@@ -123,11 +187,12 @@ impl Session {
         init();
         // SAFETY: OpenSSL の関数を、ドキュメントどおりの引数で呼ぶ。作ったものは Session が解放する。
         unsafe {
+            ERR_clear_error();
             let ctx = SSL_CTX_new(TLS_client_method());
             if ctx.is_null() {
                 return Err(Error::sock("SSL_CTX_new failed"));
             }
-            let mut s = Session { ctx, ssl: std::ptr::null_mut() };
+            let mut s = Session { ctx, ssl: std::ptr::null_mut(), fd };
             if !hostname.is_empty() {
                 if SSL_CTX_set_default_verify_paths(ctx) != 1 {
                     return Err(Error::sock("Failed to load CA certificates"));
@@ -167,17 +232,39 @@ impl Session {
         }
     }
 
-    /// `SslClientSocket::upgrade`: 受け付けたソケットの上で、サーバーとしてハンドシェイクする
-    pub fn accept(fd: c_int) -> Result<Session> {
+    /// SSL の操作 `op` (戻り値が 0 以下なら失敗か待ち) を行う。`deadline` があれば、ソケットは
+    /// ノンブロッキングにしておき、読めるか書けるようになるのを期限まで待って繰り返す。
+    /// ブロッキングのままだと、中の recv のたびに読む待ち時間をまるごと使えるので、1 バイトずつ
+    /// 送られると期限を過ぎても終わらない (Slowloris)。最後の戻り値を返す
+    fn run(&mut self, deadline: Option<Instant>, mut op: impl FnMut(*mut SSL) -> c_int) -> Result<c_int> {
+        loop {
+            // SAFETY: ssl は作ってあり、このスレッドでしか使わない
+            let (r, err) = unsafe {
+                ERR_clear_error();
+                let r = op(self.ssl);
+                (r, if r <= 0 { SSL_get_error(self.ssl, r) } else { 0 })
+            };
+            match (deadline, err) {
+                (Some(d), SSL_ERROR_WANT_READ) => wait_fd(self.fd, false, d)?,
+                (Some(d), SSL_ERROR_WANT_WRITE) => wait_fd(self.fd, true, d)?,
+                _ => return Ok(r),
+            }
+        }
+    }
+
+    /// `SslClientSocket::upgrade`: 受け付けたソケットの上で、サーバーとしてハンドシェイクする。
+    /// `deadline` があれば、ソケットはノンブロッキングにしておく (`run`)
+    pub fn accept(fd: c_int, deadline: Option<Instant>) -> Result<Session> {
         init();
         let (crt, key) = server_configuration();
         // SAFETY: 同上
-        unsafe {
+        let mut s = unsafe {
+            ERR_clear_error();
             let ctx = SSL_CTX_new(TLS_server_method());
             if ctx.is_null() {
                 return Err(Error::general("SSL_CTX_new failed"));
             }
-            let mut s = Session { ctx, ssl: std::ptr::null_mut() };
+            let mut s = Session { ctx, ssl: std::ptr::null_mut(), fd };
             // SSL_CTX_set_min_proto_version (マクロ)。TLS 1.0 と 1.1 は受け付けない
             if SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, TLS1_2_VERSION, std::ptr::null_mut()) != 1 {
                 return Err(Error::general("SSL_CTX_set_min_proto_version failed"));
@@ -198,30 +285,35 @@ impl Session {
             if SSL_set_fd(s.ssl, fd) != 1 {
                 return Err(Error::stream("upgrade: SSL_set_fd"));
             }
-            let ret = SSL_accept(s.ssl);
-            if ret <= 0 {
-                let code = SSL_get_error(s.ssl, ret);
-                return Err(Error::stream(format!("upgrade: SSL_accept: ret = {}, code = {}", ret, code)));
-            }
-            Ok(s)
+            s
+        };
+        // SAFETY: ssl は作ってある
+        let ret = s.run(deadline, |ssl| unsafe { SSL_accept(ssl) })?;
+        if ret <= 0 {
+            // SAFETY: 同上
+            let code = unsafe { SSL_get_error(s.ssl, ret) };
+            let reason = error_reason();
+            let reason = if reason.is_empty() { String::new() } else { format!(" ({})", reason) };
+            return Err(Error::stream(format!("upgrade: SSL_accept: ret = {}, code = {}{}", ret, code, reason)));
         }
+        Ok(s)
     }
 
-    /// `SSL_read` 1 回。相手が閉じたら `Ok(0)`。
-    pub fn read_once(&mut self, buf: &mut [u8]) -> Result<usize> {
+    /// `SSL_read` 1 回。相手が閉じたら `Ok(0)`。`deadline` は `accept` と同じ
+    pub fn read_once(&mut self, buf: &mut [u8], deadline: Option<Instant>) -> Result<usize> {
         let n = buf.len().min(i32::MAX as usize) as c_int;
+        let p = buf.as_mut_ptr() as *mut c_void;
         // SAFETY: buf は n バイト書ける
-        unsafe {
-            let r = SSL_read(self.ssl, buf.as_mut_ptr() as *mut c_void, n);
-            if r <= 0 {
-                let err = SSL_get_error(self.ssl, r);
-                if err == SSL_ERROR_ZERO_RETURN {
-                    return Ok(0);
-                }
-                return Err(Error::sock(format!("SSL_read failed, error = {}", err)));
+        let r = self.run(deadline, |ssl| unsafe { SSL_read(ssl, p, n) })?;
+        if r <= 0 {
+            // SAFETY: ssl は作ってある
+            let err = unsafe { SSL_get_error(self.ssl, r) };
+            if err == SSL_ERROR_ZERO_RETURN {
+                return Ok(0);
             }
-            Ok(r as usize)
+            return Err(Error::sock(format!("SSL_read failed, error = {}", err)));
         }
+        Ok(r as usize)
     }
 
     /// `SSL_write` (全部書く)
@@ -230,19 +322,14 @@ impl Session {
             return Ok(());
         }
         let n = data.len().min(i32::MAX as usize) as c_int;
+        let p = data.as_ptr() as *const c_void;
         // SAFETY: data は n バイト読める
-        unsafe {
-            let r = SSL_write(self.ssl, data.as_ptr() as *const c_void, n);
-            if r <= 0 {
-                let err = ERR_get_error();
-                let mut buf = [0 as c_char; 120];
-                ERR_error_string_n(err, buf.as_mut_ptr(), buf.len());
-                let msg = std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned();
-                return Err(Error::sock(format!("SSL_write failed: {}", msg)));
-            }
-            if (r as usize) < data.len() {
-                return self.write(&data[r as usize..]);
-            }
+        let r = self.run(None, |ssl| unsafe { SSL_write(ssl, p, n) })?;
+        if r <= 0 {
+            return Err(Error::sock(format!("SSL_write failed: {}", error_reason())));
+        }
+        if (r as usize) < data.len() {
+            return self.write(&data[r as usize..]);
         }
         Ok(())
     }
