@@ -69,3 +69,12 @@ certbot に任せ、peercast は証明書のファイルを読むだけにする
 
 - ACME (Let's Encrypt の取得と更新) をサーバーに組み込むこと。certbot があるので使う。
 - リバースプロキシ用の X-Forwarded-For の対応。要望が出たら考える。
+
+- [x] 7. Let's Encrypt の証明書の取得から有効化までを一括して行うスクリプト `tools/peercast-https-setup`
+  - 済み: 動いている peercast のプロセス (/proc の cmdline・environ) から、ユーザーと設定のディレクトリを
+    調べる。deploy-hook は `--deploy-hook` ではなく `/etc/letsencrypt/renewal-hooks/deploy/` に置く
+    (すでにある証明書にも効く)。フラグは、動いていれば localhost の `/cmd?q=flag set …` で、止まって
+    いれば peercast.ini を書き換えてオンにする。HTTPS はオプションのまま (既定はオフ、`make install` にも
+    入れない)。
+  - WSL では root で通しては試せていない (certbot を動かせないため)。プロセスからの設定のディレクトリの
+    検出、`/cmd` でのフラグの設定と ini への保存、ini の書き換え、HTTPS の確かめは一般ユーザーで試した。
