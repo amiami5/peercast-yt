@@ -19,7 +19,10 @@ certbot に任せ、peercast は証明書のファイルを読むだけにする
     前は 1 枚目しか送らず、fullchain.pem の中間証明書が届かないので、curl などで検証に失敗していた。
     受け付ける TLS を 1.2 以上にした。
   - 鍵が証明書と合わないときは、もともと `SSL_CTX_use_PrivateKey_file` で失敗するので、確認は足していない。
-- [ ] 2. 平文で外から管理ページに来たら断る
+- [x] 2. 平文で外から管理ページに来たら断る
+  - 済み: 判定は `servhs::plain_admin` (Host は `valid_host_header` で確かめる)、接続側は
+    `servent_http::require_tls`。`handshake_auth` の最初と、`/` などの振り分け (`K::Other`) で呼ぶ。
+    HEAD も GET ではないので 403 にしている。
   - `enableSSLServer` がオンで、平文の接続で、localhost 以外から来たとき。
     GET は `https://<Host>/…` に 302 でリダイレクトする (Host の文字を確かめる)。それ以外は 403。
   - 対象: 認証を通るもの (`handshake_auth`)。`/`、`/html/`、`/admin`、JSON-RPC、`/cgi-bin/`、`/cmd?`。

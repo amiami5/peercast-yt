@@ -1007,5 +1007,70 @@ pub fn jrpc_body_length(content_length: &[u8], max: i32) -> Result<i32, (&'stati
     Ok(n)
 }
 
+/// 平文で管理ページに来たときの扱い
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlainAdmin {
+    /// そのまま続ける
+    Allow,
+    /// この URL (`https://…`) に 302 でリダイレクトする
+    Redirect(Vec<u8>),
+    /// 403 で断る
+    Reject,
+}
+
+/// TLS を受け付けていて (`enableSSLServer`)、平文の接続で、localhost 以外から管理ページに来たら、
+/// GET は同じホストの https に、それ以外は断る。Host や URL がおかしければ GET でも断る。
+pub fn plain_admin(ssl_server: bool, tls: bool, localhost: bool, method: &[u8], host: &[u8], url: &[u8]) -> PlainAdmin {
+    if !ssl_server || tls || localhost {
+        return PlainAdmin::Allow;
+    }
+    if method != b"GET" {
+        return PlainAdmin::Reject;
+    }
+    match https_url(host, url) {
+        Some(u) => PlainAdmin::Redirect(u),
+        None => PlainAdmin::Reject,
+    }
+}
+
+/// `https://<host><url>`。Host がホスト名か IP アドレス (とポート) でないとき、URL が `/` で始まらない
+/// ときや空白・制御文字・ASCII でない文字を含むときは None (応答のヘッダーに入れるので、改行などを通さない)
+pub fn https_url(host: &[u8], url: &[u8]) -> Option<Vec<u8>> {
+    if !valid_host_header(host) || !url.starts_with(b"/") || !url.iter().all(|&c| (0x21..=0x7e).contains(&c)) {
+        return None;
+    }
+    Some([&b"https://"[..], host, url].concat())
+}
+
+/// Host ヘッダーが、ホスト名か IPv4 アドレスか `[IPv6 アドレス]` に、`:ポート` を付けたか付けないものか
+pub fn valid_host_header(host: &[u8]) -> bool {
+    let (name, port) = if host.first() == Some(&b'[') {
+        let end = match host.iter().position(|&c| c == b']') {
+            Some(e) => e,
+            None => return false,
+        };
+        let addr = &host[1..end];
+        if addr.is_empty() || !addr.iter().all(|&c| c.is_ascii_hexdigit() || c == b':' || c == b'.') {
+            return false;
+        }
+        match &host[end + 1..] {
+            [] => (&b"x"[..], None),
+            [b':', p @ ..] => (&b"x"[..], Some(p)),
+            _ => return false,
+        }
+    } else {
+        match host.iter().position(|&c| c == b':') {
+            Some(p) => (&host[..p], Some(&host[p + 1..])),
+            None => (host, None),
+        }
+    };
+    if let Some(p) = port {
+        if p.is_empty() || p.len() > 5 || !p.iter().all(u8::is_ascii_digit) {
+            return false;
+        }
+    }
+    !name.is_empty() && name.len() <= 253 && name.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
+}
+
 #[cfg(test)]
 mod tests;

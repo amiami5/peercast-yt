@@ -422,3 +422,41 @@ fn fuzz() {
         let _ = atoi(&s);
     }
 }
+
+#[test]
+fn plain_admin_redirects_or_rejects() {
+    use PlainAdmin::*;
+    let p = |ssl, tls, local, m: &[u8], h: &[u8], u: &[u8]| plain_admin(ssl, tls, local, m, h, u);
+    // TLS を受け付けていない、TLS の接続、localhost からは、そのまま
+    assert_eq!(p(false, false, false, b"GET", b"example.com:7144", b"/html/ja/index.html"), Allow);
+    assert_eq!(p(true, true, false, b"POST", b"example.com:7144", b"/api/1"), Allow);
+    assert_eq!(p(true, false, true, b"POST", b"localhost:7144", b"/api/1"), Allow);
+    // 外から平文で来た GET は https に
+    assert_eq!(
+        p(true, false, false, b"GET", b"example.com:7144", b"/admin?cmd=viewxml&pass=x"),
+        Redirect(b"https://example.com:7144/admin?cmd=viewxml&pass=x".to_vec())
+    );
+    assert_eq!(p(true, false, false, b"GET", b"[2001:db8::1]:7144", b"/"), Redirect(b"https://[2001:db8::1]:7144/".to_vec()));
+    // GET 以外は断る
+    assert_eq!(p(true, false, false, b"POST", b"example.com:7144", b"/api/1"), Reject);
+    assert_eq!(p(true, false, false, b"HEAD", b"example.com:7144", b"/"), Reject);
+    // Host や URL がおかしければ断る
+    assert_eq!(p(true, false, false, b"GET", b"", b"/"), Reject);
+    assert_eq!(p(true, false, false, b"GET", b"evil.com/x", b"/"), Reject);
+    assert_eq!(p(true, false, false, b"GET", b"example.com:7144", b"http://x/"), Reject);
+    assert_eq!(p(true, false, false, b"GET", b"example.com:7144", b"/a\r\nSet-Cookie: x"), Reject);
+}
+
+#[test]
+fn host_headers() {
+    for h in [&b"example.com"[..], b"example.com:7144", b"a-b.example", b"192.0.2.1:80", b"[::1]", b"[2001:db8::1]:7144", b"[::ffff:192.0.2.1]"] {
+        assert!(valid_host_header(h), "{}", String::from_utf8_lossy(h));
+    }
+    for h in [
+        &b""[..], b":7144", b"example.com:", b"example.com:123456", b"example.com:7a", b"a:1:2", b"exa mple.com", b"a@b", b"a/b",
+        b"[]", b"[::1", b"[::1]x", b"[::1]:", b"[g::1]", b"a\r\nb",
+    ] {
+        assert!(!valid_host_header(h), "{}", String::from_utf8_lossy(h));
+    }
+    assert!(!valid_host_header(&[b'a'; 254]));
+}
