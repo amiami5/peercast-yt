@@ -5,15 +5,16 @@
 //! 逆引きの応答は相手の側の DNS サーバーが返すので、相手がわざと遅くできる。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::host::{get_ip, Ip};
 
-/// 覚えたものを引き直すまでの時間
-const TTL: Duration = Duration::from_secs(60);
-/// まだ覚えていないものを待つ時間
-const WAIT: Duration = Duration::from_secs(2);
+/// 覚えたものを引き直すまでの秒数の既定 (ini の `dnsCacheSeconds`)
+pub const DEFAULT_TTL_SECONDS: u32 = 60;
+/// まだ覚えていないものを待つミリ秒数の既定 (ini の `dnsWaitMillis`)
+pub const DEFAULT_WAIT_MILLIS: u32 = 2000;
 /// 覚えておく数の上限
 const MAX_ENTRIES: usize = 1024;
 /// 同時に走らせる問い合わせの数の上限
@@ -50,13 +51,29 @@ pub struct DnsCache {
     st: Mutex<State>,
     cv: Condvar,
     resolve: fn(&Query) -> Answer,
-    ttl: Duration,
-    wait: Duration,
+    ttl_ms: AtomicU64,
+    wait_ms: AtomicU64,
 }
 
 impl DnsCache {
     pub fn new(resolve: fn(&Query) -> Answer, ttl: Duration, wait: Duration) -> DnsCache {
-        DnsCache { st: Mutex::new(State::default()), cv: Condvar::new(), resolve, ttl, wait }
+        let c = DnsCache { st: Mutex::new(State::default()), cv: Condvar::new(), resolve, ttl_ms: AtomicU64::new(0), wait_ms: AtomicU64::new(0) };
+        c.set_limits(ttl, wait);
+        c
+    }
+
+    /// 覚えたものを引き直すまでの時間と、まだ覚えていないものを待つ時間を変える
+    pub fn set_limits(&self, ttl: Duration, wait: Duration) {
+        self.ttl_ms.store(ttl.as_millis() as u64, Ordering::Relaxed);
+        self.wait_ms.store(wait.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    fn ttl(&self) -> Duration {
+        Duration::from_millis(self.ttl_ms.load(Ordering::Relaxed))
+    }
+
+    fn wait(&self) -> Duration {
+        Duration::from_millis(self.wait_ms.load(Ordering::Relaxed))
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -67,7 +84,7 @@ impl DnsCache {
     pub fn lookup(&'static self, q: &Query) -> Option<Answer> {
         let mut st = self.state();
         self.start(&mut st, q);
-        let deadline = Instant::now() + self.wait;
+        let deadline = Instant::now() + self.wait();
         loop {
             match st.m.get(q) {
                 Some(Entry { answer: Some(a), .. }) => return Some(a.clone()),
@@ -90,8 +107,9 @@ impl DnsCache {
 
     fn start(&'static self, st: &mut State, q: &Query) {
         let now = Instant::now();
+        let ttl = self.ttl();
         if let Some(e) = st.m.get(q) {
-            if e.resolving || (e.answer.is_some() && now.duration_since(e.fetched) < self.ttl) {
+            if e.resolving || (e.answer.is_some() && now.duration_since(e.fetched) < ttl) {
                 return;
             }
         }
@@ -99,7 +117,6 @@ impl DnsCache {
             return;
         }
         if !st.m.contains_key(q) && st.m.len() >= MAX_ENTRIES {
-            let ttl = self.ttl;
             st.m.retain(|_, e| e.resolving || now.duration_since(e.fetched) < ttl);
             if st.m.len() >= MAX_ENTRIES {
                 return;
@@ -135,7 +152,14 @@ fn resolve(q: &Query) -> Answer {
 
 fn global() -> &'static DnsCache {
     static C: OnceLock<DnsCache> = OnceLock::new();
-    C.get_or_init(|| DnsCache::new(resolve, TTL, WAIT))
+    C.get_or_init(|| {
+        DnsCache::new(resolve, Duration::from_secs(DEFAULT_TTL_SECONDS.into()), Duration::from_millis(DEFAULT_WAIT_MILLIS.into()))
+    })
+}
+
+/// ini の `dnsCacheSeconds` と `dnsWaitMillis` を反映する
+pub fn configure(ttl_seconds: u32, wait_millis: u32) {
+    global().set_limits(Duration::from_secs(ttl_seconds.into()), Duration::from_millis(wait_millis.into()));
 }
 
 /// 名前の IPv4 アドレス。引けないか間に合わなければ 0
@@ -213,6 +237,21 @@ mod tests {
         assert_eq!(c.lookup(&q), Some(Answer::Name(Some(b"slow.example".to_vec()))));
         assert!(t.elapsed() < Duration::from_millis(50));
         assert_eq!(N.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn limits_can_be_changed() {
+        fn r(_: &Query) -> Answer {
+            std::thread::sleep(Duration::from_millis(100));
+            Answer::Ip(7)
+        }
+        let c = leak(r, 60_000, 2_000);
+        c.set_limits(Duration::from_secs(60), Duration::ZERO);
+        let t = Instant::now();
+        assert_eq!(c.lookup(&name("a")), None);
+        assert!(t.elapsed() < Duration::from_millis(50));
+        c.set_limits(Duration::from_secs(60), Duration::from_secs(2));
+        assert_eq!(c.lookup(&name("b")), Some(Answer::Ip(7)));
     }
 
     #[test]

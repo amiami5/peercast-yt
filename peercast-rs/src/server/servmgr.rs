@@ -109,6 +109,10 @@ pub struct ServSettings {
     pub max_handshakes_per_ip: u32,
     /// 自分のホスト名のアドレス (localhost の判定に使う) を引き直す間隔 (秒。0 なら起動時だけ)。Rust 版で足した
     pub self_ip_check_interval: u32,
+    /// フィルターの判定で使う名前解決の結果を覚えておく秒数 (0 なら毎回引き直す)。ini だけで変えられる。Rust 版で足した
+    pub dns_cache_seconds: u32,
+    /// フィルターの判定で、まだ覚えていない名前解決を待つミリ秒数 (0 なら待たない)。ini だけで変えられる。Rust 版で足した
+    pub dns_wait_millis: u32,
     pub is_disabled: bool,
     pub server_host: Host,
     pub server_host_ipv6: Host,
@@ -202,6 +206,8 @@ impl ServMgr {
                 handshake_timeout: 15,
                 max_handshakes_per_ip: 8,
                 self_ip_check_interval: 60,
+                dns_cache_seconds: super::dnscache::DEFAULT_TTL_SECONDS,
+                dns_wait_millis: super::dnscache::DEFAULT_WAIT_MILLIS,
                 is_disabled: false,
                 server_host: Host::from_str_ip(b"127.0.0.1", DEFAULT_PORT),
                 server_host_ipv6: Host::new(Ip::parse(b"::1").unwrap_or_default(), DEFAULT_PORT),
@@ -928,6 +934,8 @@ impl ServMgr {
                 .key("handshakeTimeout", s.handshake_timeout)
                 .key("maxHandshakesPerIP", s.max_handshakes_per_ip)
                 .key("selfIPCheckInterval", s.self_ip_check_interval)
+                .key("dnsCacheSeconds", s.dns_cache_seconds)
+                .key("dnsWaitMillis", s.dns_wait_millis)
                 .key("rtmpLocalOnly", s.rtmp_local_only)
                 .key("rtmpStreamKey", &s.rtmp_stream_key[..])
                 .key("chanLog", &s.chan_log.data[..])
@@ -1140,7 +1148,12 @@ impl ServMgr {
                 self.load_line(pc, &mut r);
             }
         }
-        ensure_catchall(&mut self.settings().filters);
+        let (ttl, wait) = {
+            let mut s = self.settings();
+            ensure_catchall(&mut s.filters);
+            (s.dns_cache_seconds, s.dns_wait_millis)
+        };
+        super::dnscache::configure(ttl, wait);
     }
 
     fn load_line(&self, pc: &Arc<Peercast>, r: &mut IniReader) {
@@ -1211,6 +1224,10 @@ impl ServMgr {
             set!(|s: &mut ServSettings| s.max_handshakes_per_ip = iv.max(0) as u32);
         } else if is("selfIPCheckInterval") {
             set!(|s: &mut ServSettings| s.self_ip_check_interval = iv.max(0) as u32);
+        } else if is("dnsCacheSeconds") {
+            set!(|s: &mut ServSettings| s.dns_cache_seconds = iv.max(0) as u32);
+        } else if is("dnsWaitMillis") {
+            set!(|s: &mut ServSettings| s.dns_wait_millis = iv.max(0) as u32);
         } else if is("rtmpLocalOnly") {
             set!(|s: &mut ServSettings| s.rtmp_local_only = bv);
         } else if is("rtmpStreamKey") {
