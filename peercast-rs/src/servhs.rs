@@ -503,6 +503,14 @@ pub fn cookie_id(header: &[u8], port: u16) -> CookieParse {
     CookieParse::NotFound
 }
 
+/// ログインで渡す `Set-Cookie` の値。ページの JS からは読まないので HttpOnly にして、XSS があっても
+/// トークンを盗まれないようにする。TLS の接続では Secure を付けて、平文の接続でブラウザーが送らないようにする
+pub fn login_cookie(port: u16, id: &str, never_expire: bool, secure: bool) -> String {
+    let expires = if never_expire { "; expires=\"Mon, 01-Jan-3000 00:00:00 GMT\"" } else { "" };
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{}_id={}; path=/{}; HttpOnly{}; SameSite=Strict", port, id, expires, secure)
+}
+
 // ---------------------------------------------------------------- CGI の引数
 
 /// `nextCGIarg` を最後まで繰り返したもの。名前と値は、それぞれ `MAX_CGI_LEN - 1` バイトで切れる

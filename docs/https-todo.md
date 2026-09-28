@@ -28,7 +28,9 @@ certbot に任せ、peercast は証明書のファイルを読むだけにする
   - 対象: 認証を通るもの (`handshake_auth`)。`/`、`/html/`、`/admin`、JSON-RPC、`/cgi-bin/`、`/cmd?`。
   - 対象外: admin.cgi (配信ソフトは平文でしか来られない)、ストリーム、PCP、`/public`、`/assets`。
   - 判定とリダイレクト先の組み立ては関数に分けて単体テストする (bvt は localhost から来るので対象外になる)。
-- [ ] 3. TLS の接続では、ログインの Cookie に `Secure` を付ける
+- [x] 3. TLS の接続では、ログインの Cookie に `Secure` を付ける
+  - 済み: `servhs::login_cookie` で `Set-Cookie` の値を組み立てる (単体テストあり)。平文の接続では付けない
+    (localhost の平文や、`enableSSLServer` がオフのときにログインできなくならないように)。
 - [ ] 4. bvt に TLS のテストを足す
   - テストのときに openssl コマンドで、ルート CA → 中間 CA → サーバーの証明書を作る。
   - 確かめること: 中間証明書まで送ること、ルートだけを信頼して検証が通ること、TLS 1.1 を断ること、
