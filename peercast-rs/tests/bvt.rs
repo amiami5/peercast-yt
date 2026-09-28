@@ -48,6 +48,8 @@ impl Server {
         let ini = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/peercast.ini")).unwrap();
         let ini = edit(ini.replace("serverPort = 7144", &format!("serverPort = {}", port)));
         std::fs::write(dir.join("peercast.ini"), ini).unwrap();
+        // 別のプロセスが待ち受けていると、そちらにつないでしまう
+        assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "ポート {} を別のプロセスが使っている", port);
         let child = Command::new(env!("CARGO_BIN_EXE_peercast"))
             .arg("-i")
             .arg(dir.join("peercast.ini"))
@@ -601,4 +603,147 @@ fn sources() {
         let head = String::from_utf8_lossy(&buf[..end]).into_owned();
         assert!(head.starts_with("ICY 200 OK") && head.contains("icy-metaint:"), "{}: {}", n, head);
     }
+}
+
+// ---------------------------------------------------------------- TLS
+
+/// テストの証明書を作る openssl の設定 (ルート CA → 中間 CA → サーバー)
+const CERT_CONF: &str = "\
+[req]
+distinguished_name = dn
+[dn]
+[root]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+[inter]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid
+[leaf]
+basicConstraints = CA:FALSE
+keyUsage = critical,digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = IP:127.0.0.1,DNS:localhost
+";
+
+#[cfg(unix)]
+fn openssl(dir: &Path, args: &[&str]) {
+    let out = Command::new("openssl").args(args).current_dir(dir).stdin(Stdio::null()).output().expect("openssl を起動できない");
+    assert!(out.status.success(), "openssl {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
+}
+
+/// `dir` に root.pem (ルート CA)、server.crt (サーバーと中間 CA の証明書)、server.key、other.key (合わない鍵) を作る
+#[cfg(unix)]
+fn make_certs(dir: &Path) {
+    std::fs::write(dir.join("cert.cnf"), CERT_CONF).unwrap();
+    let ec = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"];
+    let req = |key: &str, out: &str, cn: &str, extra: &[&str]| {
+        let mut a = vec!["req", "-config", "cert.cnf"];
+        a.extend_from_slice(extra);
+        a.extend_from_slice(&ec);
+        a.extend_from_slice(&["-keyout", key, "-out", out, "-subj", cn]);
+        openssl(dir, &a);
+    };
+    let sign = |csr: &str, ca: &str, ca_key: &str, ext: &str, serial: &str, out: &str| {
+        openssl(dir, &[
+            "x509", "-req", "-in", csr, "-CA", ca, "-CAkey", ca_key, "-set_serial", serial, "-days", "2", "-extfile", "cert.cnf",
+            "-extensions", ext, "-out", out,
+        ]);
+    };
+    req("root.key", "root.pem", "/CN=bvt-root", &["-x509", "-days", "2", "-extensions", "root"]);
+    req("inter.key", "inter.csr", "/CN=bvt-inter", &[]);
+    sign("inter.csr", "root.pem", "root.key", "inter", "2", "inter.pem");
+    req("server.key", "leaf.csr", "/CN=127.0.0.1", &[]);
+    sign("leaf.csr", "inter.pem", "inter.key", "leaf", "3", "leaf.pem");
+    let chain = [std::fs::read(dir.join("leaf.pem")).unwrap(), std::fs::read(dir.join("inter.pem")).unwrap()].concat();
+    std::fs::write(dir.join("server.crt"), chain).unwrap();
+    openssl(dir, &["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", "other.key"]);
+}
+
+/// openssl s_client でつなぎ、`input` を送ってサーバーが閉じるまで読む。終了の状態と、標準出力と標準エラーを返す
+#[cfg(unix)]
+fn s_client(dir: &Path, port: u16, args: &[&str], input: &str) -> (bool, String) {
+    let connect = format!("127.0.0.1:{}", port);
+    let mut child = Command::new("openssl")
+        .args(["s_client", "-connect", &connect, "-CAfile", "root.pem", "-verify_ip", "127.0.0.1", "-verify_return_error"])
+        .args(["-showcerts", "-ign_eof"])
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("openssl を起動できない");
+    let mut stdin = child.stdin.take().unwrap();
+    let _ = stdin.write_all(input.as_bytes());
+    drop(stdin);
+    let t0 = Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if t0.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            panic!("s_client が終わらない");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let out = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    (out.status.success(), text)
+}
+
+/// 送られた証明書の数 (s_client の「Verify return code: 0」はハンドシェイクに失敗しても出るので、これで判定する)
+#[cfg(unix)]
+fn cert_count(text: &str) -> usize {
+    text.matches("-----BEGIN CERTIFICATE-----").count()
+}
+
+/// enableSSLServer: 同じポートで TLS と平文の両方を受ける
+#[cfg(unix)]
+#[test]
+fn tls() {
+    let s = Server::start_with(17213, |ini| ini + "\r\n[Flags]\r\nenableSSLServer = Yes\r\n[End]\r\n");
+    let p = s.port;
+    let dir = s.dir.clone();
+    make_certs(&dir);
+    let get_index = format!("GET /html/en/index.html HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", p);
+
+    // 中間証明書まで送り、ルートだけを信頼して検証が通る
+    let (ok, out) = s_client(&dir, p, &[], &get_index);
+    assert!(ok, "{}", out);
+    assert_eq!(cert_count(&out), 2, "{}", out);
+    assert!(out.contains("Verify return code: 0 (ok)"), "{}", out);
+    assert!(out.contains("HTTP/1.0 200 OK"), "{}", out);
+
+    // TLS 1.1 は断る (クライアントの側で断らないように、セキュリティレベルを 0 にする)
+    let (ok, out) = s_client(&dir, p, &["-tls1_1", "-cipher", "DEFAULT:@SECLEVEL=0"], "");
+    assert!(!ok, "{}", out);
+    assert_eq!(cert_count(&out), 0, "{}", out);
+    assert!(out.contains("alert protocol version"), "{}", out);
+
+    // 合わない鍵に差し替えると断り、戻すとまたつながる (接続のたびに読み直す)
+    std::fs::rename(dir.join("server.key"), dir.join("good.key")).unwrap();
+    std::fs::copy(dir.join("other.key"), dir.join("server.key")).unwrap();
+    let (ok, out) = s_client(&dir, p, &[], "");
+    assert!(!ok, "{}", out);
+    assert_eq!(cert_count(&out), 0, "{}", out);
+    std::fs::rename(dir.join("good.key"), dir.join("server.key")).unwrap();
+    let (ok, out) = s_client(&dir, p, &[], &get_index);
+    assert!(ok, "{}", out);
+    assert_eq!(cert_count(&out), 2, "{}", out);
+
+    // 平文の HTTP も使える (localhost からなので、リダイレクトしない)
+    let r = get(p, "/html/en/index.html");
+    assert_eq!(r.code, 200);
+
+    // ログインの Cookie: TLS では Secure を付け、平文では付けない
+    let login = format!("GET /admin?cmd=login HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", p);
+    let (ok, out) = s_client(&dir, p, &[], &login);
+    assert!(ok, "{}", out);
+    let cookie = out.lines().find(|l| l.starts_with("Set-Cookie:")).unwrap_or_else(|| panic!("Set-Cookie がない: {}", out));
+    assert!(cookie.contains("; Secure"), "{}", cookie);
+    let r = request(p, &login, b"");
+    assert_eq!(r.code, 302);
+    let cookie = r.header("Set-Cookie").expect("Set-Cookie がない");
+    assert!(cookie.contains("HttpOnly") && !cookie.contains("Secure"), "{}", cookie);
 }

@@ -31,7 +31,12 @@ certbot に任せ、peercast は証明書のファイルを読むだけにする
 - [x] 3. TLS の接続では、ログインの Cookie に `Secure` を付ける
   - 済み: `servhs::login_cookie` で `Set-Cookie` の値を組み立てる (単体テストあり)。平文の接続では付けない
     (localhost の平文や、`enableSSLServer` がオフのときにログインできなくならないように)。
-- [ ] 4. bvt に TLS のテストを足す
+- [x] 4. bvt に TLS のテストを足す
+  - 済み: bvt の `tls` (Unix のみ。openssl コマンドを使う)。テストのサーバーを起こす前に、ポートに
+    ほかのプロセスが待ち受けていないかを確かめるようにした (`Server::start_with`)。
+  - テストで見つかったこと: TLS の接続を閉じるときに close_notify を送っていなかった。TCP の書き込みを
+    先に閉じ、TcpStream を捨てて記述子を閉じてから `SSL_shutdown` していた (閉じた記述子、または同じ番号を
+    使った別の接続に書くおそれがあった)。`ClientSocket::close` で Session を先に捨てるように直した。
   - テストのときに openssl コマンドで、ルート CA → 中間 CA → サーバーの証明書を作る。
   - 確かめること: 中間証明書まで送ること、ルートだけを信頼して検証が通ること、TLS 1.1 を断ること、
     合わない鍵に差し替えると断り、戻すとまたつながること、平文の HTTP も使えること、Cookie の `Secure`。
