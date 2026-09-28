@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use peercast_rs::pcp::atom::id4;
 use peercast_rs::pcp::write::AtomBuf;
+use peercast_rs::version::{PCP_CLIENT_VERSION, PCX_AGENT};
 
 /// UI (html/) は全部のテストで同じものを使う
 fn ui_dir() -> &'static Path {
@@ -234,7 +235,7 @@ fn jrpc() {
     let r = get(p, "/api/1");
     assert_eq!(r.code, 200);
     let v = json(&r);
-    assert!(str_at(&v, "agentName").starts_with(b"PeerCast/0.1218"));
+    assert_eq!(str_at(&v, "agentName"), PCX_AGENT.as_bytes());
     assert_eq!(str_at(&v, "apiVersion"), b"1.0.0");
     assert_eq!(str_at(&v, "jsonrpc"), b"2.0");
 
@@ -300,12 +301,10 @@ fn helo() {
     assert_eq!(&id, b"oleh");
     let agent = child(&children, b"agnt").expect("agnt");
     let agent = std::str::from_utf8(agent).unwrap().trim_end_matches('\0');
-    let rest = agent.strip_prefix("PeerCast/0.1218 (YT").expect("agnt");
-    let (num, tail) = rest.split_at(2);
-    assert!(num.bytes().all(|c| c.is_ascii_digit()) && tail.ends_with(')'), "agnt: {}", agent);
+    assert_eq!(agent, PCX_AGENT);
     assert!(child(&children, b"sid").is_some(), "sid");
     let ver = child(&children, b"ver").expect("ver");
-    assert_eq!(u32::from_le_bytes([ver[0], ver[1], ver[2], ver[3]]), 1218);
+    assert_eq!(u32::from_le_bytes([ver[0], ver[1], ver[2], ver[3]]), PCP_CLIENT_VERSION);
     assert!(child(&children, b"rip").is_some(), "rip");
     assert!(child(&children, b"port").is_some(), "port");
 }
