@@ -358,8 +358,18 @@ impl Stream for ClientSocket {
     }
 
     fn close(&mut self) {
-        if let Some(c) = self.conn.take() {
-            let _ = c.tcp().shutdown(Shutdown::Write);
+        match self.conn.take() {
+            Some(Conn::Tcp(s)) => {
+                let _ = s.shutdown(Shutdown::Write);
+            }
+            // TLS は、ソケットを閉じる前に close_notify を送る (Session を捨てると SSL_shutdown する)。
+            // TcpStream を先に捨てると、閉じた記述子 (別の接続が同じ番号を使っているかもしれない) に書いてしまう
+            #[cfg(unix)]
+            Some(Conn::Tls(s, session)) => {
+                drop(session);
+                let _ = s.shutdown(Shutdown::Write);
+            }
+            None => {}
         }
         self.closer.set(None);
     }
