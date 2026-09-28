@@ -453,6 +453,27 @@ impl Stream for MemoryStream {
     }
 }
 
+/// 書き込み用に開く (切り詰める)。持ち主だけが読み書きできる権限 (0600) で作り、
+/// 前からあったファイルも開いたあとに 0600 にする (umask によらない)
+pub fn open_private(path: &[u8]) -> Result<std::fs::File> {
+    let p = sys::bytes_to_path(path).ok_or_else(|| Error::stream("Unable to open file"))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        opts.mode(0o600);
+        let f = opts.open(p).map_err(|_| Error::stream("Unable to open file"))?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|_| Error::stream("Unable to set file permissions"))?;
+        Ok(f)
+    }
+    #[cfg(not(unix))]
+    {
+        opts.open(p).map_err(|_| Error::stream("Unable to open file"))
+    }
+}
+
 /// `FileStream`
 pub struct FileStream {
     file: Option<std::fs::File>,
@@ -482,6 +503,13 @@ impl FileStream {
     /// `openWriteReplace`
     pub fn open_write(path: &[u8]) -> Result<FileStream> {
         Self::open(path, std::fs::OpenOptions::new().write(true).create(true).truncate(true))
+    }
+
+    /// `open_write` と同じだが、持ち主だけが読み書きできる権限 (0600) で作る。
+    /// 前からあったファイルも 0600 にする。パスワードなどが入るファイル用
+    pub fn open_write_private(path: &[u8]) -> Result<FileStream> {
+        let f = open_private(path)?;
+        Ok(FileStream { file: Some(f), ..Default::default() })
     }
 
     /// `openWriteAppend`
@@ -769,5 +797,27 @@ mod tests {
         let mut s = StringStream::from(b"  hello world".to_vec());
         assert_eq!(s.read_word(64).unwrap(), b"hello");
         assert_eq!(s.read_word(64).unwrap(), b"world");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_private_makes_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pcrs-open-private-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("peercast.ini");
+        // umask で 0644 になっていたファイルが前からあっても 0600 にする
+        std::fs::write(&path, b"old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mut f = FileStream::open_write_private(path.to_str().unwrap().as_bytes()).unwrap();
+        f.write(b"new").unwrap();
+        f.close();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        // 新しく作るときも 0600
+        let path2 = dir.join("tokens");
+        drop(open_private(path2.to_str().unwrap().as_bytes()).unwrap());
+        assert_eq!(std::fs::metadata(&path2).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

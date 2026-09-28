@@ -1040,7 +1040,8 @@ impl ServMgr {
     pub fn save_settings(&self, pc: &Peercast, fn_: &[u8]) {
         let doc = self.get_settings(pc);
         let tmp = [fn_, b".tmp"].concat();
-        match FileStream::open_write(&tmp) {
+        // パスワードが平文で入るので、ほかのユーザーから読めないようにする
+        match FileStream::open_write_private(&tmp) {
             Ok(mut f) => {
                 crate::log_debug!("Saving settings to: {}", String::from_utf8_lossy(fn_));
                 let _ = f.write(&super::ini::dump(&doc));
@@ -1071,7 +1072,12 @@ impl ServMgr {
             Some(p) => p,
             None => return,
         };
-        if std::fs::write(&p, body).is_err() {
+        // ログインのトークンが入るので、ほかのユーザーから読めないようにする
+        let written = super::stream::open_private(&tmp).and_then(|mut f| {
+            use std::io::Write as _;
+            f.write_all(&body).map_err(|_| super::error::Error::stream("write failed"))
+        });
+        if written.is_err() {
             crate::log_error!("saveTokenList: Failed to open {} for writing", String::from_utf8_lossy(&tmp));
             return;
         }
