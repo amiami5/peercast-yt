@@ -33,6 +33,8 @@ struct Ctx<'a> {
     sv: &'a Arc<Servent>,
     /// `sock->getLocalHost()`
     local_host: Host,
+    /// TLS の接続か
+    tls: bool,
 }
 
 impl Ctx<'_> {
@@ -149,7 +151,8 @@ fn handshake_http(c: &mut Conn, line: &[u8], is_http: bool) -> Result<()> {
 /// ソケットを使う処理のために、`Ctx` と `Http` を作る
 fn with_http<R>(c: &mut Conn, line: &[u8], f: impl FnOnce(&Ctx, &mut Http) -> Result<R>) -> Result<R> {
     let local_host = c.sock()?.local_host().unwrap_or_else(|_| Host::none());
-    let ctx = Ctx { pc: c.pc, sv: c.sv, local_host };
+    let tls = c.sock()?.is_tls();
+    let ctx = Ctx { pc: c.pc, sv: c.sv, local_host, tls };
     let mut http = Http::new(c.sock()?);
     http.init_request(line);
     f(&ctx, &mut http)
@@ -362,7 +365,9 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
             Ok(())
         }
         K::Other | K::Stream | K::Channel => {
-            http.read_headers()?;
+            if !require_tls(ctx, http)? {
+                return Ok(());
+            }
             let hp = ctx.html_path();
             http.stream.write_line(HTTP_SC_FOUND)?;
             http.stream.write_line([&b"Location: /"[..], &hp, b"/index.html"].concat())?;
@@ -688,9 +693,34 @@ fn auth_record(pc: &Peercast, ip: &str, ok: bool) {
     }
 }
 
+/// TLS を受け付けていて、平文で localhost 以外から管理ページに来たら、GET は https に 302 で
+/// リダイレクトし (応答を書いて false)、それ以外は 403 で断る。続けてよければ true
+fn require_tls(ctx: &Ctx, http: &mut Http) -> Result<bool> {
+    http.read_headers()?;
+    let ssl_server = ctx.pc.servmgr.flags.get("enableSSLServer");
+    let host = http.headers.get(b"Host");
+    match servhs::plain_admin(ssl_server, ctx.tls, is_localhost(&ctx.host()), &http.method, &host, &http.request_url) {
+        servhs::PlainAdmin::Allow => Ok(true),
+        servhs::PlainAdmin::Redirect(url) => {
+            crate::log_debug!("Redirecting plain HTTP admin request to HTTPS");
+            http.stream.write_line(HTTP_SC_FOUND)?;
+            http.stream.write_line([&b"Location: "[..], &url].concat())?;
+            http.stream.write_line("")?;
+            Ok(false)
+        }
+        servhs::PlainAdmin::Reject => {
+            crate::log_warn!("Rejected plain HTTP admin request from {}", ctx.host().ip.str());
+            Err(http_error(HTTP_SC_FORBIDDEN, 403))
+        }
+    }
+}
+
 /// `handshakeAuth`: 認証できれば true。できなければ応答を書いて false
 fn handshake_auth(ctx: &Ctx, http: &mut Http, args: &[u8], reject_cross_origin: bool) -> Result<bool> {
-    http.read_headers()?;
+    // 管理ページのパスワードや Cookie を平文で外に流さない
+    if !require_tls(ctx, http)? {
+        return Ok(false);
+    }
     let hd = |n: &[u8]| http.headers.get(n);
     // 状態を変える API は、ほかのサイトのページからの要求 (CSRF) を受け付けない
     if reject_cross_origin && crate::http::is_cross_origin_request(&hd(b"Sec-Fetch-Site"), &hd(b"Origin"), &hd(b"Host")) {
