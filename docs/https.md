@@ -123,6 +123,11 @@ enableSSLServer = Yes
 
 ファイアウォールでは、7144 番 (PeerCast) と 80 番 (certbot) を開けておきます。
 
+それまで平文の HTTP で外からログインしていたときは、そのときの Cookie には `Secure` が付いていないので、
+http:// で開くと、リダイレクトされる前の最初の要求で平文のまま送られます。オンにしたら、https:// で開いて
+一度ログアウトし (サーバーの側でもそのログインが無効になります)、ログインし直してください。
+設定の「クッキー期限」が「永続」のときは、ブラウザーを閉じても Cookie が残るので、特に忘れないでください。
+
 ## 4. 確かめる
 
 ブラウザーで `https://pc.example.com:7144/` を開き、警告なしで管理ページが出れば使えています。
@@ -137,8 +142,12 @@ openssl s_client -connect pc.example.com:7144 -servername pc.example.com -verify
     | openssl x509 -noout -subject -enddate
 
 # 平文で来ると https にリダイレクトされるか (302 と Location: https://… が出る)
-curl -sSI http://pc.example.com:7144/
+curl -sS -o /dev/null -D - http://pc.example.com:7144/
 ```
+
+リダイレクトの確かめは、VPS の**外から**行ってください。VPS の上で実行すると、自分のアドレスからの接続は
+localhost と同じ扱いになり、リダイレクトされません。また、`curl -I` は HEAD を送るので、リダイレクトではなく
+403 になります (平文で GET 以外が来たら断るため)。
 
 `s_client` の「Verify return code: 0」は、ハンドシェイクに失敗したときにも出ることがあるので、
 `-verify_return_error` を付けて、証明書が取れるかで判断してください。
@@ -150,7 +159,8 @@ curl -sSI http://pc.example.com:7144/
 |---|---|
 | `Certificate file` | `server.crt` がない、読めない、PEM でない |
 | `Private key file` | `server.key` がない、読めない、証明書と合わない |
-| `upgrade: SSL_accept: …` | ハンドシェイクの失敗 (クライアントが TLS 1.1 以下しか使えないなど) |
+| `upgrade: SSL_accept: …` | ハンドシェイクの失敗。かっこの中に OpenSSL の理由が出る (`unsupported protocol` ならクライアントが TLS 1.1 以下しか使えないなど) |
+| `Handshake timeout` | 要求を読み終えるまでの期限 (設定の `handshakeTimeout`、既定 15 秒) を過ぎた |
 
 ## 5. 更新
 

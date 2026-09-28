@@ -253,7 +253,7 @@ impl ClientSocket {
             Some(Conn::Tcp(s)) => s,
             _ => return Err(Error::stream("upgrade: not a TCP socket")),
         };
-        let session = super::tls::Session::accept(s.as_raw_fd())?;
+        let session = with_deadline(&s, self.deadline, |d| super::tls::Session::accept(s.as_raw_fd(), d))?;
         let _ = s.set_read_timeout(dur(self.read_timeout));
         let _ = s.set_write_timeout(dur(self.write_timeout));
         self.conn = Some(Conn::Tls(s, session));
@@ -279,6 +279,8 @@ impl ClientSocket {
     /// 1 回読む。相手が閉じたら 0
     fn read_once(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.apply_deadline()?;
+        #[cfg(unix)]
+        let deadline = self.deadline;
         let c = self.conn.as_mut().ok_or_else(|| Error::sock("Closed on read"))?;
         match c {
             Conn::Tcp(s) => loop {
@@ -289,9 +291,23 @@ impl ClientSocket {
                 }
             },
             #[cfg(unix)]
-            Conn::Tls(_, t) => t.read_once(buf),
+            Conn::Tls(s, t) => with_deadline(s, deadline, |d| t.read_once(buf, d)),
         }
     }
+}
+
+/// TLS で要求を読み終えるまでの期限 `deadline` があれば、ソケットをノンブロッキングにして `f` を呼ぶ
+/// (`tls::Session` が期限まで待つ)。ブロッキングのままだと、OpenSSL の中の recv のたびに読む待ち時間を
+/// まるごと使えるので、1 バイトずつ送られると期限を過ぎても終わらない
+#[cfg(unix)]
+fn with_deadline<R>(s: &TcpStream, deadline: Option<Instant>, f: impl FnOnce(Option<Instant>) -> Result<R>) -> Result<R> {
+    if deadline.is_none() {
+        return f(None);
+    }
+    s.set_nonblocking(true)?;
+    let r = f(deadline);
+    let _ = s.set_nonblocking(false);
+    r
 }
 
 impl Stream for ClientSocket {
@@ -313,6 +329,7 @@ impl Stream for ClientSocket {
         if self.is_tls() {
             // SslClientSocket::readUpto は 1 回だけ読む
             let r = self.read_once(buf)?;
+            self.count_in(r);
             return Ok(r);
         }
         let mut done = 0;

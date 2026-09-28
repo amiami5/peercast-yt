@@ -747,3 +747,96 @@ fn tls() {
     let cookie = r.header("Set-Cookie").expect("Set-Cookie がない");
     assert!(cookie.contains("HttpOnly") && !cookie.contains("Secure"), "{}", cookie);
 }
+
+/// 300 ミリ秒ごとに 1 バイト送り続け、`limit` までにサーバーが閉じることを確かめる
+#[cfg(unix)]
+fn assert_closed_while_trickling(mut c: TcpStream, byte: u8, limit: Duration) {
+    let t0 = Instant::now();
+    c.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+    let mut buf = [0u8; 1024];
+    loop {
+        assert!(t0.elapsed() < limit, "{:?} たっても切られない", limit);
+        match c.read(&mut buf) {
+            Ok(0) => return,
+            // TLS の alert など
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                if c.write_all(&[byte]).is_err() {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// TLS でも、要求を読み終えるまでの期限 (handshakeTimeout) で切る。OpenSSL の中の recv のたびに
+/// 読む待ち時間をまるごと使えたので、1 バイトずつ送る接続にいつまでも居座られていた
+#[cfg(unix)]
+#[test]
+fn tls_slow_client() {
+    use peercast_rs::server::tls::Session;
+    use std::os::unix::io::AsRawFd;
+
+    let s = Server::start_with(17214, |ini| {
+        ini.replace("[Server]\r\n", "[Server]\r\nhandshakeTimeout = 2\r\n") + "\r\n[Flags]\r\nenableSSLServer = Yes\r\n[End]\r\n"
+    });
+    let p = s.port;
+    make_certs(&s.dir);
+    // ハンドシェイクできる (証明書が読めないとすぐに切られるので、下の確かめが意味をなさない)
+    let (ok, out) = s_client(&s.dir, p, &[], "");
+    assert!(ok, "{}", out);
+    let limit = Duration::from_secs(5);
+
+    // 平文は期限で切れる
+    let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+    c.write_all(b"GET /html/en/index.html HTTP/1.0\r\nX: ").unwrap();
+    assert_closed_while_trickling(c, b'a', limit);
+
+    // TLS のハンドシェイクを 1 バイトずつ (200 バイトのレコードと言っておく)
+    let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+    c.write_all(&[0x16, 0x03, 0x01, 0x00, 0xc8]).unwrap();
+    assert_closed_while_trickling(c, 0x01, limit);
+
+    // ハンドシェイクのあと、要求のレコードを 1 バイトずつ。暗号にしたレコードを少しずつ送るために、
+    // 間に中継を置き、ハンドシェイクが済んだらクライアントからサーバーへを 1 バイトずつにする
+    let proxy = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let proxy_port = proxy.local_addr().unwrap().port();
+    let slow = Arc::new(AtomicBool::new(false));
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+    let slow2 = slow.clone();
+    std::thread::spawn(move || {
+        let (mut a, _) = proxy.accept().unwrap();
+        let mut b = TcpStream::connect(("127.0.0.1", p)).unwrap();
+        let (mut a2, mut b2) = (a.try_clone().unwrap(), b.try_clone().unwrap());
+        // サーバーからクライアントへ。サーバーが閉じたら知らせる
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut b2, &mut a2);
+            let _ = closed_tx.send(Instant::now());
+        });
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = a.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            for &c in &buf[..n] {
+                if slow2.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                if b.write_all(&[c]).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    let c = TcpStream::connect(("127.0.0.1", proxy_port)).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut sess = Session::connect(c.as_raw_fd(), b"").expect("ハンドシェイク");
+    // ハンドシェイクの最後のバイトが中継を通り終えるのを待つ
+    std::thread::sleep(Duration::from_millis(200));
+    slow.store(true, Ordering::SeqCst);
+    let t0 = Instant::now();
+    sess.write(format!("GET /html/en/index.html HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", p).as_bytes()).unwrap();
+    let closed = closed_rx.recv_timeout(limit).expect("要求のレコードを 1 バイトずつ送ると切られない");
+    assert!(closed - t0 < limit);
+}
