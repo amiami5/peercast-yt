@@ -329,6 +329,24 @@ fn port_out_of_range() {
     assert!(TcpStream::connect(("127.0.0.1", p)).is_ok());
 }
 
+/// `pass=` は、どのパスでも `?` の後ろの引数としてだけ効く
+#[test]
+fn pass_in_query() {
+    let s = Server::start_with(17212, |ini| {
+        ini.replacen("authType = cookie", "authType = http-basic", 1).replacen("password = \r\n", "password = pass\r\n", 1)
+    });
+    let p = s.port;
+    // Host がループバックの名前でなければ、localhost からでも認証を省かない
+    let code = |path: &str| request(p, &format!("GET {} HTTP/1.0\r\nHost: example.com\r\n\r\n", path), b"").code;
+    assert_eq!(code("/html/en/index.html?pass=pass"), 200);
+    assert_eq!(code("/admin?cmd=viewxml&pass=pass"), 200);
+    assert_eq!(code("/cgi-bin/board.cgi?category=x&pass=pass"), 400); // 認証は通り、引数が足りない
+    assert_eq!(code("/cmd?q=help&pass=pass"), 200);
+    for path in ["/html/en/index.html", "/html/en/index.html&pass=pass", "/html/en/index.html?pass=x", "/cgi-bin/board.cgi&pass=pass", "/cmd?q=help"] {
+        assert_eq!(code(path), 401, "{}", path);
+    }
+}
+
 /// /cgi-bin: 掲示板ビューワーと flv.cgi (もとは CGI スクリプト)。外のホストにはつながない
 #[test]
 fn cgi_bin() {

@@ -168,6 +168,9 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
     };
     let fn_ = fn_.as_slice();
     let from = |n: usize| fn_.get(n..).unwrap_or(b"").to_vec();
+    // 認証に渡す引数。C++ 版はパス全体を渡していたので `?pass=` が効かず `&pass=` なら効いていた。
+    // `/admin?pass=` と同じく、`?` の後ろの `pass=` だけを見る
+    let query = servhs::query_part(fn_);
 
     match kind {
         K::Stream | K::Channel => {
@@ -206,7 +209,7 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
             if !ctx.allowed(svt::ALLOW_HTML) {
                 return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
             }
-            if handshake_auth(ctx, http, fn_, false)? {
+            if handshake_auth(ctx, http, query, false)? {
                 handshake_local_file(ctx, http, &dir_name)?;
             }
             Ok(())
@@ -324,7 +327,7 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                 }
                 http.read_headers()?;
                 handshake_flv(ctx, http)
-            } else if handshake_auth(ctx, http, fn_, true)? {
+            } else if handshake_auth(ctx, http, query, true)? {
                 // 掲示板ビューワーは管理画面からしか呼ばれない。post.cgi はこの PeerCast の IP から
                 // 掲示板へ書き込むので、ほかのサイトのページからの要求 (CSRF) は断る
                 handshake_bbs(http)
@@ -340,7 +343,7 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
             if q.is_empty() {
                 return Err(http_error_msg(HTTP_SC_BADREQUEST, 400, "q missing"));
             }
-            if handshake_auth(ctx, http, fn_, true)? {
+            if handshake_auth(ctx, http, query, true)? {
                 ctx.sv.st().ty = svt::T_COMMAND;
                 http.read_headers()?;
                 // HTTP/1.0 で Content-Length なし

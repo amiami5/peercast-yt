@@ -39,6 +39,17 @@ fn get_routes() {
 }
 
 #[test]
+fn query_parts() {
+    // `pass=` はどのパスでも `?` の後ろの引数としてだけ効く
+    assert_eq!(Query::new(query_part(b"/html/ja/index.html?pass=x")).get(b"pass"), b"x");
+    assert_eq!(Query::new(query_part(b"/cmd?q=help&pass=x")).get(b"pass"), b"x");
+    assert_eq!(Query::new(query_part(b"/cgi-bin/a.cgi?a=1&pass=x")).get(b"pass"), b"x");
+    assert_eq!(Query::new(query_part(b"/html/ja/index.html&pass=x")).get(b"pass"), b"");
+    assert_eq!(query_part(b"/a?b?c"), b"b?c");
+    assert_eq!(query_part(b"/a"), b"");
+}
+
+#[test]
 fn admin_cgi_args() {
     let a = admin_cgi(b"/admin.cgi?pass=x&mode=updinfo&song=Title%20A&mount=/live&url=http://u").unwrap();
     assert_eq!(a.song, b"Title%20A");
