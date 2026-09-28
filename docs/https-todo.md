@@ -42,7 +42,11 @@ certbot に任せ、peercast は証明書のファイルを読むだけにする
     合わない鍵に差し替えると断り、戻すとまたつながること、平文の HTTP も使えること、Cookie の `Secure`。
   - 注意: テストのサーバーが起動できたか (ポートを別のプロセスが使っていないか) を確かめてから接続する。
     s_client の「Verify return code: 0」はハンドシェイクに失敗しても出るので、送られた証明書の数などで判定する。
-- [ ] 5. 手順書 `docs/https.md` (README からリンク)
+- [x] 5. 手順書 `docs/https.md` (README からリンク)
+  - 済み: 鍵は root しか読めないので、symlink よりも deploy-hook で PeerCast のユーザーのものとして
+    コピーする方法をすすめている (一時ファイルに書いてから mv)。ログのエラー (`Certificate file` など) と
+    その原因の表も載せた。リバースプロキシでは、nginx の既定で Host が `127.0.0.1:7144` になり、
+    パスワードなしで入れてしまうことを書いた。
   - certbot での取得 (80 番を開ける。standalone か webroot)。
   - `server.crt` と `server.key` を fullchain.pem と privkey.pem への symlink にする。鍵を読めるようにする権限
     (または deploy-hook でコピー)。
