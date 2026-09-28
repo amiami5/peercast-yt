@@ -28,7 +28,8 @@ extern "C" {
     fn SSL_CTX_free(ctx: *mut SSL_CTX);
     fn SSL_CTX_set_default_verify_paths(ctx: *mut SSL_CTX) -> c_int;
     fn SSL_CTX_set_verify(ctx: *mut SSL_CTX, mode: c_int, cb: *const c_void);
-    fn SSL_CTX_use_certificate_file(ctx: *mut SSL_CTX, file: *const c_char, ty: c_int) -> c_int;
+    fn SSL_CTX_ctrl(ctx: *mut SSL_CTX, cmd: c_int, larg: c_long, parg: *mut c_void) -> c_long;
+    fn SSL_CTX_use_certificate_chain_file(ctx: *mut SSL_CTX, file: *const c_char) -> c_int;
     fn SSL_CTX_use_PrivateKey_file(ctx: *mut SSL_CTX, file: *const c_char, ty: c_int) -> c_int;
     fn SSL_new(ctx: *mut SSL_CTX) -> *mut SSL;
     fn SSL_free(ssl: *mut SSL);
@@ -53,6 +54,8 @@ extern "C" {
 const SSL_VERIFY_PEER: c_int = 1;
 const SSL_FILETYPE_PEM: c_int = 1;
 const SSL_CTRL_SET_TLSEXT_HOSTNAME: c_int = 55;
+const SSL_CTRL_SET_MIN_PROTO_VERSION: c_int = 123;
+const TLS1_2_VERSION: c_long = 0x0303;
 const TLSEXT_NAMETYPE_HOST_NAME: c_long = 0;
 const X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS: u32 = 0x4;
 const X509_V_OK: c_long = 0;
@@ -175,9 +178,16 @@ impl Session {
                 return Err(Error::general("SSL_CTX_new failed"));
             }
             let mut s = Session { ctx, ssl: std::ptr::null_mut() };
-            if SSL_CTX_use_certificate_file(ctx, cstr(&crt).as_ptr(), SSL_FILETYPE_PEM) <= 0 {
+            // SSL_CTX_set_min_proto_version (マクロ)。TLS 1.0 と 1.1 は受け付けない
+            if SSL_CTX_ctrl(ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, TLS1_2_VERSION, std::ptr::null_mut()) != 1 {
+                return Err(Error::general("SSL_CTX_set_min_proto_version failed"));
+            }
+            // 中間証明書も送れるように、チェーンのファイル (Let's Encrypt の fullchain.pem など) として読む。
+            // 証明書が 1 枚だけのファイルもそのまま読める
+            if SSL_CTX_use_certificate_chain_file(ctx, cstr(&crt).as_ptr()) <= 0 {
                 return Err(Error::general("Certificate file"));
             }
+            // 鍵が証明書と合わないとき (更新の途中で片方だけ新しいときなど) も、ここで失敗する
             if SSL_CTX_use_PrivateKey_file(ctx, cstr(&key).as_ptr(), SSL_FILETYPE_PEM) <= 0 {
                 return Err(Error::general("Private key file"));
             }
