@@ -24,6 +24,13 @@ pub fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+/// 要求のパスの、最初の `?` より後ろ (問い合わせの部分)。`?` がなければ空。
+pub fn query_part(path: &[u8]) -> &[u8] {
+    match path.iter().position(|&c| c == b'?') {
+        Some(p) => &path[p + 1..],
+        None => b"",
+    }
+}
 
 /// `cgi::Query` (core/common/cgi.cpp)
 #[derive(Clone, Debug, Default)]

@@ -11,4 +11,5 @@
   - 済み: jrpc にあった深さの判定を `json::nesting_is_too_deep` に移し、portcheck (IPv6) の応答も 16 段を超えたら解析せずにエラーにする。ほかの `json::parse` は自分のトークンファイルと内部の状態だけなので対象外。
 - [x] #16 ログインの Cookie に HttpOnly が付いていません。
   - 済み: `cmd=login` の Set-Cookie (期限なし・あり両方) に `HttpOnly` を付けた。UI の JS は Cookie を読んでいないので影響はない。
-- [ ] #17 `pass=` の効き方がパスごとに違います。`/html/…?pass=` は効かず、`&pass=` なら効き、`/admin?pass=` は効きます。
+- [x] #17 `pass=` の効き方がパスごとに違います。`/html/…?pass=` は効かず、`&pass=` なら効き、`/admin?pass=` は効きます。
+  - 済み: `/html/`・`/cgi-bin/`・`/cmd?` は、パス全体ではなく最初の `?` より後ろ (`servhs::query_part`) を認証に渡す。`/admin?` や `POST /api/1?` と同じく `?pass=` が効き、パスに続けた `&pass=` は効かない。

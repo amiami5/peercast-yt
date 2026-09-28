@@ -670,6 +670,8 @@ JSON-RPC の API (`core/common/jrpc.cpp` の `JrpcApi`) を移した。
 * `handshakeAuth` に渡す引数は `cmdLine` の中を指していて、`readHeaders` で書き換えられる。このため
   `/html/`、`/cmd?`、`/cgi-bin/` の `?pass=` は、実際には最後のヘッダーの行の残りから読まれ、ほぼ効かない
   (HTTP の読み書きを移す段階 9 で扱う。docs/cpp-known-issues.md)。
+  → 段階 9 のあとのセキュリティレビュー (#17) で、`/admin?` と同じく `?` の後ろの `pass=` だけを見るように
+  した (`servhs::query_part`)。パスに続けた `&pass=` は効かなくなった。
 * `readICYHeader` は、ヘッダーの行のどこかに名前が含まれるかを見る (値に `icy-name` とあっても名前に
   なる)。content-type の `audio/x-mpegurl` は、先に `audio/x-mpeg` に当たって MP3 になる。
 * `nextCGIarg` は名前を `=` まで読む (`&` では止まらない)。名前か値が 511 バイトを超えると切れる。
