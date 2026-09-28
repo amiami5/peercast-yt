@@ -332,7 +332,8 @@ fn port_out_of_range() {
 /// /cgi-bin: 掲示板ビューワーと flv.cgi (もとは CGI スクリプト)。外のホストにはつながない
 #[test]
 fn cgi_bin() {
-    let s = Server::start(17206);
+    // flv.cgi はトランスコードが無効だと引数を見る前に 403 で断るので、有効にして引数の検証を確かめる
+    let s = Server::start_with(17206, |ini| ini.replace("transcodingEnabled = No", "transcodingEnabled = Yes"));
     let p = s.port;
     let r = get(p, "/cgi-bin/board.cgi?category=x");
     assert_eq!(r.code, 400);
