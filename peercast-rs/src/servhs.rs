@@ -841,6 +841,8 @@ pub enum LocalPage {
     /// connections.html / editinfo.html (ID がなくてもよい)
     Connections = 2,
     Plain = 3,
+    /// broadcast.html。入力からエンコーダーに設定する値を作って `broadcast` に置く
+    Broadcast = 4,
 }
 
 /// `handshakeLocalFile` のページの種類と、`?` の後ろの `id` (`String` に入れたもの)。
@@ -859,6 +861,8 @@ pub fn local_file(fn_: &[u8]) -> LocalFile {
         LocalPage::RelayInfo
     } else if find(fn_, b"connections.html").is_some() || find(fn_, b"editinfo.html").is_some() {
         LocalPage::Connections
+    } else if find(fn_, b"/broadcast.html").is_some() {
+        LocalPage::Broadcast
     } else {
         LocalPage::Plain
     };
@@ -886,6 +890,63 @@ pub fn local_file_name(document_root: &[u8], fn_: &[u8]) -> Vec<u8> {
         name.extend_from_slice(fn_);
     }
     name
+}
+
+// ---------------------------------------------------------------- broadcast.html
+
+/// broadcast.html の入力から作る、エンコーダーに設定する値 (もとは UI の httppush.js と wmhttp.js が
+/// ブラウザーの中で作っていた)。名前が空なら、その組は空のまま。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PushSettings {
+    /// ffmpeg の出力先にする HTTP Push の URL
+    pub http_push_url: Vec<u8>,
+    /// Windows Media エンコーダーの公開ポイント
+    pub wm_publishing_point: Vec<u8>,
+    pub wm_url: Vec<u8>,
+}
+
+const PUSH_TYPES: [&[u8]; 8] = [b"UNKNOWN", b"FLV", b"MKV", b"MP3", b"OGG", b"RAW", b"WEBM", b"MP4"];
+
+/// `server` は `アドレス:ポート`。`q` は broadcast.html の要求の引数 (`push_…` と `wm_…`)。
+///
+/// もとの JavaScript との違い: HTTP Push の URL の値は、空白と `&` だけでなく `cgi::escape` で全部
+/// エンコードする (`%` や `#`、日本語を含む名前も、受ける側の `Query` でもとに戻る)。`type` は一覧に
+/// あるものだけ、`ipv` は 4 か 6 だけにする。公開ポイントからは `?` に加えて制御文字も除く。
+pub fn push_settings(server: &[u8], q: &Query) -> PushSettings {
+    let mut r = PushSettings::default();
+    if !q.get(b"push_name").is_empty() {
+        let mut url = [b"http://", server, b"/?"].concat();
+        for key in [&b"name"[..], b"desc", b"genre", b"url"] {
+            let v = q.get(&[b"push_", key].concat());
+            if !v.is_empty() {
+                url.extend_from_slice(key);
+                url.push(b'=');
+                url.extend_from_slice(&cgi::escape(&v));
+                url.push(b'&');
+            }
+        }
+        let ty = q.get(b"push_type");
+        url.extend_from_slice(b"type=");
+        url.extend_from_slice(if PUSH_TYPES.contains(&ty.as_slice()) { &ty } else { b"UNKNOWN" });
+        url.extend_from_slice(if q.get(b"push_ipv") == b"6" { b"&ipv=6" } else { b"&ipv=4" });
+        r.http_push_url = url;
+    }
+    if !q.get(b"wm_name").is_empty() {
+        let mut point = Vec::new();
+        for (i, key) in [&b"wm_name"[..], b"wm_genre", b"wm_desc", b"wm_url"].into_iter().enumerate() {
+            if i > 0 {
+                point.push(b';');
+            }
+            // `?` は公開ポイントに使えない
+            point.extend(q.get(key).into_iter().filter(|&c| c != b'?' && c >= 0x20 && c != 0x7f));
+        }
+        while point.last() == Some(&b';') {
+            point.pop();
+        }
+        r.wm_url = [b"http://", server, b"/", point.as_slice()].concat();
+        r.wm_publishing_point = point;
+    }
+    r
 }
 
 // ---------------------------------------------------------------- /cgi-bin/flv.cgi、JSON-RPC

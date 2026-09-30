@@ -195,6 +195,32 @@ fn html() {
     assert_eq!(get(p, "/html/ja/play.html").code, 400);
 }
 
+/// broadcast.html: エンコーダーに設定する URL を、フォームの入力からサーバーが作る (もとは JavaScript)
+#[test]
+fn broadcast_urls() {
+    let s = Server::start(17216);
+    let p = s.port;
+    let page = |q: &str| {
+        let r = get(p, &format!("/html/ja/broadcast.html{}", q));
+        assert_eq!(r.code, 200, "{}", q);
+        String::from_utf8(r.body).unwrap()
+    };
+    let text = page("");
+    assert!(!text.contains("<script src=\"js/"), "外の JavaScript を読んでいる");
+    assert!(!text.contains("/?name="));
+    let text = page("?push_name=a+%22%3Cb%3E%26&push_genre=g&push_type=FLV&push_ipv=6");
+    let at = text.find("/?name=").expect("HTTP Push の URL");
+    assert!(text[at..].starts_with("/?name=a+%22%3Cb%3E%26&amp;genre=g&amp;type=FLV&amp;ipv=6\"</textarea>"), "{}", &text[at..at + 100]);
+    // 入力した値はエスケープしてフォームに戻す
+    assert!(text.contains("name=\"push_name\" value=\"a &quot;&lt;b&gt;&amp;\""));
+    assert!(text.contains("<option value=\"FLV\" selected>"));
+    assert!(text.contains("<option value=\"6\" selected>"));
+    assert!(!text.contains("<b>&"));
+    let text = page("?wm_name=n&wm_genre=%3Cg%3E&wm_desc=&wm_url=");
+    assert!(text.contains(">n;&lt;g&gt;</textarea>"));
+    assert!(text.contains("/n;&lt;g&gt;</textarea>"));
+}
+
 /// 設定ファイルのフィルターが、最後のものまで全部読まれる (設定の画面に出る)
 #[test]
 fn filters() {

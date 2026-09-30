@@ -103,6 +103,7 @@
     "Contact"                 : null,
     "Type"                    : null,
     "Create Relay"            : "Diffuser",
+    "Create URL"              : "Créer l'URL",
 
     // connections.html
     "_Type_connection"        : "Type",

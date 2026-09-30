@@ -211,6 +211,7 @@
     "Contact"                 : "コンタクトURL",
     "Type"                    : "タイプ",
     "Create Relay"            : "リレーを作成",
+    "Create URL"              : "URL を作成",
 
     // httppush.html
     "HTTP Push Stream"        : "HTTP Push&thinsp;ストリーム",

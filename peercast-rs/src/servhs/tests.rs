@@ -422,3 +422,27 @@ fn fuzz() {
         let _ = atoi(&s);
     }
 }
+
+#[test]
+fn push_settings_from_broadcast_page() {
+    let server = b"192.0.2.1:7144";
+    assert_eq!(push_settings(server, &Query::new(b"")), PushSettings::default());
+    // 名前がなければ作らない
+    assert_eq!(push_settings(server, &Query::new(b"push_genre=g&wm_genre=g")), PushSettings::default());
+    let p = push_settings(server, &Query::new(b"push_name=a+b%26c%22%3C&push_genre=g&push_url=http%3A%2F%2Fx%2F%3Fq%3D1&push_type=FLV&push_ipv=6"));
+    assert_eq!(p.http_push_url, b"http://192.0.2.1:7144/?name=a+b%26c%22%3C&genre=g&url=http%3A%2F%2Fx%2F%3Fq%3D1&type=FLV&ipv=6");
+    assert!(p.wm_url.is_empty() && p.wm_publishing_point.is_empty());
+    // 作った URL の引数を読むと、もとの値に戻る
+    let back = Query::new(&p.http_push_url[p.http_push_url.iter().position(|&c| c == b'?').unwrap() + 1..]);
+    assert_eq!(back.get(b"name"), b"a b&c\"<");
+    assert_eq!(back.get(b"url"), b"http://x/?q=1");
+    // 一覧にない type と ipv は既定にする
+    let p = push_settings(server, &Query::new(b"push_name=n&push_type=x%26y&push_ipv=9"));
+    assert_eq!(p.http_push_url, b"http://192.0.2.1:7144/?name=n&type=UNKNOWN&ipv=4");
+    let p = push_settings(server, &Query::new(b"wm_name=n%3F&wm_genre=&wm_desc=d%0Ad&wm_url="));
+    assert_eq!(p.wm_publishing_point, b"n;;dd");
+    assert_eq!(p.wm_url, b"http://192.0.2.1:7144/n;;dd");
+    assert!(p.http_push_url.is_empty());
+    assert_eq!(push_settings(server, &Query::new(b"wm_name=n&wm_url=http%3A%2F%2Fx%2F")).wm_publishing_point, b"n;;;http://x/");
+    assert_eq!(local_file(b"html/ja/broadcast.html?push_name=a").page, LocalPage::Broadcast);
+}
