@@ -186,9 +186,15 @@ fn html() {
         "login.html",
         "viewlog.html",
         "channels.html",
+        "chanfilters.html",
+        "console.html",
         "logout.html",
     ] {
-        assert_eq!(get(p, &format!("/html/ja/{}", file)).code, 200, "{}", file);
+        let r = get(p, &format!("/html/ja/{}", file));
+        assert_eq!(r.code, 200, "{}", file);
+        // 外部ライブラリの jQuery・jscolor は使わない
+        let text = String::from_utf8_lossy(&r.body).to_lowercase();
+        assert!(!text.contains("jquery") && !text.contains("jscolor") && !text.contains("$("), "{}", file);
     }
     // id= がないので Bad Request
     assert_eq!(get(p, "/html/ja/relayinfo.html").code, 400);
