@@ -8,7 +8,7 @@ use super::chanhit::{ChanHit, GnuIdList};
 use super::chaninfo::{self as ci, ChanInfo};
 use super::channel::Channel;
 use super::error::{Error, Result};
-use super::host::Ip;
+use super::host::{Host, Ip};
 use super::packetbuf::{self as pb, ChanPacket, PacketBuffer, MAX_DATALEN};
 use super::pcpconst::*;
 use super::pcstr::StrType;
@@ -55,13 +55,15 @@ pub struct PcpStream {
     pub in_data: PacketBuffer,
     pub last_packet_time: u32,
     pub next_root_packet: u32,
+    /// 接続の相手 (わからなければ空)。PUSH の宛先を確かめるのに使う
+    pub peer: Host,
 }
 
 impl PcpStream {
     pub fn new(remote_id: [u8; 16]) -> PcpStream {
         let in_data = PacketBuffer::new();
         in_data.init_accept(pb::T_PCP);
-        PcpStream { shared: Arc::new(PcpShared::new(remote_id)), in_data, last_packet_time: 0, next_root_packet: 0 }
+        PcpStream { shared: Arc::new(PcpShared::new(remote_id)), in_data, last_packet_time: 0, next_root_packet: 0, peer: Host::none() }
     }
 
     /// `init`
@@ -126,7 +128,7 @@ impl PcpStream {
     /// 受け取ったパケットの処理 (`procAtom`)
     fn proc_packet(&mut self, pc: &Arc<Peercast>, data: &mut [u8], bcs: &mut BroadcastState) -> Result<i32> {
         let mut state = pcp::State { bcs: bcs.clone(), next_root_packet: self.next_root_packet };
-        let mut host = PcpHost { pc, shared: &self.shared, ch: None, has_chl: false, new_info: ChanInfo::new(), error: None };
+        let mut host = PcpHost { pc, shared: &self.shared, peer: self.peer,ch: None, has_chl: false, new_info: ChanInfo::new(), error: None };
         let r = pcp::proc_packet(&mut host, data, &mut state);
         *bcs = state.bcs;
         self.next_root_packet = state.next_root_packet;
@@ -200,7 +202,8 @@ pub fn copy_atoms(io: &mut dyn Stream, id: [u8; 4], cnt: i32, data: i32, out: &m
 struct PcpHost<'a> {
     pc: &'a Arc<Peercast>,
     shared: &'a Arc<PcpShared>,
-    ch: Option<Arc<Channel>>,
+    peer: Host,
+    ch:Option<Arc<Channel>>,
     has_chl: bool,
     new_info: ChanInfo,
     error: Option<Error>,
@@ -408,11 +411,21 @@ impl pcp::Host for PcpHost<'_> {
         } else {
             true
         };
-        if go {
-            let s = pc.servmgr.alloc_servent();
-            crate::log_debug!("GIVing to {}", host.str());
-            super::servent::init_giv(pc, &s, host, *chan_id);
+        if !go {
+            return Ok(());
         }
+        // 宛先は PUSH を送った誰かが決めるので、LAN の中や自分へは、届けた相手も LAN の中のときだけつなぐ。
+        // 同時につなぎに行く数も抑える
+        if !super::servent::giv_dest_allowed(&host, &self.peer) {
+            crate::log_debug!("PUSH to {} from {} refused", host.str(), self.peer.str());
+            return Ok(());
+        }
+        let Some(slot) = super::servent::acquire_giv(&host) else {
+            crate::log_debug!("PUSH to {} ignored: too many GIV connections", host.str());
+            return Ok(());
+        };
+        let s = pc.servmgr.alloc_servent();
+        super::servent::init_giv(pc, &s, host, *chan_id, slot);
         Ok(())
     }
 

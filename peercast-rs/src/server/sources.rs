@@ -60,13 +60,17 @@ pub struct SourceStream {
 impl SourceStream {
     /// `Channel::createSource`
     pub fn create(ch: &Channel) -> SourceStream {
-        let (proto, ct, remote) = {
+        let (proto, ct, remote, peer) = {
             let st = ch.st();
-            (st.info.src_protocol, st.info.content_type.data.clone(), st.remote_id)
+            (st.info.src_protocol, st.info.content_type.data.clone(), st.remote_id, st.src_sock)
         };
         let kind = if proto == ci::SP_PCP {
             crate::log_info!("Channel is PCP");
-            Kind::Pcp(Box::new(PcpStream::new(remote)))
+            let mut p = PcpStream::new(remote);
+            if let Some(h) = peer {
+                p.peer = h;
+            }
+            Kind::Pcp(Box::new(p))
         } else if ct == ci::T_MP3 {
             crate::log_info!("Channel is MP3 - meta: {}", ch.st().icy_meta_interval);
             Kind::Media(media::Parser::new(media::Kind::Mp3))

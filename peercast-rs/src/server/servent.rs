@@ -155,6 +155,8 @@ pub struct Servent {
     closer: Mutex<Option<Closer>>,
     stat: Mutex<Option<Arc<Stat>>>,
     pub push_sock: Mutex<Option<ClientSocket>>,
+    /// GIV のためにつなぎに行くものの札 (`acquire_giv`)。`giv_proc` が受け取る
+    giv_slot: Mutex<Option<GivSlot>>,
     has_sock: AtomicBool,
 }
 
@@ -194,6 +196,7 @@ impl Servent {
             closer: Mutex::new(None),
             stat: Mutex::new(None),
             push_sock: Mutex::new(None),
+            giv_slot: Mutex::new(None),
             has_sock: AtomicBool::new(false),
         }
     }
@@ -276,6 +279,7 @@ impl Servent {
         }
         self.detach();
         *self.push_sock.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.giv_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if self.ty() != T_SERVER {
             self.reset();
             self.set_status(S_FREE);
@@ -508,31 +512,49 @@ pub fn init_outgoing(pc: &Arc<Peercast>, sv: &Arc<Servent>, ty: i32) {
     }
 }
 
-/// `initGIV`: 相手につないで GIV を送り、要求を受け付ける
-pub fn init_giv(pc: &Arc<Peercast>, sv: &Arc<Servent>, h: Host, id: [u8; 16]) {
-    sv.st().giv_id = id;
-    let r = (|| -> Result<ClientSocket> {
-        sv.st().sock_host = h;
-        if !sv.is_allowed(pc, ALLOW_NETWORK) {
-            return Err(Error::stream("Servent not allowed"));
-        }
-        let mut sock = ClientSocket::new();
-        sock.connect(h)?;
-        Ok(sock)
-    })();
-    match r {
-        Ok(sock) => {
-            sv.attach(&sock);
-            sv.st().ty = T_RELAY;
-            if !spawn(pc, sv, "Servent GIV", Some(sock), giv_proc) {
-                crate::log_error!("GIV error to {}: Can`t start thread", h.str());
-                sv.kill();
-            }
-        }
-        Err(e) => {
-            crate::log_error!("GIV error to {}: {}", h.str(), e);
-            sv.kill();
-        }
+/// GIV のためにつなぎに行き、まだ相手の要求を読み終えていないものの数 (全体と、宛先の IP アドレスごと)
+static GIV_CONNECTS: crate::servhs::HandshakeCounter = crate::servhs::HandshakeCounter::new();
+/// GIV のためにつなぎに行くものを、同時にいくつまで進めるか
+const MAX_GIV_CONNECTS: u32 = 8;
+const MAX_GIV_CONNECTS_PER_IP: u32 = 2;
+
+/// GIV のためにつなぎに行くものの札 (全体と宛先ごと)。捨てると数が減る
+pub struct GivSlot {
+    _all: crate::servhs::HandshakeSlot,
+    _one: crate::servhs::HandshakeSlot,
+}
+
+/// GIV のためにつなぎに行く札を取る。同時に進めているものが多すぎれば `None`
+pub fn acquire_giv(h: &Host) -> Option<GivSlot> {
+    let _all = GIV_CONNECTS.acquire(b"", MAX_GIV_CONNECTS)?;
+    let _one = GIV_CONNECTS.acquire(h.ip.str().as_bytes(), MAX_GIV_CONNECTS_PER_IP)?;
+    Some(GivSlot { _all, _one })
+}
+
+/// PCP の PUSH で届いた宛先 `dest` に、GIV のためにつなぎに行ってよいか。`from` は PUSH を届けた接続の相手。
+/// ポートやアドレスが空のもの、マルチキャストなどは断る。ループバック・プライベート・リンクローカル・
+/// 自分のアドレスは、`from` も LAN の中のとき (LAN の中だけで使っているとき) だけ受け付ける
+pub fn giv_dest_allowed(dest: &Host, from: &Host) -> bool {
+    if dest.port == 0 || dest.ip.is_unconnectable() {
+        return false;
+    }
+    let lan = |h: &Host| h.ip.is_lan() || is_localhost(h);
+    !lan(dest) || (from.ip.is_set() && lan(from))
+}
+
+/// `initGIV`: 相手につないで GIV を送り、要求を受け付ける。つなぐのはスレッドの中で行う
+/// (PUSH を受け取った PCP の接続を待たせない)。`slot` は相手の要求を読み終えるまで持つ
+pub fn init_giv(pc: &Arc<Peercast>, sv: &Arc<Servent>, h: Host, id: [u8; 16], slot: GivSlot) {
+    {
+        let mut st = sv.st();
+        st.giv_id = id;
+        st.sock_host = h;
+        st.ty = T_RELAY;
+    }
+    *sv.giv_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(slot);
+    if !spawn(pc, sv, "Servent GIV", None, giv_proc) {
+        crate::log_error!("GIV error to {}: Can`t start thread", h.str());
+        sv.kill();
     }
 }
 
@@ -928,6 +950,7 @@ pub fn process_incoming_pcp(c: &mut Conn, suggest_others: bool) -> Result<()> {
     c.sock()?.write(&out.0)?;
 
     let mut pcp = PcpStream::new(rid);
+    pcp.peer = c.sock()?.host;
     sv.set_pcp(Some(pcp.shared.clone()));
     let mut error = 0;
     let mut bcs = crate::pcp::BroadcastState::default();
@@ -1028,6 +1051,7 @@ fn outgoing_proc(c: &mut Conn) {
                 sv.set_status(S_CONNECTED);
                 crate::log_debug!("COUT to {}: OK", ip_str);
                 pcp.init(rid);
+                pcp.peer = rhost;
                 let mut bcs = crate::pcp::BroadcastState::default();
                 error = 0;
                 while error == 0 && sv.thread.active() && !c.sock()?.eof()? && sm.settings().auto_serve {
@@ -1073,8 +1097,20 @@ fn outgoing_proc(c: &mut Conn) {
 
 /// `givProc`
 fn giv_proc(c: &mut Conn) {
-    let id = c.sv.st().giv_id;
+    let (id, h) = {
+        let st = c.sv.st();
+        (st.giv_id, st.sock_host)
+    };
+    let slot = c.sv.giv_slot.lock().unwrap_or_else(|e| e.into_inner()).take();
     let r = (|| -> Result<()> {
+        if !c.sv.is_allowed(c.pc, ALLOW_NETWORK) {
+            return Err(Error::stream("Servent not allowed"));
+        }
+        crate::log_debug!("GIVing to {}", h.str());
+        let mut sock = ClientSocket::new();
+        sock.connect(h)?;
+        c.set_sock(sock);
+        let timeout = c.pc.servmgr.settings().handshake_timeout;
         let s = c.sock()?;
         if ci::is_set(&id) {
             s.write_line(format!("GIV /{}", ci::id_str(&id)))?;
@@ -1082,10 +1118,12 @@ fn giv_proc(c: &mut Conn) {
             s.write_line("GIV")?;
         }
         s.write_line("")?;
+        // 相手の要求を読み終えるまでの期限。札もそれまで持つ
+        s.begin_handshake(timeout.saturating_mul(1000), slot.map(|s| Box::new(s) as Box<dyn std::any::Any + Send>));
         super::servent_http::handshake_incoming(c)
     })();
     if let Err(e) = r {
-        crate::log_error!("GIV: {}", e);
+        crate::log_error!("GIV error to {}: {}", h.str(), e);
     }
 }
 
@@ -1759,6 +1797,7 @@ fn send_pcp_channel(c: &mut Conn) -> Result<()> {
     sv.set_pcp(Some(pcp.shared.clone()));
     let mut error = 0;
     let sock = c.sock.as_mut().ok_or_else(|| Error::stream("Not connected"))?;
+    pcp.peer = sock.host;
     let r = (|| -> Result<()> {
         crate::log_debug!("Starting PCP stream of channel at {}", sv.st().stream_pos);
         let (info, head, mut stream_index) = {
@@ -1903,6 +1942,43 @@ fn _unused(_: PcString, _: &mut dyn Stream) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn giv_dest() {
+        let h = |s: &str| Host { ip: Ip::parse(s.as_bytes()).unwrap(), port: 7144 };
+        let global = h("203.0.113.5");
+        let lan = h("192.168.0.5");
+        assert!(giv_dest_allowed(&h("198.51.100.1"), &global));
+        assert!(giv_dest_allowed(&h("2001:db8::1"), &global));
+        for d in ["127.0.0.1", "10.0.0.1", "169.254.169.254", "::1", "fe80::1", "fd00::1"] {
+            assert!(!giv_dest_allowed(&h(d), &global), "{}", d);
+            assert!(!giv_dest_allowed(&h(d), &Host::none()), "{}", d);
+            assert!(giv_dest_allowed(&h(d), &lan), "{}", d);
+            assert!(giv_dest_allowed(&h(d), &h("::1")), "{}", d);
+        }
+        for d in ["0.0.0.0", "224.0.0.1", "255.255.255.255", "::", "ff02::1"] {
+            assert!(!giv_dest_allowed(&h(d), &lan), "{}", d);
+        }
+        assert!(!giv_dest_allowed(&Host { port: 0, ..h("198.51.100.1") }, &global));
+    }
+
+    #[test]
+    fn giv_limit() {
+        let a = h_ip("198.51.100.7");
+        let s1 = acquire_giv(&a).unwrap();
+        let s2 = acquire_giv(&a).unwrap();
+        assert!(acquire_giv(&a).is_none());
+        let others: Vec<_> = (0..MAX_GIV_CONNECTS - 2).map(|i| acquire_giv(&h_ip(&format!("198.51.100.{}", 20 + i))).unwrap()).collect();
+        assert!(acquire_giv(&h_ip("198.51.100.99")).is_none());
+        drop(s1);
+        let s3 = acquire_giv(&a).unwrap();
+        drop((s2, s3, others));
+        assert_eq!(GIV_CONNECTS.count(b""), 0);
+    }
+
+    fn h_ip(s: &str) -> Host {
+        Host::from_str_ip(s.as_bytes(), 7144)
+    }
 
     #[test]
     fn continuation_support() {
