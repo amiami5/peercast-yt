@@ -18,3 +18,5 @@
 
 - [x] #18 チャンネル一覧の「フィルタ作成」ボタンが、チャンネル名を `onclick` の JavaScript の文字列に埋めていました (名前に `"` を入れると XSS)。
   - 済み: 名前は `data-name` 属性に置き、`this.dataset.name` を `encodeURIComponent` して渡す。グループのタブも `Groups` の番号で引くようにした。C++ 版に残ることは `docs/cpp-known-issues.md` に書いた。
+- [x] #19 視聴ページの掲示板の欄が、掲示板から届いたレスの本文・名前・メール・日付を HTML のままページに入れていました。掲示板のサーバーはコンタクト URL で配信者が好きに指定できるので、自分のサーバーに `<img onerror=…>` などを入れたスレッドを置けば、視聴ページを開いた人の管理画面で JavaScript を動かせました (XSS)。
+  - 済み: `ui/html-master/bbs.js` は、本文を `<template>` の中で解釈し、文字と改行 (`<br>`) と `http(s)://` のリンクだけを DOM の API で作り直して入れる。名前などは文字だけを取り出して `title` に入れる。URL や題名を属性に入れるところも `h()` を通す。C++ 版に残ることは `docs/cpp-known-issues.md` に書いた。
