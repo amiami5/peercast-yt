@@ -45,8 +45,9 @@
 - [x] #26 PCP の root atom (ホスト情報の更新間隔 `uint`、ルートのメッセージなど) を、YP でなくどのノードから届いても受け付けます (`pcp/mod.rs` の `read_root_atoms`)。プロトコルの作りによるもの。
   - 案: root atom は YP (rootHost) への COUT で受け取ったものだけ使い、更新間隔には下限と上限を設ける。
   - 済み: root atom は、rootHost (YP) につなぎに行った COUT (`best.yp`。ハンドシェイクで自分のアドレスなどを信じるのと同じ条件) で受け取ったものだけ使う (`PcpStream::from_root`、`pcp::Host::root_trusted`)。ほかの接続 (CIN、トラッカーへの COUT、中継) で届いたものは読み飛ばす (更新間隔、ルートのメッセージ、新しい版の URL、`next` による NOROOT の判定、トラッカーの更新の要求のどれも使わない)。BCST の中に入っていたときも使わないが、中継はこれまでどおりする。YP から届いた更新間隔も 30〜3600 秒に収める。単体テスト (`root_atoms`) と、bvt の `root_atoms_from_yp_only` (rootHost を偽の YP にして、COUT で届いたものは使い、CIN からそのままと BCST の中で送ったものは使わないことを確かめる。直す前は失敗することも確かめた) で確かめる。
-- [ ] #27 (未確認) `enableSSLServer` が有効なとき、TLS のハンドシェイク (`tls.rs` の `SSL_accept`) の間は、要求を読み終えるまでの期限が十分には効いていないかもしれません (少しずつ送る接続で居座れる)。
+- [x] #27 `enableSSLServer` が有効なとき、TLS のハンドシェイク (`tls.rs` の `SSL_accept`) の間は、要求を読み終えるまでの期限が十分には効いていません (少しずつ送る接続で居座れる)。
   - 案: TLS のハンドシェイクにも期限を設ける。確かめてから決める。
+  - 済み: develop-rs-tls の d3a6dc8 のうち、期限の部分を持ってきた。要求を読み終えるまでの期限 (`handshakeTimeout`) のある間は、ソケットをノンブロッキングにし、`SSL_accept`・`SSL_read` が読み書きを待つたびに、期限までの残りだけ `poll` で待つ (`tls::Session::run`、`socket::with_deadline`)。これまでは OpenSSL の中の recv のたびに読む待ち時間をまるごと使えたので、ハンドシェイクや要求のレコードを 1 バイトずつ送る接続に居座られていた。SSL_accept の失敗のログに OpenSSL の理由を出すこと、TLS の read_upto を受信量の統計に数えることも一緒に持ってきた。bvt の `tls_slow_client` で、平文・ハンドシェイク・ハンドシェイクのあとの要求を 1 バイトずつ送り、期限で切られることを確かめる (直す前は失敗することも確かめた)。
 - [ ] #28 パスワードの比較 (`handshake_auth` の `sent_pass == password` など) が定数時間ではありません。締め出しがあるので影響は小さい。
   - 案: 定数時間で比べる関数を使う。
 
