@@ -25,7 +25,7 @@
   {
       const renderOptionalSearch = (search => search.enabled ? search.search : ["span", "<{#Disabled}>"])
 
-      $('#filter_table').html(who(
+      document.getElementById('filter_table').innerHTML = who(
           ['table', { class: 'table-panel', style: "width: 100%" },
            ['tr',
             ['th', '{#Enabled}' ],
@@ -44,25 +44,27 @@
            ]),
           ],
           ['button', { onclick: 'showFilterModal(-1)' }, "\u2795 {#Add}"],
-      ))
+      )
   }
 
   function selectTab(index)
   {
-      $(`#search_tabset a`).removeClass('active-tab')
-      $(`#search_tabset a:nth-child(${index})`).addClass('active-tab')
+      for (const tab of document.querySelectorAll('#search_tabset a'))
+          tab.classList.remove('active-tab')
+      document.querySelector(`#search_tabset a:nth-child(${index})`).classList.add('active-tab')
 
-      $('.search-pane').hide()
+      for (const pane of document.querySelectorAll('.search-pane'))
+          pane.style.display = 'none'
 
       if (index == 1)
       {
-          $('#base_search_pane').show()
+          document.getElementById('base_search_pane').style.display = ''
       }else if (index == 2)
       {
-          $('#and_search_pane').show()
+          document.getElementById('and_search_pane').style.display = ''
       }else if (index == 3)
       {
-          $('#not_search_pane').show()
+          document.getElementById('not_search_pane').style.display = ''
       }
   }
 
@@ -124,7 +126,7 @@
       ]
 
       const swabStyle = `background-color: rgb(${f.color[0]},${f.color[1]},${f.color[2]})`
-      $('#filter_modal #info').html(who(
+      document.querySelector('#filter_modal #info').innerHTML = who(
           ['label',
            ['input', { id: "main_enabled_checkbox", type: 'checkbox', name: 'enabled', checked: f.enabled }],
            '{#Enabled}'],
@@ -173,11 +175,11 @@
            '{#Background Color}',
            ['input', { name: "color", type: 'color', value: toHashNotation(f.color), style: 'margin-top: 10px' }]
           ]
-      ))
+      )
 
       selectTab(tabIndex || 1)
 
-      $('#filter_modal').show()
+      document.getElementById('filter_modal').style.display = 'block'
   }
 
   function newFilter()
@@ -214,30 +216,30 @@
   {
 
       return {
-          "enabled": $('#filter_modal #info #main_enabled_checkbox')[0].checked,
-          "name": $('#filter_modal #info input[name=name]')[0].value,
-          "favorite": $('#filter_modal #info input[name=favorite]')[0].checked,
-          "ignore": $('#filter_modal #info input[name=ignore]')[0].checked,
+          "enabled": document.querySelector('#filter_modal #info #main_enabled_checkbox').checked,
+          "name": document.querySelector('#filter_modal #info input[name=name]').value,
+          "favorite": document.querySelector('#filter_modal #info input[name=favorite]').checked,
+          "ignore": document.querySelector('#filter_modal #info input[name=ignore]').checked,
           "base_search":
           {
-              "fields": $('#base_search_pane input[name=fields]').toArray().flatMap(e => e.checked ? [e.value] : []),
-              "search": $('#base_search_pane input[name=search]')[0].value,
+              "fields": Array.from(document.querySelectorAll('#base_search_pane input[name=fields]')).flatMap(e => e.checked ? [e.value] : []),
+              "search": document.querySelector('#base_search_pane input[name=search]').value,
           },
           "and_search":
           {
-              "enabled": $('#and_search_pane input[name=enabled]')[0].checked,
-              "fields": $('#and_search_pane input[name=fields]').toArray().flatMap(e => e.checked ? [e.value] : []),
-              "search": $('#and_search_pane input[name=search]')[0].value,
+              "enabled": document.querySelector('#and_search_pane input[name=enabled]').checked,
+              "fields": Array.from(document.querySelectorAll('#and_search_pane input[name=fields]')).flatMap(e => e.checked ? [e.value] : []),
+              "search": document.querySelector('#and_search_pane input[name=search]').value,
           },
           "not_search":
           {
-              "enabled": $('#not_search_pane input[name=enabled]')[0].checked,
-              "fields": $('#not_search_pane input[name=fields]').toArray().flatMap(e => e.checked ? [e.value] : []),
-              "search": $('#not_search_pane input[name=search]')[0].value,
+              "enabled": document.querySelector('#not_search_pane input[name=enabled]').checked,
+              "fields": Array.from(document.querySelectorAll('#not_search_pane input[name=fields]')).flatMap(e => e.checked ? [e.value] : []),
+              "search": document.querySelector('#not_search_pane input[name=search]').value,
           },
-          "ignore_case": $('#filter_modal #info input[name=ignore_case]')[0].checked,
-          "enable_color": $('#filter_modal #info input[name=enable_color]')[0].checked,
-          "color": toTriples($('#filter_modal #info input[name=color]')[0].value),
+          "ignore_case": document.querySelector('#filter_modal #info input[name=ignore_case]').checked,
+          "enable_color": document.querySelector('#filter_modal #info input[name=enable_color]').checked,
+          "color": toTriples(document.querySelector('#filter_modal #info input[name=color]').value),
       }
   }
 
@@ -249,7 +251,7 @@
           Filters[filterIndex] = readModalFilterSettings()
 
       renderFilterTable()
-      $('#filter_modal').hide()
+      document.getElementById('filter_modal').style.display = 'none'
       return saveChannelFiltersAsync()
   }
 
@@ -283,15 +285,15 @@
           renderFilterTable()
       } catch(error) {
           console.error(error)
-          $('#flash').text(`${error.name}: ${error.message}`)
+          document.querySelector('#flash').textContent = `${error.name}: ${error.message}`
       }
 
       if (new URLSearchParams(window.location.search).get("fav"))
       {
           const chname = new URLSearchParams(window.location.search).get("fav")
           showFilterModal(-1)
-          $('#filter_modal #info input[name=name]')[0].value = chname
-          $('#filter_modal #info #base_search_pane input[name=search]')[0].value = chname.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') // escape regexp
+          document.querySelector('#filter_modal #info input[name=name]').value = chname
+          document.querySelector('#filter_modal #info #base_search_pane input[name=search]').value = chname.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') // escape regexp
       }
   }
 
@@ -302,18 +304,18 @@
       const left = Filters.slice(0, filterIndex)
       const right = Filters.slice(filterIndex + 1)
       Filters = left.concat(right)
-      $('#filter_modal').hide()
+      document.getElementById('filter_modal').style.display = 'none'
       renderFilterTable()
       saveChannelFiltersAsync()
   }
 
   function onFilterModalReorder()
   {
-      $('#reorder_modal .modal-body').html(who(
+      document.querySelector('#reorder_modal .modal-body').innerHTML = who(
           ['span', "{#New Place}:"],
           ['input', { type: "number", id: "new_place_input", value: (filterIndex + 1).toString(), min: "1", max: Filters.length.toString() }]
-      ))
-      $('#reorder_modal').show()
+      )
+      document.getElementById('reorder_modal').style.display = 'block'
   }
 
   function onReorderModalOk()
@@ -324,23 +326,23 @@
       const right = Filters.slice(filterIndex + 1)
       Filters = left.concat(right)
 
-      const newPlace = +$('#reorder_modal #new_place_input')[0].value - 1
+      const newPlace = +document.querySelector('#reorder_modal #new_place_input').value - 1
       Filters.splice(newPlace, 0 /*deleteCount*/, f)
 
-      $('#reorder_modal').hide()
-      $('#filter_modal').hide()
+      document.getElementById('reorder_modal').style.display = 'none'
+      document.getElementById('filter_modal').style.display = 'none'
       renderFilterTable()
       saveChannelFiltersAsync()
   }
 
-  $(function(){
+  document.addEventListener('DOMContentLoaded', function(){
       main()
   })
 
 </script>
 
 <script>
-  function toFields($search)
+  function toFields(search)
   {
       // Filter.xml -> YP
       const table =
@@ -362,8 +364,8 @@
           ]
 
       const fields = []
-      const normal = $search.find("normal")[0].attributes
-      const extra = $search.find("extra")[0].attributes
+      const normal = search.querySelector("normal").attributes
+      const extra = search.querySelector("extra").attributes
 
       for (const [from, to] of table)
       {
@@ -394,14 +396,14 @@
 
   async function onFilterXmlInput()
   {
-      const file = $("#filter_xml")[0].files[0]
+      const file = document.querySelector("#filter_xml").files[0]
       console.log(file)
 
       if (!file)
       {
-          $('#import_modal output').text("{#Please select the Filter.xml file in your PeCaRecorder folder.}")
+          document.querySelector('#import_modal output').textContent = "{#Please select the Filter.xml file in your PeCaRecorder folder.}"
           ImportingFilters = undefined
-          $('#import_modal #ok_button')[0].disabled = true
+          document.querySelector('#import_modal #ok_button').disabled = true
           return
       }
 
@@ -415,28 +417,29 @@
           const filters =
               items.map(item => {
                   const f = newFilter()
-                  f.enabled = ($(item).attr('enable') == "true")
-                  f.favorite = ($(item).attr('favorite') == "true")
-                  f.ignore = ($(item).attr('ignore') == "true")
-                  f.name = $(item).attr('name')
-                  f.enable_color = $(item).find("common").attr("enableBg") == "true"
-                  f.color = integerToTriples(+$(item).find("common").attr("bg"))
+                  f.enabled = (item.getAttribute('enable') == "true")
+                  f.favorite = (item.getAttribute('favorite') == "true")
+                  f.ignore = (item.getAttribute('ignore') == "true")
+                  f.name = item.getAttribute('name')
+                  const common = item.querySelector("common")
+                  f.enable_color = common.getAttribute("enableBg") == "true"
+                  f.color = integerToTriples(+common.getAttribute("bg"))
 
-                  f.ignore_case = $(item).find("option").attr("icase") == "true"
+                  f.ignore_case = item.querySelector("option").getAttribute("icase") == "true"
 
-                  const $base = $(item).find("base")
-                  f.base_search.search = $base.find("search").text()
-                  f.base_search.fields = toFields($base)
+                  const base = item.querySelector("base")
+                  f.base_search.search = base.querySelector("search").textContent
+                  f.base_search.fields = toFields(base)
 
-                  const $and = $(item).find("and")
-                  f.and_search.enabled = ($and.attr("enable") == "true")
-                  f.and_search.search = $and.find("search").text()
-                  f.and_search.fields = toFields($and)
+                  const and = item.querySelector("and")
+                  f.and_search.enabled = (and.getAttribute("enable") == "true")
+                  f.and_search.search = and.querySelector("search").textContent
+                  f.and_search.fields = toFields(and)
 
-                  const $not = $(item).find("not")
-                  f.not_search.enabled = ($not.attr("enable") == "true")
-                  f.not_search.search = $not.find("search").text()
-                  f.not_search.fields = toFields($not)
+                  const not = item.querySelector("not")
+                  f.not_search.enabled = (not.getAttribute("enable") == "true")
+                  f.not_search.search = not.querySelector("search").textContent
+                  f.not_search.fields = toFields(not)
 
                   return f
               })
@@ -444,9 +447,9 @@
           ImportingFilters = filters
       } catch(e) {
           console.error(e)
-          $('#import_modal output').text("Oops, something went wrong!")
+          document.querySelector('#import_modal output').textContent = "Oops, something went wrong!"
           ImportingFilters = undefined
-          $('#import_modal #ok_button')[0].disabled = true
+          document.querySelector('#import_modal #ok_button').disabled = true
           return
       }
       
@@ -456,11 +459,11 @@
 
       const num = Filters.filter(f => toBeDeleted[f.name]).length
       if (num > 0)
-          $('#import_modal output').text(`${num}{# existing filters will be replaced.}`)
+          document.querySelector('#import_modal output').textContent = `${num}{# existing filters will be replaced.}`
       else
-          $('#import_modal output').text(`${ImportingFilters.length}{# filters will be imported.}`)
+          document.querySelector('#import_modal output').textContent = `${ImportingFilters.length}{# filters will be imported.}`
 
-      $('#import_modal #ok_button')[0].disabled = false
+      document.querySelector('#import_modal #ok_button').disabled = false
   }
 
   async function onImportModalOk()
@@ -478,7 +481,7 @@
       let filters = Filters.filter(f => !toBeDeleted[f.name])
       Filters = filters.concat(ImportingFilters)
 
-      $('#import_modal').hide()
+      document.getElementById('import_modal').style.display = 'none'
       renderFilterTable()
       await saveChannelFiltersAsync()
   }
@@ -490,7 +493,7 @@
 <div style="max-width: 640px">
   <div style="text-align: right; margin-bottom: 12px">
     <button onclick="onFilterResetAsync()"><span class="emoji-icon">&#x26a0;&#xfe0f;<!-- danger sign --></span> {#Reset}</button>
-    <button onclick="$('#import_modal').show(); onFilterXmlInput()"><span class="emoji-icon">&#x2b06;&#xfe0f;<!-- up arrow  --></span> {#Import}</button>
+    <button onclick="document.getElementById('import_modal').style.display = 'block'; onFilterXmlInput()"><span class="emoji-icon">&#x2b06;&#xfe0f;<!-- up arrow  --></span> {#Import}</button>
   </div>
   <div id="filter_table"></div>
 </div>
@@ -510,7 +513,7 @@
     </div>
     <div class="modal-footer" style="margin-top:15px; text-align:right">
       <button onclick="onFilterModalOk()">{#OK}</button>
-      <button onclick="$('#filter_modal').hide()">{#Cancel}</button>
+      <button onclick="document.getElementById('filter_modal').style.display = 'none'">{#Cancel}</button>
     </div>
   </div>
 </div>
@@ -524,7 +527,7 @@
     </div>
     <div class="modal-footer" style="margin-top:15px; text-align:right">
       <button onclick="onReorderModalOk()">{#OK}</button>
-      <button onclick="$('#reorder_modal').hide()">{#Cancel}</button>
+      <button onclick="document.getElementById('reorder_modal').style.display = 'none'">{#Cancel}</button>
     </div>
   </div>
 </div>
@@ -542,7 +545,7 @@
     </div>
     <div class="modal-footer" style="margin-top:15px; text-align:right">
       <button id="ok_button" onclick="onImportModalOk()" disabled>{#OK}</button>
-      <button onclick="$('#import_modal').hide()">{#Cancel}</button>
+      <button onclick="document.getElementById('import_modal').style.display = 'none'">{#Cancel}</button>
     </div>
   </div>
 </div>
