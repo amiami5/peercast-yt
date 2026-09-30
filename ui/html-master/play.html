@@ -150,12 +150,13 @@
   <body style="background-color: #222">
 
     <script>
-      $(function(){
-          $('.vstack').css('height', `${window.innerHeight}px`)
-          $(window).resize(() => {
-              $('.vstack').css('height', `${window.innerHeight}px`)
-          })
-      })
+      function fitHeight()
+      {
+          for (const e of document.querySelectorAll('.vstack'))
+              e.style.height = `${window.innerHeight}px`
+      }
+      document.addEventListener('DOMContentLoaded', fitHeight)
+      window.addEventListener('resize', fitHeight)
     </script>
 
     <div class="vstack">
