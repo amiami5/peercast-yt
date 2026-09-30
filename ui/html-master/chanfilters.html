@@ -9,7 +9,6 @@
 
 <!-- who etc. -->
 <script src="/assets/js/render_helpers.js"></script>
-<script src="/assets/js/jscolor.js"></script>
 
 <script>
   let Filters
@@ -172,11 +171,10 @@
           ['label',
            ['input', { name: "enable_color", type: 'checkbox', checked: f.enable_color }],
            '{#Background Color}',
-           ['input', { name: "color", 'data-jscolor': '{}', value: toHashNotation(f.color), style: 'margin-top: 10px' }]
+           ['input', { name: "color", type: 'color', value: toHashNotation(f.color), style: 'margin-top: 10px' }]
           ]
       ))
 
-      jscolor.install()
       selectTab(tabIndex || 1)
 
       $('#filter_modal').show()
