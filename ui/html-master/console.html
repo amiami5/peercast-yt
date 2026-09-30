@@ -38,17 +38,17 @@ pre { margin:0; white-space: pre-wrap; }
 <script>
 function scrollToBottom()
 {
-    $(window).scrollTop($(document).height() - $(window).height())
-    //const top = $(document).height() - $(window).height()
-    //$("html, body").animate({ scrollTop: top }, 600)
+    window.scrollTo(0, document.documentElement.scrollHeight - window.innerHeight)
 }
 
 function clearScreen()
 {
     for (let i = 0; i < nextIndex; i++) {
-        if ($(`#ellipsis-${i}`).css('display') == 'none') {
-            $(`#output-row-${i}`).remove()
-            $(`#input-row-${i}`).remove()
+        // 出力が終わったもの (カーソルを隠したもの) だけを消す。
+        const ellipsis = document.getElementById(`ellipsis-${i}`)
+        if (ellipsis && ellipsis.style.display == 'none') {
+            document.getElementById(`output-row-${i}`)?.remove()
+            document.getElementById(`input-row-${i}`)?.remove()
         }
     }
 }
@@ -56,9 +56,13 @@ function clearScreen()
 let nextIndex = 1
 let history = []
 let historyIndex = 0
-$(function(){
-      $('#commandLine').on('keydown', async function(e){
-          if (e.which == 38) { // up
+document.addEventListener('DOMContentLoaded', function(){
+      const screen = document.getElementById('screen')
+      const commandLine = document.getElementById('commandLine')
+
+      // 日本語入力の確定の Enter は keyCode が 229 になるので、key ではなく keyCode で見る。
+      commandLine.addEventListener('keydown', async function(e){
+          if (e.keyCode == 38) { // up
               if (historyIndex > 0 && historyIndex - 1 < history.length) {
                   historyIndex--
                   this.value = history[historyIndex]
@@ -67,7 +71,7 @@ $(function(){
                   e.preventDefault()
               }
               return
-          } else if (e.which == 40) { // down
+          } else if (e.keyCode == 40) { // down
               if (historyIndex + 1 < history.length) {
                   historyIndex++
                   this.value = history[historyIndex]
@@ -80,7 +84,7 @@ $(function(){
               return
           }
 
-          if (e.which != 13) { // Enter
+          if (e.keyCode != 13) { // Enter
               return
           }
 
@@ -100,26 +104,28 @@ $(function(){
           const decoder = new TextDecoder()
           const headers = { 'X-Requested-With': 'XMLHttpRequest' }
 
-          $('#screen').append(
+          screen.insertAdjacentHTML('beforeend',
               who(['div', {class:'input-row', id:`input-row-${index}`},
                    ['pre', {class:'input', id:`input-${index}`}, q]])
           )
-          $('#screen').append(
+          screen.insertAdjacentHTML('beforeend',
               who(['div', {class:'output-row', id:`output-row-${index}`},
                    ['div', {class:'output'},
                     ['pre', {id:`output-${index}`}],
                     ['span', {class:'ellipsis', id:`ellipsis-${index}`}, '\u{2588}']]
               ])
           )
+          const output = document.getElementById(`output-${index}`)
+          const ellipsis = document.getElementById(`ellipsis-${index}`)
           scrollToBottom()
 
           let response
           try {
               response = await fetch(url, { headers })
           } catch (error) {
-              $(`#output-${index}`).html(who(['i', {}, error.message]));
+              output.innerHTML = who(['i', {}, error.message]);
 
-              $(`#ellipsis-${index}`).hide()
+              ellipsis.style.display = 'none'
               scrollToBottom()
               return
           }
@@ -131,15 +137,13 @@ $(function(){
 
           function readChunk({done, value}) {
               if (done) {
-                  if ($(`#output-${index}`).text() === "") {
-                      $(`#output-${index}`).html(who(['i', {}, "{#The command has finished.}"]));
+                  if (output.textContent === "") {
+                      output.innerHTML = who(['i', {}, "{#The command has finished.}"]);
                   }
-                  $(`#ellipsis-${index}`).hide()
+                  ellipsis.style.display = 'none'
                   scrollToBottom()
               } else {
-                  const str = $(`#output-${index}`).text()
-                  $(`#output-${index}`).text(str + decoder.decode(value))
-                  //
+                  output.textContent += decoder.decode(value)
                   scrollToBottom()
                   reader.read().then(readChunk)
               }
@@ -148,7 +152,7 @@ $(function(){
       })
 
       const firstMessage = ['i', {}, "{#Type 'help' to get the list of available commands.}"]
-      $('#screen').append(
+      screen.insertAdjacentHTML('beforeend',
           who(['div', {class:'output-row', id:'output-row-0'},
                ['div', {class:'output'},
                 ['pre', {}, firstMessage],
@@ -157,7 +161,7 @@ $(function(){
               ])
       )
 
-      $('#commandLine').focus()
+      commandLine.focus()
 })
 </script>
 
