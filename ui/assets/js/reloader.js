@@ -3,7 +3,8 @@
 document.addEventListener('DOMContentLoaded', function () {
     for (const r of document.querySelectorAll('.reloader')) {
         const callback = function () {
-            fetch(r.dataset.url, { cache: 'no-store' })
+            // X-Requested-With を付けると、ログインが切れているときにログインのページではなく 403 が返る。
+            fetch(r.dataset.url, { cache: 'no-store', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
                 .then(function (response) {
                     if (!response.ok)
                         throw new Error(response.status);

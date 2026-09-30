@@ -157,7 +157,7 @@
       if (!link)
           return;
       ev.preventDefault();
-      fetch(link.getAttribute('href'), { cache: 'no-store' })
+      fetch(link.getAttribute('href'), { cache: 'no-store', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
           .then((response) => response.ok ? response.text() : Promise.reject())
           .then((data) => alert(data))
           .catch(() => {});
