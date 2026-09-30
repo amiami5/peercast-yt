@@ -531,6 +531,11 @@ fn check_flv(label: &str, data: &[u8], min: usize) {
     let (head, body) = (&data[..i], &data[i + 4..]);
     let status = String::from_utf8_lossy(head.split(|&c| c == b'\r').next().unwrap()).into_owned();
     assert!(status.ends_with("200 OK"), "{}: {}", label, status);
+    // 配信の中身は文書として開かせない (security-review #20)
+    let head = String::from_utf8_lossy(head);
+    for h in ["\r\nContent-Type: video/x-flv\r\n", "\r\nX-Content-Type-Options: nosniff\r\n", "\r\nContent-Security-Policy: sandbox\r\n"] {
+        assert!(format!("{}\r\n", head).contains(h), "{}: {:?} がない: {}", label, h.trim(), head);
+    }
     assert!(body.starts_with(b"FLV\x01"), "{}: FLV でない", label);
     assert!(body.len() >= min, "{}: {} バイトしかない", label, body.len());
 }
@@ -632,5 +637,6 @@ fn sources() {
         let end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(buf.len());
         let head = String::from_utf8_lossy(&buf[..end]).into_owned();
         assert!(head.starts_with("ICY 200 OK") && head.contains("icy-metaint:"), "{}: {}", n, head);
+        assert!(head.contains("\r\nX-Content-Type-Options: nosniff\r\n"), "{}: {}", n, head);
     }
 }

@@ -258,6 +258,11 @@ impl ChanInfo {
         ci::effective_mime(&self.content_type.data, &self.mime_type.data).to_vec()
     }
 
+    /// `/stream/` の応答に使う MIME タイプ (メディアのものだけ。`ci::stream_mime`)
+    pub fn stream_mime(&self) -> Vec<u8> {
+        ci::stream_mime(&self.content_type.data, &self.mime_type.data).to_vec()
+    }
+
     /// `getPlayListExt`
     pub fn playlist_ext(&self) -> &'static [u8] {
         ci::playlist_ext(&self.content_type.data)

@@ -25,8 +25,9 @@
 
 コードを読んで判断したもので、実際に動かしての確認はまだしていない。
 
-- [ ] #20 `/stream/` の応答の `Content-Type` に、PCP の `styp` (配信者やほかのノードが送ってくる MIME タイプ) をそのまま使っています (`servent.rs` の `return_stream_headers` → `ChanInfo::mime`)。`text/html` にされると、配信の中身が管理画面と同じオリジンの HTML として開かれます。管理コマンドの `fetch` は `pipe:` で外部のプログラムを起こせるので、ここで JavaScript が動くと PC の上でのコマンドの実行まで届きます。
+- [x] #20 `/stream/` の応答の `Content-Type` に、PCP の `styp` (配信者やほかのノードが送ってくる MIME タイプ) をそのまま使っています (`servent.rs` の `return_stream_headers` → `ChanInfo::mime`)。`text/html` にされると、配信の中身が管理画面と同じオリジンの HTML として開かれます。管理コマンドの `fetch` は `pipe:` で外部のプログラムを起こせるので、ここで JavaScript が動くと PC の上でのコマンドの実行まで届きます。
   - 案: `/stream/` の `Content-Type` は、種類 (`type`) から決まる既知のメディアの MIME タイプだけにする (`styp` は表にあるものだけ受け付けるか、使わない)。あわせて `X-Content-Type-Options: nosniff` と `Content-Security-Policy: sandbox` を付ける。
+  - 済み: `chaninfo::stream_mime` で、`styp` は `audio/*`・`video/*` (サブタイプは英数字と `.+-_` だけ) と `application/x-ogg`・`application/ogg`・`application/octet-stream` のときだけ使い、それ以外は種類の表から決める。`/stream/` の HTTP の応答 (ICY の形も) には `X-Content-Type-Options: nosniff` と `Content-Security-Policy: sandbox` を付けた。bvt の `relay`・`sources` でヘッダーを確かめる。`styp` に `text/html` を入れて送ってくるノードを立てての確認はしていない (単体テストで `stream_mime` を確かめた)。
 - [ ] #21 同じ応答で、チャンネル名・ジャンル・説明・URL (`icy-name:` や `x-audiocast-*:`) を、改行などを除かずにヘッダーに書いています。PCP から届く文字列 (`pcpstream.rs` の `chan_info_string`) は制御文字を落としていないので、応答のヘッダーを書き足せます。
   - 案: PCP で受け取るときに制御文字を除き、ヘッダーに書くときにも除く。
 - [ ] #22 リレー一覧 (`relays.html`) の `<a href="/stream/{$this.id}{$this.ext}">` の `ext` が、PCP の `sext` (ほかから届く値) そのままです。`/../` などを入れると、リンク先を同じオリジンの管理コマンド (`/admin?cmd=...`) に変えられます。クリックは同じオリジンからの要求になるので、CSRF の判定も通ります。
