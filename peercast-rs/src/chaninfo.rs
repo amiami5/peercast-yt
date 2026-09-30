@@ -175,13 +175,22 @@ fn is_media_mime(m: &[u8]) -> bool {
     !sub.is_empty() && sub.iter().all(|&b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-' | b'_'))
 }
 
-/// `getTypeExt()`: 設定された拡張子か、なければ種類から
+/// `getTypeExt()`: 設定された拡張子か、なければ種類から。
+/// 拡張子 (PCP の `sext` などほかから届く値) はリンクの URL に入るので、
+/// `.` と英数字 1〜7 文字の形のときだけ使い、それ以外は種類から決める
 pub fn effective_ext<'a>(content_type: &[u8], ext: &'a [u8]) -> &'a [u8] {
     let e = c_str(ext);
-    if e.is_empty() {
-        type_ext(content_type)
-    } else {
+    if is_plain_ext(e) {
         e
+    } else {
+        type_ext(content_type)
+    }
+}
+
+fn is_plain_ext(e: &[u8]) -> bool {
+    match e.split_first() {
+        Some((b'.', rest)) => (1..=7).contains(&rest.len()) && rest.iter().all(u8::is_ascii_alphanumeric),
+        _ => false,
     }
 }
 
@@ -399,6 +408,19 @@ mod tests {
         assert_eq!(playlist_ext(b"OGM"), b".ram");
         assert_eq!(type_string_long(b"FLV", b"", b""), b"FLV (video/x-flv; .flv) [no styp] [no sext]");
         assert_eq!(type_string_long(b"FLV", b"a/b", b".x"), b"FLV (a/b; .x)");
+    }
+
+    #[test]
+    fn ext_only_plain() {
+        assert_eq!(effective_ext(b"FLV", b".webm"), b".webm");
+        assert_eq!(effective_ext(b"FLV", b".mp4\0junk"), b".mp4");
+        assert_eq!(effective_ext(b"FLV", b"/../../admin?cmd=stop"), b".flv");
+        assert_eq!(effective_ext(b"FLV", b".flv/../x"), b".flv");
+        assert_eq!(effective_ext(b"FLV", b"flv"), b".flv");
+        assert_eq!(effective_ext(b"FLV", b"."), b".flv");
+        assert_eq!(effective_ext(b"FLV", b".abcdefgh"), b".flv");
+        assert_eq!(effective_ext(b"MPG", b".a\"b"), b"");
+        assert_eq!(type_string_long(b"FLV", b"", b"/x"), b"FLV (video/x-flv; .flv) [no styp]");
     }
 
     #[test]
