@@ -622,6 +622,48 @@ fn icy_push(port: u16, first_line: &'static [u8], headers: &'static [&'static [u
     })
 }
 
+/// ShoutCast の放送の 1 行目 (パスワード) を試しても、パスワードの締め出しを通ること。
+/// localhost からは締め出さないので、このマシンのループバックでないアドレスからつなぐ
+#[test]
+fn shoutcast_password_lockout() {
+    // 経路を引くだけで、パケットは送らない
+    let lan = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|u| u.connect("192.0.2.1:9").map(|_| u))
+        .and_then(|u| u.local_addr())
+        .map(|a| a.ip());
+    let lan = match lan {
+        Ok(ip) if !ip.is_loopback() && !ip.is_unspecified() => ip,
+        _ => {
+            eprintln!("ループバックでないアドレスがないので飛ばす");
+            return;
+        }
+    };
+    let s = Server::start_with(17218, |ini| ini.replacen("password = \r\n", "password = pass\r\n", 1));
+    let first_line = |line: &str| -> String {
+        let mut c = TcpStream::connect((lan, s.port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c.write_all(format!("{}\r\n", line).as_bytes()).unwrap();
+        let mut buf = [0u8; 256];
+        let n = c.read(&mut buf).unwrap_or(0);
+        let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+        text.lines().next().unwrap_or("").to_string()
+    };
+    // 受け付けないメソッドの HTTP の要求は、パスワードを試したのとは数えない
+    for _ in 0..8 {
+        assert!(first_line("HEAD / HTTP/1.1").contains("400"));
+    }
+    assert_eq!(first_line("pass"), "OK2");
+    // 外れた行は数え、5 回で締め出す。締め出している間は、当たっても 429 で区別できない
+    for i in 0..5 {
+        let r = first_line(&format!("guess{}", i));
+        assert!(r.contains("400"), "{}: {}", i, r);
+    }
+    let r = first_line("pass");
+    assert!(r.contains("429"), "{}", r);
+    let r = first_line("guess");
+    assert!(r.contains("429"), "{}", r);
+}
+
 /// 配信元の種類ごと: HTTP の取得 (fetch)、ShoutCast と Icecast の放送、ICY のメタデータ付きの視聴
 /// (もとは source_test.py)
 #[test]

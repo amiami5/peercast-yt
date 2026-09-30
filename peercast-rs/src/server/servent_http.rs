@@ -117,7 +117,21 @@ fn handshake_http(c: &mut Conn, line: &[u8], is_http: bool) -> Result<()> {
     let password = c.pc.servmgr.settings().password.clone();
     // パスワードはログに残さない
     crate::log_debug!("{} \"{}\"", c.sv.host().ip.str(), b(&servhs::redact_request_line(line, &password)));
-    match servhs::request_kind(line, &password) {
+    let kind = servhs::request_kind(line, &password);
+    // ShoutCast の放送は 1 行目がパスワードで、当たれば OK2 (か 503)、外れれば 400 と応答で分かる。
+    // 総当たりできないように、localhost 以外からは締め出しの判定を通し、外れた (Bad の) 行を数える
+    let icy_guess = !password.is_empty()
+        && !is_localhost(&c.sv.host())
+        && (kind == servhs::RequestKind::Shoutcast
+            || (kind == servhs::RequestKind::Bad && !servhs::is_other_http_method(line)));
+    if icy_guess {
+        let ip = c.sv.host().ip.str();
+        auth_lockout(c.pc, &ip)?;
+        if kind == servhs::RequestKind::Bad {
+            auth_record(c.pc, &ip, false);
+        }
+    }
+    match kind {
         servhs::RequestKind::Get => handshake_get(c, line),
         servhs::RequestKind::Post => handshake_post(c, line),
         servhs::RequestKind::Giv => handshake_giv(c, line),
