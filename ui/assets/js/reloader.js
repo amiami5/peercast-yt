@@ -1,22 +1,24 @@
-$(function () {
-    var reloaders = $('.reloader');
-
-    for (var i = 0; i < reloaders.length; i++) {
-        (function (r) {
-            var callback = function () {
-                $.ajax(r.dataset.url, {
-                    cache: false,
-                    success: function (data) {
-                        $(r).html(data);
-                        setTimeout(callback, r.dataset.interval * 1000);
-                    },
-                    error: function (req, status, errorMessage) {
-                        // console.log([status, errorMessage]);
-                        setTimeout(callback, r.dataset.interval * 1000);
-                    },
+// class="reloader" の要素の中身を、data-interval 秒ごとに data-url から読み直す。
+// 読んだ HTML の中の <script> は実行されないので、読み直す部分にはスクリプトを置かないこと。
+document.addEventListener('DOMContentLoaded', function () {
+    for (const r of document.querySelectorAll('.reloader')) {
+        const callback = function () {
+            fetch(r.dataset.url, { cache: 'no-store' })
+                .then(function (response) {
+                    if (!response.ok)
+                        throw new Error(response.status);
+                    return response.text();
+                })
+                .then(function (data) {
+                    r.innerHTML = data;
+                })
+                .catch(function () {
+                    // 読めなければ、次の回にまた試す。
+                })
+                .finally(function () {
+                    setTimeout(callback, r.dataset.interval * 1000);
                 });
-            };
-            setTimeout(callback, r.dataset.interval * 1000);
-        })(reloaders[i]);
+        };
+        setTimeout(callback, r.dataset.interval * 1000);
     }
 });

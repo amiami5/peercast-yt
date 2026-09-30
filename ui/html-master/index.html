@@ -147,18 +147,19 @@
   </table>
   </div>
 
-  <script>
-  $(function(){
-      $(".alert-link").click(function(ev){
-          ev.preventDefault();
-          $.ajax($(this).attr("href"), {
-              cache: false,
-              success: function (data) {
-                  alert(data);
-              },
-          });
-      });
-  });
-  </script>
   {@end}
 </div>
+
+<script>
+  // .alert-link は読み直しで入れ替わるので、document で受ける。
+  document.addEventListener('click', function (ev) {
+      const link = ev.target.closest('.alert-link');
+      if (!link)
+          return;
+      ev.preventDefault();
+      fetch(link.getAttribute('href'), { cache: 'no-store' })
+          .then((response) => response.ok ? response.text() : Promise.reject())
+          .then((data) => alert(data))
+          .catch(() => {});
+  });
+</script>
