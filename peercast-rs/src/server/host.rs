@@ -466,23 +466,8 @@ impl Host {
         if s.is_empty() {
             return Host::v4(0, 0);
         }
-        let p = patterns();
-        if p.ipv4.is_match(s) {
-            return Host::new(Ip::parse(s).unwrap_or_else(|| Ip::from_v4(0)), default_port);
-        }
-        if p.ipv4_port.is_match(s) {
-            let v = crate::strutil::split(s, b":");
-            return Host::new(Ip::parse(&v[0]).unwrap_or_else(|| Ip::from_v4(0)), atoi(&v[1]) as u16);
-        }
-        if p.ipv6.is_match(s) {
-            return Host::new(Ip::parse(s).unwrap_or_default(), default_port);
-        }
-        if p.ipv6_bracketed.is_match(s) {
-            return Host::new(Ip::parse(&s[1..s.len() - 1]).unwrap_or_default(), default_port);
-        }
-        if p.ipv6_bracketed_port.is_match(s) {
-            let q = s.iter().position(|&c| c == b']').unwrap_or(0);
-            return Host::new(Ip::parse(&s[1..q]).unwrap_or_default(), atoi(&s[q + 2..]) as u16);
+        if let Some(h) = Host::from_str_addr(s, default_port) {
+            return h;
         }
         let v = crate::strutil::split(s, b":");
         if v.len() <= 2 {
@@ -493,6 +478,30 @@ impl Host {
             crate::log_error!("fromStrName: Parse error: {}", String::from_utf8_lossy(s));
             Host::v4(0, 0)
         }
+    }
+
+    /// IPv4 か IPv6 のアドレスの文字列 (ポート付きでも) だけを読む。ホスト名は引かずに None
+    pub fn from_str_addr(s: &[u8], default_port: u16) -> Option<Host> {
+        let s = until_nul(s);
+        let p = patterns();
+        if p.ipv4.is_match(s) {
+            return Some(Host::new(Ip::parse(s).unwrap_or_else(|| Ip::from_v4(0)), default_port));
+        }
+        if p.ipv4_port.is_match(s) {
+            let v = crate::strutil::split(s, b":");
+            return Some(Host::new(Ip::parse(&v[0]).unwrap_or_else(|| Ip::from_v4(0)), atoi(&v[1]) as u16));
+        }
+        if p.ipv6.is_match(s) {
+            return Some(Host::new(Ip::parse(s).unwrap_or_default(), default_port));
+        }
+        if p.ipv6_bracketed.is_match(s) {
+            return Some(Host::new(Ip::parse(&s[1..s.len() - 1]).unwrap_or_default(), default_port));
+        }
+        if p.ipv6_bracketed_port.is_match(s) {
+            let q = s.iter().position(|&c| c == b']').unwrap_or(0);
+            return Some(Host::new(Ip::parse(&s[1..q]).unwrap_or_default(), atoi(&s[q + 2..]) as u16));
+        }
+        None
     }
 
     /// `Host::fromString`: `[v6]:port` か `名前:port` (名前は IPv4 で引く)
@@ -681,6 +690,13 @@ mod tests {
         assert_eq!(Host::from_str_name(b"10.0.0.1", 7144).str(), "10.0.0.1:7144");
         assert_eq!(Host::from_str_name(b"10.0.0.1:1", 7144).str(), "10.0.0.1:1");
         assert_eq!(Host::from_str_name(b"", 7144).str(), "0.0.0.0:0");
+        assert_eq!(Host::from_str_addr(b"[::1]:8144", 7144).map(|h| h.str()), Some("[::1]:8144".into()));
+        assert_eq!(Host::from_str_addr(b"10.0.0.1", 7144).map(|h| h.str()), Some("10.0.0.1:7144".into()));
+        assert_eq!(Host::from_str_addr(b"10.0.0.1:1", 7144).map(|h| h.str()), Some("10.0.0.1:1".into()));
+        // 名前は引かない
+        assert!(Host::from_str_addr(b"localhost", 7144).is_none());
+        assert!(Host::from_str_addr(b"example.com:7144", 7144).is_none());
+        assert!(Host::from_str_addr(b"", 7144).is_none());
         assert_eq!(Host::from_string(b"[::1]:80", 7144).str(), "[::1]:80");
         assert_eq!(Host::from_string(b"1.2.3.4:5", 7144).str(), "1.2.3.4:5");
         let pat = Host::from_str_ip(b"192.168.255.255", 0);

@@ -196,8 +196,9 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
             if !is_localhost(&c.sv.host()) && (!c.sv.is_allowed(c.pc, allow) || !c.sv.is_filtered(c.pc, filter)) {
                 return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
             }
-            let relay = relay_allowed && (c.sv.is_private(c.pc) || has_valid_auth_token(c.pc, &arg));
-            return svt::trigger_channel(c, &arg, proto, relay);
+            // `?ip=` / `?tip=` でヒットを足せるのも、中継を始めさせられる要求だけ (#25)
+            let trusted = c.sv.is_private(c.pc) || has_valid_auth_token(c.pc, &arg);
+            return svt::trigger_channel(c, &arg, proto, relay_allowed && trusted, trusted);
         }
         _ => {}
     }
@@ -288,7 +289,7 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
             }
             let arg = from(5);
             let relay = ctx.sv.is_private(ctx.pc) || has_valid_auth_token(ctx.pc, &arg);
-            let (info, found) = ctx.pc.servmgr.get_channel(ctx.pc, &arg, relay);
+            let (info, found) = ctx.pc.servmgr.get_channel(ctx.pc, &arg, relay, relay);
             http.read_headers()?;
             if found {
                 crate::log_debug!("User-Agent: {}", b(&http.headers.get(b"User-Agent")));
@@ -821,7 +822,7 @@ fn handshake_local_file(ctx: &Ctx, http: &mut Http, fn_: &[u8]) -> Result<()> {
                 if !lf.split_ok || lf.id.is_empty() {
                     return Err(http_error(HTTP_SC_BADREQUEST, 400));
                 }
-                let (_, found) = pc.servmgr.get_channel(pc, &lf.id, true);
+                let (_, found) = pc.servmgr.get_channel(pc, &lf.id, true, true);
                 if !found {
                     return Err(http_error(HTTP_SC_NOTFOUND, 404));
                 }
