@@ -88,8 +88,8 @@
               </table>
 
               <div class="small" style="float:right">
-                <button class="customize-button" onclick="$('#language_modal').show()" title="{#Choose Language}">&#x1F310;<!-- globe with meridians --></button>
-                <button class="customize-button" onclick="$('#appearance_modal').show()" title="{#Customize Appearance}">&#x1F3A8;<!-- artist palette --></button>
+                <button class="customize-button" onclick="document.getElementById('language_modal').style.display = 'block'" title="{#Choose Language}">&#x1F310;<!-- globe with meridians --></button>
+                <button class="customize-button" onclick="document.getElementById('appearance_modal').style.display = 'block'" title="{#Customize Appearance}">&#x1F3A8;<!-- artist palette --></button>
 	        <a href="/public/index.html">{#Public Directory}</a>
 	        <a href="logout.html">{#_Logout_navbar}</a>
               </div>
@@ -138,7 +138,7 @@
             </div>
             <div class="modal-footer" style="margin-top:15px; text-align:right">
               <button style="margin-right:10px" type="submit">OK</button>
-              <button style="" type="button" onclick="$('#appearance_modal').hide()">{#Cancel}</button>
+              <button style="" type="button" onclick="document.getElementById('appearance_modal').style.display = 'none'">{#Cancel}</button>
             </div>
           </form>
         </div>
@@ -163,17 +163,19 @@
             </div>
             <div class="modal-footer" style="margin-top:15px; text-align:right">
               <button style="margin-right:10px" type="submit">OK</button>
-              <button style="" type="button" onclick="$('#language_modal').hide()">{#Cancel}</button>
+              <button style="" type="button" onclick="document.getElementById('language_modal').style.display = 'none'">{#Cancel}</button>
             </div>
           </form>
         </div>
       </div>
 
       <script>
-        $(function(){
+        document.addEventListener('DOMContentLoaded', function(){
             // 全てのモーダルは、矩形の外をクリックすると閉じられる。
-            $('.modal').on('click', function(){ $(this).hide() });
-            $('.modal .modal-contents').on('click', (e) => e.stopPropagation());
+            for (const modal of document.querySelectorAll('.modal'))
+                modal.addEventListener('click', function(){ this.style.display = 'none' });
+            for (const contents of document.querySelectorAll('.modal .modal-contents'))
+                contents.addEventListener('click', (e) => e.stopPropagation());
         })
       </script>
 
