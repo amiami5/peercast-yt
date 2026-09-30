@@ -48,7 +48,8 @@
 - [x] #27 `enableSSLServer` が有効なとき、TLS のハンドシェイク (`tls.rs` の `SSL_accept`) の間は、要求を読み終えるまでの期限が十分には効いていません (少しずつ送る接続で居座れる)。
   - 案: TLS のハンドシェイクにも期限を設ける。確かめてから決める。
   - 済み: develop-rs-tls の d3a6dc8 のうち、期限の部分を持ってきた。要求を読み終えるまでの期限 (`handshakeTimeout`) のある間は、ソケットをノンブロッキングにし、`SSL_accept`・`SSL_read` が読み書きを待つたびに、期限までの残りだけ `poll` で待つ (`tls::Session::run`、`socket::with_deadline`)。これまでは OpenSSL の中の recv のたびに読む待ち時間をまるごと使えたので、ハンドシェイクや要求のレコードを 1 バイトずつ送る接続に居座られていた。SSL_accept の失敗のログに OpenSSL の理由を出すこと、TLS の read_upto を受信量の統計に数えることも一緒に持ってきた。bvt の `tls_slow_client` で、平文・ハンドシェイク・ハンドシェイクのあとの要求を 1 バイトずつ送り、期限で切られることを確かめる (直す前は失敗することも確かめた)。
-- [ ] #28 パスワードの比較 (`handshake_auth` の `sent_pass == password` など) が定数時間ではありません。締め出しがあるので影響は小さい。
+- [x] #28 パスワードの比較 (`handshake_auth` の `sent_pass == password` など) が定数時間ではありません。締め出しがあるので影響は小さい。
   - 案: 定数時間で比べる関数を使う。
+  - 済み: 長さが同じならどこで違っても同じだけ時間をかけて比べる `strutil::ct_eq` と `strutil::ct_starts_with` を作り (結果は `black_box` を通して、途中で打ち切る最適化をさせない)、管理パスワード (`?pass=` と Basic 認証)、ShoutCast の 1 行目 (`servhs::request_kind`)、ShoutCast・Icecast の放送のパスワード (`servhs::icy_password_ok`)、ログインの Cookie の ID (`CookieList::contains`)、`?auth=` のトークン (`valid_auth_token`・`flv_valid_auth_token`) の比較に使う。長さが違うことは分かってしまう (パスワードの長さは隠さない)。rtmp-server のストリームキーは前から `same_bytes` で定数時間に比べている。単体テスト (`ct_eq_cases`) と、これまでの bvt (`pass_in_query`・`shoutcast_password_lockout`・`sources` など) で確かめた。時間の差を測っての確認はしていない。
 
 まだ深くは見ていないところ: メディアのパーサー (FLV、MKV、OGG、MP4)、XML と JSON のパーサー、uptest、正規表現、ini の読み書き。

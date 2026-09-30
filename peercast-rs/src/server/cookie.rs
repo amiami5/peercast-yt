@@ -42,9 +42,9 @@ impl CookieList {
         self.never_expire = false;
     }
 
-    /// `contains`: ID と IP が空でなく、同じものがあるか
+    /// `contains`: ID と IP が空でなく、同じものがあるか。ID は定数時間で比べる
     pub fn contains(&self, c: &Cookie) -> bool {
-        !c.id.is_empty() && c.ip.is_set() && self.list.contains(c)
+        !c.id.is_empty() && c.ip.is_set() && self.list.iter().any(|x| x.ip == c.ip && crate::strutil::ct_eq(&x.id, &c.id))
     }
 
     /// `add`: 同じものがなければ加える (古いものから消す)

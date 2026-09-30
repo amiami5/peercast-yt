@@ -97,7 +97,7 @@ pub fn request_kind(line: &[u8], password: &[u8]) -> RequestKind {
         RequestKind::Pcp
     } else if line.starts_with(b"SOURCE") {
         RequestKind::Source
-    } else if !password.is_empty() && line.starts_with(password) {
+    } else if !password.is_empty() && strutil::ct_starts_with(line, password) {
         RequestKind::Shoutcast
     } else {
         RequestKind::Bad
@@ -295,9 +295,9 @@ pub fn source(line: &[u8]) -> Source {
 /// だと、どこからでもパスワードなしで放送を始められた。
 pub fn icy_password_ok(sent: &[u8], password: &[u8], localhost: bool) -> bool {
     if localhost {
-        sent.is_empty() || sent == password
+        sent.is_empty() || strutil::ct_eq(sent, password)
     } else {
-        !password.is_empty() && sent == password
+        !password.is_empty() && strutil::ct_eq(sent, password)
     }
 }
 
@@ -485,7 +485,7 @@ pub fn valid_auth_token(request_filename: &[u8], broadcast_id: &[u8; 16]) -> boo
     let token = Query::new(&vec[1]).get(b"auth");
     let chanid = strutil::upcase(&vec[0][..vec[0].len().min(32)]);
     let id = gnuid::from_str(&chanid);
-    channel::auth_token(broadcast_id, &id) == token
+    strutil::ct_eq(&channel::auth_token(broadcast_id, &id), &token)
 }
 
 /// `handshakeAuth` の Cookie ヘッダーの解釈
@@ -1052,7 +1052,7 @@ pub fn flv_valid_auth_token(request_filename: &[u8], broadcast_id: &[u8; 16]) ->
     match (form.get("id"), form.get("auth")) {
         (Some(id), Some(token)) if id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()) => {
             let id = gnuid::from_str(&strutil::upcase(id.as_bytes()));
-            channel::auth_token(broadcast_id, &id) == token.as_bytes()
+            strutil::ct_eq(&channel::auth_token(broadcast_id, &id), token.as_bytes())
         }
         _ => false,
     }
