@@ -1389,7 +1389,9 @@ fn return_stream_headers(c: &mut Conn, info: &ChanInfo) -> Result<()> {
     }
     let icy_meta = pc.chanmgr.settings().icy_meta_interval;
     let s = c.sock()?;
-    let line = |s: &mut ClientSocket, parts: &[&[u8]]| s.write_line(parts.concat());
+    // 名前・ジャンル・説明・URL は配信者やほかのノードから届く値。改行などで
+    // ヘッダーを書き足されないよう、値の制御文字を除いてから書く
+    let line = |s: &mut ClientSocket, parts: &[&[u8]]| s.write_line([parts[0], &super::pcstr::strip_controls(parts[1])].concat());
     if add_metadata && out_proto == ci::SP_HTTP {
         s.write_line(ICY_OK)?;
         s.write_line(format!("Server: {}", PCX_AGENT))?;

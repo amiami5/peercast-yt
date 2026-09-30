@@ -28,8 +28,9 @@
 - [x] #20 `/stream/` の応答の `Content-Type` に、PCP の `styp` (配信者やほかのノードが送ってくる MIME タイプ) をそのまま使っています (`servent.rs` の `return_stream_headers` → `ChanInfo::mime`)。`text/html` にされると、配信の中身が管理画面と同じオリジンの HTML として開かれます。管理コマンドの `fetch` は `pipe:` で外部のプログラムを起こせるので、ここで JavaScript が動くと PC の上でのコマンドの実行まで届きます。
   - 案: `/stream/` の `Content-Type` は、種類 (`type`) から決まる既知のメディアの MIME タイプだけにする (`styp` は表にあるものだけ受け付けるか、使わない)。あわせて `X-Content-Type-Options: nosniff` と `Content-Security-Policy: sandbox` を付ける。
   - 済み: `chaninfo::stream_mime` で、`styp` は `audio/*`・`video/*` (サブタイプは英数字と `.+-_` だけ) と `application/x-ogg`・`application/ogg`・`application/octet-stream` のときだけ使い、それ以外は種類の表から決める。`/stream/` の HTTP の応答 (ICY の形も) には `X-Content-Type-Options: nosniff` と `Content-Security-Policy: sandbox` を付けた。bvt の `relay`・`sources` でヘッダーを確かめる。`styp` に `text/html` を入れて送ってくるノードを立てての確認はしていない (単体テストで `stream_mime` を確かめた)。
-- [ ] #21 同じ応答で、チャンネル名・ジャンル・説明・URL (`icy-name:` や `x-audiocast-*:`) を、改行などを除かずにヘッダーに書いています。PCP から届く文字列 (`pcpstream.rs` の `chan_info_string`) は制御文字を落としていないので、応答のヘッダーを書き足せます。
+- [x] #21 同じ応答で、チャンネル名・ジャンル・説明・URL (`icy-name:` や `x-audiocast-*:`) を、改行などを除かずにヘッダーに書いています。PCP から届く文字列 (`pcpstream.rs` の `chan_info_string`) は制御文字を落としていないので、応答のヘッダーを書き足せます。
   - 案: PCP で受け取るときに制御文字を除き、ヘッダーに書くときにも除く。
+  - 済み: 制御文字 (0x00〜0x1f と 0x7f) を除く `pcstr::strip_controls` を作った。PCP で受け取る文字列 (`chan_info_string`、トラックの情報も) は除いてから持ち、`/stream/` の応答の `icy-*:`・`x-audiocast-*:` にも除いてから書く (HTTP Push や設定の変更など、ほかの経路から入った値のため)。同じ文字列を 1 行ずつ書くプレイリスト (`PlayList::add_url` の URL と題名) でも除く。bvt の `stream_header_injection` で、名前に `%0D%0A` を入れた配信を直接と PCP の中継で見て、ヘッダーを書き足されないことを確かめる (直す前は失敗することも確かめた)。
 - [ ] #22 リレー一覧 (`relays.html`) の `<a href="/stream/{$this.id}{$this.ext}">` の `ext` が、PCP の `sext` (ほかから届く値) そのままです。`/../` などを入れると、リンク先を同じオリジンの管理コマンド (`/admin?cmd=...`) に変えられます。クリックは同じオリジンからの要求になるので、CSRF の判定も通ります。
   - 案: `ext` は種類から決まる固定の表 (`type_ext`) だけを使う。`sext` を使うなら英数字とドットだけの短いものに限る。
 - [ ] #23 ShoutCast 形式の放送 (1 行目がパスワード) の判定 (`servhs::request_kind` の `line.starts_with(password)`) が、パスワードの締め出し (`auth_lockout` / `auth_record`) を通っていません。当たれば `OK2`、外れれば 400 と応答で分かるので、管理パスワードを締め出されずに総当たりできます。

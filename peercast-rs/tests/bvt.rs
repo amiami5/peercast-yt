@@ -555,6 +555,29 @@ fn relay() {
     assert_eq!(wait_channels(relay.port, 1)[0].1, cid);
 }
 
+/// チャンネル名の改行で `/stream/` の応答のヘッダーを書き足されない (security-review #21)。
+/// 直接の視聴 (配信者から届いた名前) と、PCP の中継 (ほかのノードから届いた名前) の両方
+#[test]
+fn stream_header_injection() {
+    let src = Server::start(17213);
+    let relay = Server::start(17214);
+    let _push = push_flv(src.port, "inj%0D%0AX-Injected:%201%0D%0A");
+    let chans = wait_channels(src.port, 1);
+    let cid = chans[0].1.clone();
+    let head = |port: u16, q: &str| format!("GET /stream/{}.flv{} HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", cid, q, port);
+    let tip = format!("?tip=127.0.0.1:{}", src.port);
+    for (label, data) in [
+        ("direct", read_stream(src.port, &head(src.port, ""), 200000, Duration::from_secs(20))),
+        ("relay", read_stream(relay.port, &head(relay.port, &tip), 200000, Duration::from_secs(30))),
+    ] {
+        check_flv(label, &data, 100000);
+        let i = data.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let head = String::from_utf8_lossy(&data[..i]);
+        assert!(!head.contains("\r\nX-Injected:"), "{}: ヘッダーを書き足された: {}", label, head);
+        assert!(head.contains("\r\nx-audiocast-name: injX-Injected: 1\r\n"), "{}: {}", label, head);
+    }
+}
+
 /// MP3 のフレーム (MPEG1 Layer III 128kbps 44.1kHz、パディングなし: 417 バイト) を `n` 個
 fn mp3_frames(n: usize, tag: u8) -> Vec<u8> {
     let mut frame = b"\xff\xfb\x90\x64".to_vec();

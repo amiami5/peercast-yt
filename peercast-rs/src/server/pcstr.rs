@@ -32,6 +32,13 @@ pub fn cut(s: &[u8]) -> Vec<u8> {
     s[..s.len().min(pcstring::MAX_LEN - 1)].to_vec()
 }
 
+/// 制御文字 (0x00〜0x1f と 0x7f) を除く。ほかから届く文字列を HTTP のヘッダーや
+/// プレイリストの 1 行に書くとき、改行で行を書き足されないようにする。
+/// Shift_JIS の 2 バイト目や UTF-8 の続きのバイトはこの範囲に入らないので、文字は壊れない。
+pub fn strip_controls(s: &[u8]) -> Vec<u8> {
+    s.iter().copied().filter(|&c| c >= 0x20 && c != 0x7f).collect()
+}
+
 impl PcString {
     /// `String(p, T_ASCII)` / `set(p, t)`
     pub fn new(s: &[u8]) -> PcString {
@@ -153,5 +160,12 @@ mod tests {
         assert_eq!(a.data.len(), 254);
         let sjis = PcString::new(b"\x82\xa0");
         assert_eq!(sjis.converted(StrType::Unicode), "あ".as_bytes());
+    }
+
+    #[test]
+    fn strip_controls_removes_line_breaks() {
+        assert_eq!(strip_controls(b"a\r\nSet-Cookie: x\tb\x7f\x00c"), b"aSet-Cookie: xbc");
+        assert_eq!(strip_controls("日本語 ch".as_bytes()), "日本語 ch".as_bytes());
+        assert_eq!(strip_controls(b"\x83\x5c\x82\xa0"), b"\x83\x5c\x82\xa0");
     }
 }
