@@ -65,7 +65,10 @@ function unescapeHtml(str)
     if (UHCache[str] !== undefined) {
         return UHCache[str]
     } else {
-        return (UHCache[str] = $($.parseHTML(str)).text())
+        // <template> の中身は別の文書に作られるので、スクリプトは動かず、画像も読まれない。
+        const template = document.createElement('template')
+        template.innerHTML = str
+        return (UHCache[str] = template.content.textContent)
     }
 }
 
