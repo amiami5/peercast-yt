@@ -104,6 +104,14 @@ pub fn request_kind(line: &[u8], password: &[u8]) -> RequestKind {
     }
 }
 
+/// `RequestKind::Bad` の行のうち、受け付けない HTTP のメソッド (HEAD・OPTIONS など) の要求で、
+/// ShoutCast のパスワードを試したのではないと見なせるもの。それ以外の `Bad` の行は、
+/// パスワードが外れたのと区別できない (応答が 400 になる) ので、締め出しのために数える。
+pub fn is_other_http_method(line: &[u8]) -> bool {
+    const METHODS: [&[u8]; 8] = [b"HEAD ", b"OPTIONS ", b"PUT ", b"DELETE ", b"PATCH ", b"CONNECT ", b"TRACE ", b"PRI "];
+    is_http(line) && METHODS.iter().any(|m| line.starts_with(m))
+}
+
 /// `handshakeGET` の振り分け
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GetKind {

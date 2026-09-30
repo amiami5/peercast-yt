@@ -34,8 +34,9 @@
 - [x] #22 リレー一覧 (`relays.html`) の `<a href="/stream/{$this.id}{$this.ext}">` の `ext` が、PCP の `sext` (ほかから届く値) そのままです。`/../` などを入れると、リンク先を同じオリジンの管理コマンド (`/admin?cmd=...`) に変えられます。クリックは同じオリジンからの要求になるので、CSRF の判定も通ります。
   - 案: `ext` は種類から決まる固定の表 (`type_ext`) だけを使う。`sext` を使うなら英数字とドットだけの短いものに限る。
   - 済み: `chaninfo::effective_ext` (`ChanInfo::type_ext`、リレー一覧の `ext` とプレイリストの URL が使う) は、`sext` が `.` と英数字 1〜7 文字のときだけ使い、それ以外は種類の表 (`type_ext`) から決める。PCP の経路でも ini (`streamExt`) の経路でも同じところを通る。受け取った `sext` はそのまま持ち、ほかのノードへもそのまま送る。bvt の `relays_stream_ext` で、ini に `streamExt = /../../admin?cmd=stop&x=` のリレーを書いて relays.html のリンクが `.flv` になることを確かめる (直す前は失敗することも確かめた)。
-- [ ] #23 ShoutCast 形式の放送 (1 行目がパスワード) の判定 (`servhs::request_kind` の `line.starts_with(password)`) が、パスワードの締め出し (`auth_lockout` / `auth_record`) を通っていません。当たれば `OK2`、外れれば 400 と応答で分かるので、管理パスワードを締め出されずに総当たりできます。
+- [x] #23 ShoutCast 形式の放送 (1 行目がパスワード) の判定 (`servhs::request_kind` の `line.starts_with(password)`) が、パスワードの締め出し (`auth_lockout` / `auth_record`) を通っていません。当たれば `OK2`、外れれば 400 と応答で分かるので、管理パスワードを締め出されずに総当たりできます。
   - 案: この形の行も、localhost 以外からは締め出しの判定と記録を通す (外れたことを数える)。
+  - 済み: `handshake_http` で、パスワードが設定されていて localhost 以外からのとき、1 行目が ShoutCast の形 (パスワードで始まる) か、どれにも当たらない行 (`Bad`) なら、締め出しを先に判定する (締め出している間は当たっても 429)。`Bad` の行は外れとして数える。ただし HEAD・OPTIONS など受け付けないメソッドの HTTP の要求 (`servhs::is_other_http_method`) は数えない (パスワードがこれらのメソッド名と空白で始まるときだけ、数えられずに試せる余地が残る)。当たったことは、これまでどおり `handshake_icy` で記録する。bvt の `shoutcast_password_lockout` で、このマシンのループバックでないアドレスからつなぎ、HEAD は数えないこと、5 回外すと正しいパスワードでも 429 になることを確かめる (直す前は失敗することも確かめた)。
 - [ ] #24 PCP の PUSH (`pcpstream.rs` の `push` → `servent::init_giv`) で、届いた宛先 (ループバックや LAN のアドレスも含む) へ、数の上限なく接続とスレッドを作ります。サーバント (`ServMgr::alloc_servent`) の数にも上限がありません。中継の相手や CIN の相手なら誰でも送れます。
   - 案: GIV のための接続は同時に動かす数に上限を設け、ループバック・プライベート・リンクローカルなどの宛先は断る。サーバントの数にも上限を設ける。
 - [ ] #25 認証なしの `/stream/`・`/channel/`・`/pls/` に `?ip=` や `?tip=` を付けると、ヒットやトラッカーを足せます (`ServMgr::proc_connect_args`)。そのたびに名前解決も走ります。また公開ディレクトリを有効にしていると、`/public/play.html?id=` から認証なしで任意のチャンネルの中継を始めさせられます (`public.rs` の `get_channel(.., true)`)。

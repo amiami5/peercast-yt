@@ -15,6 +15,18 @@ fn request_kinds() {
 }
 
 #[test]
+fn other_http_methods() {
+    assert!(is_other_http_method(b"HEAD / HTTP/1.1"));
+    assert!(is_other_http_method(b"OPTIONS * HTTP/1.1"));
+    assert!(is_other_http_method(b"PRI * HTTP/1.1"));
+    // HTTP でない行や、知らないメソッドは、ShoutCast のパスワードを試したのと区別しない
+    assert!(!is_other_http_method(b"HEAD /"));
+    assert!(!is_other_http_method(b"guess"));
+    assert!(!is_other_http_method(b"guess HTTP/1.1"));
+    assert!(!is_other_http_method(b"HEADX / HTTP/1.1"));
+}
+
+#[test]
 fn get_routes() {
     assert_eq!(get_route(b"/admin?cmd=apply HTTP/1.1"), (GetKind::Admin, Some(16)));
     assert_eq!(get_route(b"/admin/?cmd=x"), (GetKind::AdminSlash, None));
