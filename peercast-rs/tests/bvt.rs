@@ -664,6 +664,101 @@ fn shoutcast_password_lockout() {
     assert!(r.contains("429"), "{}", r);
 }
 
+/// PCP の PUSH で GIV のためにつなぎに行くのは、同時に全体で 8 つ、宛先ごとに 2 つまで (security-review #24)。
+/// 相手の要求を読み終えるか接続が切れれば、また受け付ける
+#[test]
+fn push_giv_limit() {
+    let src = Server::start(17219);
+    let _push = push_flv(src.port, "givtest");
+    wait_channels(src.port, 1);
+
+    // GIV の宛先。つながれたら、宛先のアドレスと最初の行を覚え、要求は送らずに持っておく
+    let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let lport = listener.local_addr().unwrap().port();
+    let accepted: Arc<std::sync::Mutex<Vec<(std::net::IpAddr, String, TcpStream)>>> = Default::default();
+    {
+        let accepted = accepted.clone();
+        std::thread::spawn(move || {
+            for s in listener.incoming() {
+                let Ok(mut s) = s else { break };
+                s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut buf = [0u8; 64];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let line = String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or("").to_string();
+                accepted.lock().unwrap().push((s.local_addr().unwrap().ip(), line, s));
+            }
+        });
+    }
+
+    // CIN としてつなぐ (配信中のノードは受け付ける)
+    let mut s = TcpStream::connect(("127.0.0.1", src.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut out = AtomBuf::default();
+    out.int(*b"pcp\n", 1);
+    out.parent(id4(b"helo"), 3);
+    out.string(id4(b"agnt"), b"PeerCast/0.1218 (YT50)");
+    out.int(id4(b"ver"), 1218);
+    out.bytes(id4(b"sid"), b"givtest-session!");
+    s.write_all(&out.0).unwrap();
+    let sid: [u8; 16] = match read_atom(&mut s) {
+        Atom::Parent(id, c) if &id == b"oleh" => child(&c, b"sid").expect("sid").try_into().unwrap(),
+        a => panic!("oleh expected: {:?}", match a { Atom::Parent(id, _) | Atom::Data(id, _) => id }),
+    };
+    // ほかに届くもの (ok、root) は読み捨てる
+    let mut drain = s.try_clone().unwrap();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while matches!(drain.read(&mut buf), Ok(n) if n > 0) {}
+    });
+
+    let push = |s: &mut TcpStream, ip: [u8; 4]| {
+        let mut mapped = [0u8; 16];
+        mapped[10] = 0xff;
+        mapped[11] = 0xff;
+        mapped[12..].copy_from_slice(&ip);
+        let mut out = AtomBuf::default();
+        out.parent(id4(b"bcst"), 3);
+        out.char(id4(b"ttl"), 1);
+        out.bytes(id4(b"dest"), &sid);
+        out.parent(id4(b"push"), 2);
+        out.address(id4(b"ip"), &mapped);
+        out.short(id4(b"port"), lport as i16);
+        s.write_all(&out.0).unwrap();
+    };
+    let count = |ip: Option<[u8; 4]>| {
+        let a = accepted.lock().unwrap();
+        a.iter().filter(|(addr, _, _)| ip.map_or(true, |ip| *addr == std::net::IpAddr::from(ip))).count()
+    };
+    let wait_count = |n: usize| {
+        let t0 = Instant::now();
+        while count(None) < n && t0.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // 多すぎないことも見るため、少し待つ
+        std::thread::sleep(Duration::from_secs(2));
+        count(None)
+    };
+
+    for _ in 0..3 {
+        push(&mut s, [127, 0, 0, 1]);
+    }
+    for i in 2..=6 {
+        push(&mut s, [127, 0, 0, i]);
+        push(&mut s, [127, 0, 0, i]);
+    }
+    assert_eq!(wait_count(8), 8);
+    assert_eq!(count(Some([127, 0, 0, 1])), 2);
+    for (addr, line, _) in accepted.lock().unwrap().iter() {
+        assert_eq!(line, "GIV", "{}", addr);
+    }
+
+    // 切れれば、また受け付ける
+    accepted.lock().unwrap().clear();
+    std::thread::sleep(Duration::from_millis(500));
+    push(&mut s, [127, 0, 0, 7]);
+    assert_eq!(wait_count(1), 1);
+}
+
 /// 配信元の種類ごと: HTTP の取得 (fetch)、ShoutCast と Icecast の放送、ICY のメタデータ付きの視聴
 /// (もとは source_test.py)
 #[test]

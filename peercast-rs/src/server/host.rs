@@ -93,6 +93,21 @@ impl Ip {
         }
     }
 
+    /// LAN の中のアドレス (ループバック・プライベート・リンクローカル)
+    pub fn is_lan(&self) -> bool {
+        !self.is_global() || (self.is_ipv4_mapped() && self.octet(3) == 169 && self.octet(2) == 254)
+    }
+
+    /// つなぎに行く宛先にならないアドレス (空、マルチキャスト、IPv4 の 0.0.0.0/8 と 240.0.0.0/4)
+    pub fn is_unconnectable(&self) -> bool {
+        if self.is_ipv4_mapped() {
+            let a = self.octet(3);
+            a == 0 || a >= 224
+        } else {
+            self.is_ipv6_any() || self.0[0] == 0xff
+        }
+    }
+
     /// `str()`。IPv4 は `a.b.c.d`、IPv6 は glibc の `inet_ntop` と同じ形。
     pub fn str(&self) -> String {
         if self.is_ipv4_mapped() {
@@ -634,6 +649,23 @@ mod tests {
         assert_eq!(p(":::"), None);
         assert_eq!(p("1::2::3"), None);
         assert_eq!(p("12345::"), None);
+    }
+
+    #[test]
+    fn address_kinds() {
+        let ip = |s: &str| Ip::parse(s.as_bytes()).unwrap();
+        for s in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.1.1", "::1", "fe80::1", "fd00::1"] {
+            assert!(ip(s).is_lan(), "{}", s);
+        }
+        for s in ["1.2.3.4", "172.32.0.1", "169.253.1.1", "2001:db8::1"] {
+            assert!(!ip(s).is_lan(), "{}", s);
+        }
+        for s in ["0.0.0.0", "0.1.2.3", "224.0.0.1", "239.255.255.250", "255.255.255.255", "240.0.0.1", "::", "ff02::1"] {
+            assert!(ip(s).is_unconnectable(), "{}", s);
+        }
+        for s in ["1.2.3.4", "223.255.255.255", "127.0.0.1", "::1", "2001:db8::1"] {
+            assert!(!ip(s).is_unconnectable(), "{}", s);
+        }
     }
 
     #[test]
