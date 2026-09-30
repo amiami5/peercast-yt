@@ -578,6 +578,19 @@ fn stream_header_injection() {
     }
 }
 
+/// リレー一覧のリンクの拡張子に、ほかから届いた `sext` をそのまま使わない (security-review #22)
+#[test]
+fn relays_stream_ext() {
+    let s = Server::start_with(17217, |ini| {
+        ini + "\n[RelayChannel]\nname = extest\nid = 0123456789ABCDEF0123456789ABCDEF\n\
+               contentType = FLV\nstreamExt = /../../admin?cmd=stop&x=\nstayConnected = Yes\n[End]\n"
+    });
+    let text = String::from_utf8_lossy(&get(s.port, "/html/ja/relays.html").body).into_owned();
+    assert!(text.contains("extest"), "チャンネルが一覧にない: {}", text);
+    assert!(text.contains("<a href=\"/stream/0123456789ABCDEF0123456789ABCDEF.flv\">"), "{}", text);
+    assert!(!text.contains("/../"), "{}", text);
+}
+
 /// MP3 のフレーム (MPEG1 Layer III 128kbps 44.1kHz、パディングなし: 417 バイト) を `n` 個
 fn mp3_frames(n: usize, tag: u8) -> Vec<u8> {
     let mut frame = b"\xff\xfb\x90\x64".to_vec();

@@ -31,8 +31,9 @@
 - [x] #21 同じ応答で、チャンネル名・ジャンル・説明・URL (`icy-name:` や `x-audiocast-*:`) を、改行などを除かずにヘッダーに書いています。PCP から届く文字列 (`pcpstream.rs` の `chan_info_string`) は制御文字を落としていないので、応答のヘッダーを書き足せます。
   - 案: PCP で受け取るときに制御文字を除き、ヘッダーに書くときにも除く。
   - 済み: 制御文字 (0x00〜0x1f と 0x7f) を除く `pcstr::strip_controls` を作った。PCP で受け取る文字列 (`chan_info_string`、トラックの情報も) は除いてから持ち、`/stream/` の応答の `icy-*:`・`x-audiocast-*:` にも除いてから書く (HTTP Push や設定の変更など、ほかの経路から入った値のため)。同じ文字列を 1 行ずつ書くプレイリスト (`PlayList::add_url` の URL と題名) でも除く。bvt の `stream_header_injection` で、名前に `%0D%0A` を入れた配信を直接と PCP の中継で見て、ヘッダーを書き足されないことを確かめる (直す前は失敗することも確かめた)。
-- [ ] #22 リレー一覧 (`relays.html`) の `<a href="/stream/{$this.id}{$this.ext}">` の `ext` が、PCP の `sext` (ほかから届く値) そのままです。`/../` などを入れると、リンク先を同じオリジンの管理コマンド (`/admin?cmd=...`) に変えられます。クリックは同じオリジンからの要求になるので、CSRF の判定も通ります。
+- [x] #22 リレー一覧 (`relays.html`) の `<a href="/stream/{$this.id}{$this.ext}">` の `ext` が、PCP の `sext` (ほかから届く値) そのままです。`/../` などを入れると、リンク先を同じオリジンの管理コマンド (`/admin?cmd=...`) に変えられます。クリックは同じオリジンからの要求になるので、CSRF の判定も通ります。
   - 案: `ext` は種類から決まる固定の表 (`type_ext`) だけを使う。`sext` を使うなら英数字とドットだけの短いものに限る。
+  - 済み: `chaninfo::effective_ext` (`ChanInfo::type_ext`、リレー一覧の `ext` とプレイリストの URL が使う) は、`sext` が `.` と英数字 1〜7 文字のときだけ使い、それ以外は種類の表 (`type_ext`) から決める。PCP の経路でも ini (`streamExt`) の経路でも同じところを通る。受け取った `sext` はそのまま持ち、ほかのノードへもそのまま送る。bvt の `relays_stream_ext` で、ini に `streamExt = /../../admin?cmd=stop&x=` のリレーを書いて relays.html のリンクが `.flv` になることを確かめる (直す前は失敗することも確かめた)。
 - [ ] #23 ShoutCast 形式の放送 (1 行目がパスワード) の判定 (`servhs::request_kind` の `line.starts_with(password)`) が、パスワードの締め出し (`auth_lockout` / `auth_record`) を通っていません。当たれば `OK2`、外れれば 400 と応答で分かるので、管理パスワードを締め出されずに総当たりできます。
   - 案: この形の行も、localhost 以外からは締め出しの判定と記録を通す (外れたことを数える)。
 - [ ] #24 PCP の PUSH (`pcpstream.rs` の `push` → `servent::init_giv`) で、届いた宛先 (ループバックや LAN のアドレスも含む) へ、数の上限なく接続とスレッドを作ります。サーバント (`ServMgr::alloc_servent`) の数にも上限がありません。中継の相手や CIN の相手なら誰でも送れます。
