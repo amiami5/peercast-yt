@@ -20,3 +20,28 @@
   - 済み: 名前は `data-name` 属性に置き、`this.dataset.name` を `encodeURIComponent` して渡す。グループのタブも `Groups` の番号で引くようにした。C++ 版に残ることは `docs/cpp-known-issues.md` に書いた。
 - [x] #19 視聴ページの掲示板の欄が、掲示板から届いたレスの本文・名前・メール・日付を HTML のままページに入れていました。掲示板のサーバーはコンタクト URL で配信者が好きに指定できるので、自分のサーバーに `<img onerror=…>` などを入れたスレッドを置けば、視聴ページを開いた人の管理画面で JavaScript を動かせました (XSS)。
   - 済み: `ui/html-master/bbs.js` は、本文を `<template>` の中で解釈し、文字と改行 (`<br>`) と `http(s)://` のリンクだけを DOM の API で作り直して入れる。名前などは文字だけを取り出して `title` に入れる。URL や題名を属性に入れるところも `h()` を通す。C++ 版に残ることは `docs/cpp-known-issues.md` に書いた。
+
+## 2026-10-01 に見つけたもの (全体の見直し、重さの順)
+
+コードを読んで判断したもので、実際に動かしての確認はまだしていない。
+
+- [ ] #20 `/stream/` の応答の `Content-Type` に、PCP の `styp` (配信者やほかのノードが送ってくる MIME タイプ) をそのまま使っています (`servent.rs` の `return_stream_headers` → `ChanInfo::mime`)。`text/html` にされると、配信の中身が管理画面と同じオリジンの HTML として開かれます。管理コマンドの `fetch` は `pipe:` で外部のプログラムを起こせるので、ここで JavaScript が動くと PC の上でのコマンドの実行まで届きます。
+  - 案: `/stream/` の `Content-Type` は、種類 (`type`) から決まる既知のメディアの MIME タイプだけにする (`styp` は表にあるものだけ受け付けるか、使わない)。あわせて `X-Content-Type-Options: nosniff` と `Content-Security-Policy: sandbox` を付ける。
+- [ ] #21 同じ応答で、チャンネル名・ジャンル・説明・URL (`icy-name:` や `x-audiocast-*:`) を、改行などを除かずにヘッダーに書いています。PCP から届く文字列 (`pcpstream.rs` の `chan_info_string`) は制御文字を落としていないので、応答のヘッダーを書き足せます。
+  - 案: PCP で受け取るときに制御文字を除き、ヘッダーに書くときにも除く。
+- [ ] #22 リレー一覧 (`relays.html`) の `<a href="/stream/{$this.id}{$this.ext}">` の `ext` が、PCP の `sext` (ほかから届く値) そのままです。`/../` などを入れると、リンク先を同じオリジンの管理コマンド (`/admin?cmd=...`) に変えられます。クリックは同じオリジンからの要求になるので、CSRF の判定も通ります。
+  - 案: `ext` は種類から決まる固定の表 (`type_ext`) だけを使う。`sext` を使うなら英数字とドットだけの短いものに限る。
+- [ ] #23 ShoutCast 形式の放送 (1 行目がパスワード) の判定 (`servhs::request_kind` の `line.starts_with(password)`) が、パスワードの締め出し (`auth_lockout` / `auth_record`) を通っていません。当たれば `OK2`、外れれば 400 と応答で分かるので、管理パスワードを締め出されずに総当たりできます。
+  - 案: この形の行も、localhost 以外からは締め出しの判定と記録を通す (外れたことを数える)。
+- [ ] #24 PCP の PUSH (`pcpstream.rs` の `push` → `servent::init_giv`) で、届いた宛先 (ループバックや LAN のアドレスも含む) へ、数の上限なく接続とスレッドを作ります。サーバント (`ServMgr::alloc_servent`) の数にも上限がありません。中継の相手や CIN の相手なら誰でも送れます。
+  - 案: GIV のための接続は同時に動かす数に上限を設け、ループバック・プライベート・リンクローカルなどの宛先は断る。サーバントの数にも上限を設ける。
+- [ ] #25 認証なしの `/stream/`・`/channel/`・`/pls/` に `?ip=` や `?tip=` を付けると、ヒットやトラッカーを足せます (`ServMgr::proc_connect_args`)。そのたびに名前解決も走ります。また公開ディレクトリを有効にしていると、`/public/play.html?id=` から認証なしで任意のチャンネルの中継を始めさせられます (`public.rs` の `get_channel(.., true)`)。
+  - 案: `ip=` / `tip=` は private な接続と `auth` トークンのある要求だけで受け付け、名前でなく IP アドレスだけにする。公開ディレクトリの再生ページは、自分が配信しているチャンネルだけにする。
+- [ ] #26 PCP の root atom (ホスト情報の更新間隔 `uint`、ルートのメッセージなど) を、YP でなくどのノードから届いても受け付けます (`pcp/mod.rs` の `read_root_atoms`)。プロトコルの作りによるもの。
+  - 案: root atom は YP (rootHost) への COUT で受け取ったものだけ使い、更新間隔には下限と上限を設ける。
+- [ ] #27 (未確認) `enableSSLServer` が有効なとき、TLS のハンドシェイク (`tls.rs` の `SSL_accept`) の間は、要求を読み終えるまでの期限が十分には効いていないかもしれません (少しずつ送る接続で居座れる)。
+  - 案: TLS のハンドシェイクにも期限を設ける。確かめてから決める。
+- [ ] #28 パスワードの比較 (`handshake_auth` の `sent_pass == password` など) が定数時間ではありません。締め出しがあるので影響は小さい。
+  - 案: 定数時間で比べる関数を使う。
+
+まだ深くは見ていないところ: メディアのパーサー (FLV、MKV、OGG、MP4)、XML と JSON のパーサー、uptest、正規表現、ini の読み書き。
