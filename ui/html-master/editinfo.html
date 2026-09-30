@@ -9,16 +9,16 @@
 </style>
 
 <script>
-  $(function() { $("#track tbody tr:nth-child(n+2)").hide(); $("#widget").text("▼"); });
+  function showTrack(shown)
+  {
+    for (const row of document.querySelectorAll('#track tbody tr:nth-child(n+2)'))
+      row.style.display = shown ? '' : 'none';
+    document.getElementById('widget').textContent = shown ? "▲" : "▼";
+  }
+  document.addEventListener('DOMContentLoaded', function() { showTrack(false); });
   function toggleTrack()
   {
-    if ( $('#widget').text() == "▼" ) {
-      $('#track tbody tr:nth-child(n+2)').show();
-      $('#widget').text("▲");
-    } else {
-      $('#track tbody tr:nth-child(n+2)').hide();
-      $('#widget').text("▼");
-    }
+    showTrack(document.getElementById('widget').textContent == "▼");
   }
 </script>
 
