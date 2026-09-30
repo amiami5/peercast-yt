@@ -44,6 +44,7 @@ fn packet(a: &A) -> Vec<u8> {
 struct TestHost {
     events: Vec<String>,
     root: bool,
+    root_trusted: bool,
     sid: [u8; 16],
     has_ch: bool,
 }
@@ -55,6 +56,9 @@ fn show(b: &[u8]) -> String {
 impl Host for TestHost {
     fn session_id(&mut self) -> [u8; 16] {
         self.sid
+    }
+    fn root_trusted(&mut self) -> bool {
+        self.root_trusted
     }
     fn is_root(&mut self) -> bool {
         self.root
@@ -274,18 +278,21 @@ fn pkt_data_size() {
 
 #[test]
 fn root_atoms() {
-    let mut h = TestHost::default();
-    let a = A::Parent(
-        b"root",
-        vec![
-            int(b"uint", 120),
-            A::Leaf(b"url", b"download\0".to_vec()),
-            int(b"chkv", 1219),
-            int(b"next", 60),
-            A::Leaf(b"mesg", b"hello".to_vec()),
-            A::Parent(b"upd", vec![int(b"x", 1)]),
-        ],
-    );
+    let mut h = TestHost { root_trusted: true, ..Default::default() };
+    let mk = || {
+        A::Parent(
+            b"root",
+            vec![
+                int(b"uint", 120),
+                A::Leaf(b"url", b"download\0".to_vec()),
+                int(b"chkv", 1219),
+                int(b"next", 60),
+                A::Leaf(b"mesg", b"hello".to_vec()),
+                A::Parent(b"upd", vec![int(b"x", 1)]),
+            ],
+        )
+    };
+    let a = mk();
     let (r, st) = run(&mut h, &a);
     r.unwrap();
     assert_eq!(
@@ -304,6 +311,24 @@ fn root_atoms() {
 
     let mut h = TestHost { root: true, ..Default::default() };
     assert_eq!(run(&mut h, &a).0, Err(Error::Stream("Unauthorized root message")));
+
+    // YP への COUT 以外から届いたものは使わない。続く atom は読む
+    let mut h = TestHost::default();
+    let b = A::Parent(b"atom", vec![mk(), A::Leaf(b"mesg", b"next".to_vec())]);
+    let (r, st) = run(&mut h, &b);
+    r.unwrap();
+    assert_eq!(h.events, vec!["logDebug PCP ignored root atom from non-root host", "logDebug PCP got text: next"]);
+    assert_eq!(st.next_root_packet, 0);
+
+    // BCST の中でも使わないが、中継はする
+    let mut h = TestHost::default();
+    let c = A::Parent(b"bcst", vec![chr(b"ttl", 3), chr(b"grp", PCP_BCST_GROUP_TRACKERS as u8), mk()]);
+    let (r, st) = run(&mut h, &c);
+    assert_eq!(r, Ok(0));
+    assert_eq!(st.next_root_packet, 0);
+    assert!(h.events.iter().any(|e| e == "logDebug PCP ignored root atom from non-root host"));
+    assert!(!h.events.iter().any(|e| e.starts_with("updint") || e.starts_with("rootmsg") || e.starts_with("upgrade") || e == "tracker"));
+    assert!(h.events.iter().any(|e| e.starts_with("bcast Cin")));
 }
 
 #[test]
@@ -430,7 +455,7 @@ fn fuzz_no_panic() {
             let p = (next() % 80) as usize;
             buf[p] = next() as u8;
         }
-        let mut h = TestHost { has_ch: i % 2 == 0, ..Default::default() };
+        let mut h = TestHost { has_ch: i % 2 == 0, root_trusted: i % 4 < 2, ..Default::default() };
         let mut st = State::default();
         let _ = proc_packet(&mut h, &mut buf, &mut st);
     }

@@ -18,6 +18,10 @@ use super::sys;
 use crate::pcp::{self as pcp, BroadcastState};
 use crate::reader::Abort;
 
+/// YP から届くホスト情報の更新間隔 (秒) の下限と上限
+const MIN_UPDATE_INTERVAL: i32 = 30;
+const MAX_UPDATE_INTERVAL: i32 = 3600;
+
 /// ほかのスレッドから使う部分 (送るパケット、経路の ID、相手の ID)
 pub struct PcpShared {
     pub out_data: PacketBuffer,
@@ -57,13 +61,15 @@ pub struct PcpStream {
     pub next_root_packet: u32,
     /// 接続の相手 (わからなければ空)。PUSH の宛先を確かめるのに使う
     pub peer: Host,
+    /// rootHost (YP) への COUT か。root atom (更新間隔やルートのメッセージなど) はこのときだけ使う
+    pub from_root: bool,
 }
 
 impl PcpStream {
     pub fn new(remote_id: [u8; 16]) -> PcpStream {
         let in_data = PacketBuffer::new();
         in_data.init_accept(pb::T_PCP);
-        PcpStream { shared: Arc::new(PcpShared::new(remote_id)), in_data, last_packet_time: 0, next_root_packet: 0, peer: Host::none() }
+        PcpStream { shared: Arc::new(PcpShared::new(remote_id)), in_data, last_packet_time: 0, next_root_packet: 0, peer: Host::none(), from_root: false }
     }
 
     /// `init`
@@ -72,6 +78,7 @@ impl PcpStream {
         self.shared.route_list.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.last_packet_time = 0;
         self.next_root_packet = 0;
+        self.from_root = false;
         self.in_data.init_accept(pb::T_PCP);
         self.shared.out_data.init_accept(pb::T_PCP);
     }
@@ -128,7 +135,7 @@ impl PcpStream {
     /// 受け取ったパケットの処理 (`procAtom`)
     fn proc_packet(&mut self, pc: &Arc<Peercast>, data: &mut [u8], bcs: &mut BroadcastState) -> Result<i32> {
         let mut state = pcp::State { bcs: bcs.clone(), next_root_packet: self.next_root_packet };
-        let mut host = PcpHost { pc, shared: &self.shared, peer: self.peer,ch: None, has_chl: false, new_info: ChanInfo::new(), error: None };
+        let mut host = PcpHost { pc, shared: &self.shared, peer: self.peer, from_root: self.from_root, ch: None, has_chl: false, new_info: ChanInfo::new(), error: None };
         let r = pcp::proc_packet(&mut host, data, &mut state);
         *bcs = state.bcs;
         self.next_root_packet = state.next_root_packet;
@@ -203,6 +210,7 @@ struct PcpHost<'a> {
     pc: &'a Arc<Peercast>,
     shared: &'a Arc<PcpShared>,
     peer: Host,
+    from_root: bool,
     ch:Option<Arc<Channel>>,
     has_chl: bool,
     new_info: ChanInfo,
@@ -260,6 +268,10 @@ impl pcp::Host for PcpHost<'_> {
         self.pc.servmgr.is_root()
     }
 
+    fn root_trusted(&mut self) -> bool {
+        self.from_root
+    }
+
     fn time(&mut self) -> u32 {
         sys::get_time()
     }
@@ -279,7 +291,7 @@ impl pcp::Host for PcpHost<'_> {
     }
 
     fn set_update_interval(&mut self, si: i32) -> std::result::Result<(), Abort> {
-        self.pc.chanmgr.set_update_interval(si as u32);
+        self.pc.chanmgr.set_update_interval(si.clamp(MIN_UPDATE_INTERVAL, MAX_UPDATE_INTERVAL) as u32);
         Ok(())
     }
 

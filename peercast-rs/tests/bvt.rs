@@ -754,6 +754,112 @@ fn push_giv_limit() {
     assert_eq!(wait_count(1), 1);
 }
 
+/// root atom (ホスト情報の更新間隔、ルートのメッセージ) は、rootHost (YP) への COUT で受け取った
+/// ものだけ使う。更新間隔は 30〜3600 秒に収める
+#[test]
+fn root_atoms_from_yp_only() {
+    // 偽の YP。helo を読んで oleh を返し、root atom を送る
+    let yp = std::net::TcpListener::bind("127.0.0.1:17222").unwrap();
+    let src = Server::start_with(17221, |ini| ini.replacen("rootHost = ", "rootHost = 127.0.0.1:17222", 1));
+    let p = src.port;
+    let _push = push_flv(p, "roottest");
+    wait_channels(p, 1);
+
+    let root = |updint: i32, msg: &[u8]| {
+        let mut out = AtomBuf::default();
+        out.parent(id4(b"root"), 2);
+        out.int(id4(b"uint"), updint);
+        out.string(id4(b"mesg"), msg);
+        out
+    };
+    // 設定のページは root のときしか更新間隔を出さないので、読むためのテンプレートを置く
+    std::fs::write(ui_dir().join("html/en/bvt-root.html"), "{$chanMgr.hostUpdateInterval}\n{$servMgr.rootMsg}\n").unwrap();
+    let settings = || {
+        let r = get(p, "/html/en/bvt-root.html");
+        assert_eq!(r.code, 200);
+        let body = String::from_utf8_lossy(&r.body).into_owned();
+        let (huint, msg) = body.split_once('\n').unwrap();
+        (huint.to_string(), msg.to_string())
+    };
+    let wait_msg = |m: &str| {
+        let t0 = Instant::now();
+        loop {
+            let (huint, msg) = settings();
+            if msg.contains(m) || t0.elapsed() > Duration::from_secs(20) {
+                return (huint, msg);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    };
+
+    yp.set_nonblocking(true).unwrap();
+    let t0 = Instant::now();
+    let mut c = loop {
+        match yp.accept() {
+            Ok((c, _)) => break c,
+            Err(_) => {
+                assert!(t0.elapsed() < Duration::from_secs(20), "COUT がつなぎに来ない");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    };
+    c.set_nonblocking(false).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    match read_atom(&mut c) {
+        Atom::Data(id, _) if &id == b"pcp\n" => {}
+        _ => panic!("pcp\\n expected"),
+    }
+    assert!(matches!(read_atom(&mut c), Atom::Parent(id, _) if &id == b"helo"));
+    let mut out = AtomBuf::default();
+    out.parent(id4(b"oleh"), 2);
+    out.string(id4(b"agnt"), b"PeerCast/0.1218");
+    out.bytes(id4(b"sid"), b"fake-yp-session!");
+    c.write_all(&out.0).unwrap();
+    c.write_all(&root(5, b"from-yp").0).unwrap();
+    let mut drain = c.try_clone().unwrap();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while matches!(drain.read(&mut buf), Ok(n) if n > 0) {}
+    });
+    let (huint, msg) = wait_msg("from-yp");
+    assert!(msg.contains("from-yp"), "YP からのメッセージを使わない");
+    assert_eq!(huint, "30", "更新間隔の下限");
+
+    // CIN から送ったものは、そのままでも BCST の中でも使わない
+    let mut s = TcpStream::connect(("127.0.0.1", p)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut out = AtomBuf::default();
+    out.int(*b"pcp\n", 1);
+    out.parent(id4(b"helo"), 3);
+    out.string(id4(b"agnt"), b"PeerCast/0.1218 (YT50)");
+    out.int(id4(b"ver"), 1218);
+    out.bytes(id4(b"sid"), b"roottest-sessio!");
+    s.write_all(&out.0).unwrap();
+    assert!(matches!(read_atom(&mut s), Atom::Parent(id, _) if &id == b"oleh"));
+    let mut drain = s.try_clone().unwrap();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while matches!(drain.read(&mut buf), Ok(n) if n > 0) {}
+    });
+    s.write_all(&root(900, b"from-cin").0).unwrap();
+    let mut out = AtomBuf::default();
+    out.parent(id4(b"bcst"), 3);
+    out.char(id4(b"ttl"), 1);
+    out.char(id4(b"grp"), 2);
+    out.0.extend_from_slice(&root(901, b"from-bcst").0);
+    s.write_all(&out.0).unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    let (huint, msg) = settings();
+    assert!(!msg.contains("from-cin") && !msg.contains("from-bcst"), "CIN からのメッセージを使った");
+    assert_eq!(huint, "30", "CIN からの更新間隔を使った");
+
+    // YP からの大きすぎる値は上限に収める
+    c.write_all(&root(100000, b"from-yp2").0).unwrap();
+    let (huint, msg) = wait_msg("from-yp2");
+    assert!(msg.contains("from-yp2"));
+    assert_eq!(huint, "3600", "更新間隔の上限");
+}
+
 /// このマシンのループバックでないアドレス (経路を引くだけで、パケットは送らない)
 fn lan_addr() -> Option<std::net::IpAddr> {
     std::net::UdpSocket::bind("0.0.0.0:0")

@@ -224,6 +224,8 @@ pub enum Target {
 pub trait Host {
     fn session_id(&mut self) -> [u8; 16];
     fn is_root(&mut self) -> bool;
+    /// root atom を受け付ける接続か (rootHost (YP) への COUT のときだけ true)
+    fn root_trusted(&mut self) -> bool;
     fn time(&mut self) -> u32;
     fn log(&mut self, level: Level, msg: &[u8]);
     /// `routeList.add(fromID)`
@@ -314,7 +316,13 @@ impl Pcp<'_, '_> {
             if self.host.is_root() {
                 return Err(Error::Stream("Unauthorized root message"));
             }
-            self.read_root_atoms(atom, numc)?;
+            if self.host.root_trusted() {
+                self.read_root_atoms(atom, numc)?;
+            } else {
+                // YP 以外から届いた root atom は使わない (BCST の中なら、中継はこれまでどおり)
+                self.log(Level::Debug, &[b"PCP ignored root atom from non-root host"]);
+                atom.skip(numc, dlen)?;
+            }
         } else if id == PCP_HOST {
             self.read_host_atoms(atom, numc)?;
         } else if id == PCP_MESG_ASCII || id == PCP_MESG {
