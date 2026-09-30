@@ -26,6 +26,7 @@ use super::servmgr::{AUTH_COOKIE, AUTH_HTTPBASIC};
 use super::stream::{Stream, StreamExt, StringStream};
 use super::sys;
 use crate::servhs::{self, Query};
+use crate::strutil::ct_eq;
 
 /// ソケットを持たない処理で使うもの
 struct Ctx<'a> {
@@ -732,14 +733,14 @@ fn handshake_auth(ctx: &Ctx, http: &mut Http, args: &[u8], reject_cross_origin: 
     if tried {
         auth_lockout(ctx.pc, &ip)?;
     }
-    if !password.is_empty() && sent_pass == password {
+    if !password.is_empty() && ct_eq(&sent_pass, &password) {
         auth_record(ctx.pc, &ip, true);
         return Ok(true);
     }
     if auth_type == AUTH_HTTPBASIC {
         if sent_basic {
             let (_, pass) = super::http::parse_authorization_header(&basic);
-            if !password.is_empty() && pass == password {
+            if !password.is_empty() && ct_eq(&pass, &password) {
                 auth_record(ctx.pc, &ip, true);
                 return Ok(true);
             }

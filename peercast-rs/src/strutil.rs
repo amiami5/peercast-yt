@@ -151,6 +151,22 @@ pub fn capitalize(input: &[u8]) -> Vec<u8> {
     out
 }
 
+/// パスワードやトークンを比べる。長さが同じなら、どこで違っても同じだけ時間をかける
+/// (応答までの時間から 1 文字ずつ当てられないように)。長さが違うことは分かってしまう。
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    // 途中で 0 でなくなったところで打ち切る最適化をさせない
+    std::hint::black_box(diff) == 0
+}
+
+/// `subject` が `prefix` で始まるかを `ct_eq` で比べる。
+pub fn ct_starts_with(subject: &[u8], prefix: &[u8]) -> bool {
+    subject.len() >= prefix.len() && ct_eq(&subject[..prefix.len()], prefix)
+}
+
 pub fn has_prefix(subject: &[u8], prefix: &[u8]) -> bool {
     subject.starts_with(prefix)
 }
@@ -409,6 +425,20 @@ mod tests {
         assert_eq!(split_limit(b"a,b,c", b",", 10).unwrap(), v(&["a", "b", "c"]));
         assert!(split_limit(b"a", b",", 0).is_none());
         assert!(split_limit(b"a", b",", -1).is_none());
+    }
+
+    #[test]
+    fn ct_eq_cases() {
+        assert!(ct_eq(b"", b""));
+        assert!(ct_eq(b"secret", b"secret"));
+        assert!(!ct_eq(b"secret", b"secreT"));
+        assert!(!ct_eq(b"secret", b"secret2"));
+        assert!(!ct_eq(b"", b"x"));
+        assert!(ct_starts_with(b"secret\r\n", b"secret"));
+        assert!(ct_starts_with(b"secret", b"secret"));
+        assert!(!ct_starts_with(b"secre", b"secret"));
+        assert!(!ct_starts_with(b"Secret\r\n", b"secret"));
+        assert!(ct_starts_with(b"abc", b""));
     }
 
     #[test]
