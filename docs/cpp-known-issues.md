@@ -210,3 +210,13 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   管理画面で好きな JavaScript を動かせた (XSS)。UI は C++ 版と共通だったので、C++ 版 (`develop-old`) には
   残っている。Rust 版の UI は、本文を `<template>` の中で解釈し、文字と `<br>` と `http(s)://` のリンク
   だけを作り直して入れる (ほかのタグは捨てて中身の文字だけを残す)。
+* 移行後のセキュリティの見直し (2026-10-01、Rust 版もまだ同じ。`docs/security-review-todo.md` の #20〜#26):
+  `Servent::handshakeStream` は、`/stream/` の応答の `Content-Type` に `ChanInfo::getMIMEType()` (PCP の
+  `styp` で配信者やほかのノードが送ってきた値) をそのまま書き、`icy-name:` や `x-audiocast-*:` にも
+  チャンネル名などを改行を除かずに書く (MIME タイプを `text/html` にされると、配信の中身が管理画面と
+  同じオリジンの HTML として開かれる。改行でヘッダーを書き足せる)。UI の `relays.html` の
+  `/stream/{$this.id}{$this.ext}` のリンクも、`ext` が PCP の `sext` そのまま。ShoutCast 形式の放送は
+  1 行目がパスワードで始まるかだけを見て、応答で合否が分かる (C++ 版にはもともとパスワードの締め出しが
+  ない)。PCP の PUSH は、届いた宛先 (ループバックや LAN を含む) へ数の上限なく接続する (`initGIV`)。
+  認証なしの `/stream/`・`/channel/`・`/pls/` の `?ip=` や `?tip=` でヒットを足せる (`procConnectArgs`)。
+  PCP の root atom をどのノードから届いても受け付ける。
