@@ -438,86 +438,79 @@
 <script>
   /* 既に設定されている文字列値からメニュー項目を選択済みにしてテキス
      ト入力フィールドの編集可否状態とフォーカス状態を変更する。 */
-  const ypaddr = $('input#yp').prop('value')
+  const ypField = document.querySelector('input#yp')
+  const ypSelect = document.querySelector('select#yp_select')
+  const ypaddr = ypField.value
   if (ypaddr == "") {
-      $('select#yp_select').prop('value', 'None')
-      $('input#yp').attr('readonly', true)
+      ypSelect.value = 'None'
+      ypField.readOnly = true
   } else {
       let selected = false
-      $('select#yp_select > option').each(function(){
-          if ($(this).data('addr') == ypaddr) {
-              $('select#yp_select').prop('value', $(this).prop('value'))
-              $('input#yp').attr('readonly', true)
+      for (const option of ypSelect.querySelectorAll(':scope > option')) {
+          if (option.dataset.addr == ypaddr) {
+              ypSelect.value = option.value
+              ypField.readOnly = true
               selected = true
           }
-      })
+      }
       if (!selected) {
-          $('select#yp_select').prop('value', 'Custom')
-          $('input#yp').attr('readonly', false)
+          ypSelect.value = 'Custom'
+          ypField.readOnly = false
       }
   }
 
   /* 選択されているメニュー項目が変更された場合、テキスト入力フィール
      ドの値と状態を変更する。 */
-  $('select#yp_select').on('change', function(){
-      const textfield = $('input#yp')
+  ypSelect.addEventListener('change', function(){
       if (this.value == 'None') {
-          textfield.prop('value', "")
-          textfield.attr('readonly', true)
+          ypField.value = ""
+          ypField.readOnly = true
       }else if (this.value == 'Custom') {
-          textfield.prop('value', "")
-          textfield.attr('readonly', false)
-          textfield.focus()
+          ypField.value = ""
+          ypField.readOnly = false
+          ypField.focus()
       } else {
-          const option = $(`select#yp_select > option[value="${this.value}"]`)
-          textfield.prop('value', option.data('addr'))
-          textfield.attr('readonly', true)
+          ypField.value = this.selectedOptions[0].dataset.addr
+          ypField.readOnly = true
       }
   })
 
   // ----------------------------------------------------------------
 
-  $('.channel-feed-select').each(function(){
-      const select = $(this)
-      const index = $(this).data('index')
-      const textfield = $(`.channel-feed-url[data-index="${index}"]`)
-      const url = textfield.prop('value')
+  for (const select of document.querySelectorAll('.channel-feed-select')) {
+      const textfield = document.querySelector(`.channel-feed-url[data-index="${select.dataset.index}"]`)
+      const url = textfield.value
       if (url == "") {
-          select.prop('value', 'Custom')
-          textfield.attr('readonly', false)
+          select.value = 'Custom'
+          textfield.readOnly = false
       } else {
           let selected = false
-          select.children().each(function(){
-              const option = $(this)
-              if (option.data('url') == url) {
-                  select.prop('value', option.prop('value'))
-                  textfield.attr('readonly', true)
+          for (const option of select.children) {
+              if (option.dataset.url == url) {
+                  select.value = option.value
+                  textfield.readOnly = true
                   selected = true
               }
-          })
+          }
           if (!selected) {
-              select.prop('value', 'Custom')
-              textfield.attr('readonly', false)
+              select.value = 'Custom'
+              textfield.readOnly = false
           }
       }
-  })
 
-  $('.channel-feed-select').on('change', function(){
-      const select = $(this)
-      const index = $(this).data('index')
-      const textfield = $(`.channel-feed-url[data-index="${index}"]`)
-      if (select.prop('value') == 'None') {
-          textfield.prop('value', "")
-          textfield.attr('readonly', true)
-      }else if (select.prop('value') == 'Custom') {
-          textfield.prop('value', "")
-          textfield.attr('readonly', false)
-          textfield.focus()
-      } else {
-          const option = $(`.channel-feed-select > option[value="${this.value}"]`)
-          textfield.prop('value', option.data('url'))
-          textfield.attr('readonly', true)
-      }
-  })
+      select.addEventListener('change', function(){
+          if (select.value == 'None') {
+              textfield.value = ""
+              textfield.readOnly = true
+          }else if (select.value == 'Custom') {
+              textfield.value = ""
+              textfield.readOnly = false
+              textfield.focus()
+          } else {
+              textfield.value = select.selectedOptions[0].dataset.url
+              textfield.readOnly = true
+          }
+      })
+  }
 
 </script>
