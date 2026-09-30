@@ -96,7 +96,7 @@
           alert(`No info found (serialNumber = ${serialNumber})`)
           return
       }
-      $('#channel_modal').show()
+      document.getElementById('channel_modal').style.display = 'block'
 
       function link(url)
       {
@@ -113,7 +113,7 @@
           }else
               return ""+value
       }
-      $('#info').html(who(
+      document.getElementById('info').innerHTML = who(
           ['table',
            ['tr',
             ['th','{#Name}'],
@@ -143,7 +143,7 @@
            ['tr',['th','{#Artist}'],['td', text(info.trackArtist)]],
            ['tr',['th','{#Album}'],['td', text(info.trackAlbum)]],
            ['tr',['th','{#Track URL}'],['td', link(info.trackContact)]],
-          ]))
+          ])
   }
 </script>
 
@@ -155,7 +155,7 @@
       </div>
     </div>
     <div class="modal-footer" style="margin-top:15px; text-align:right">
-      <button onclick="$('#channel_modal').hide()">{#Close}</button>
+      <button onclick="document.getElementById('channel_modal').style.display = 'none'">{#Close}</button>
     </div>
   </div>
 </div>
@@ -188,7 +188,7 @@
     </div>
     <div class="modal-footer" style="margin-top:15px; text-align:right">
       <!-- <input type="submit" value="{#Save}"> -->
-      <button onclick="$('#prefs_modal').hide()">{#Close}</button>
+      <button onclick="document.getElementById('prefs_modal').style.display = 'none'">{#Close}</button>
     </div>
   </div>
 </div>
@@ -197,7 +197,7 @@
 <div style="max-width: 640px">
   <div align=right>
     <button class="customize-button" title="{#Filters}" onclick="window.location = 'chanfilters.html'">&#x1F308;<!-- rainbow --></button>
-    <button class="customize-button" onclick="$('#prefs_modal').show()" title="{#Channel List Preferences}">&#x2699;&#xFE0F;<!-- gear --></button>
+    <button class="customize-button" onclick="document.getElementById('prefs_modal').style.display = 'block'" title="{#Channel List Preferences}">&#x2699;&#xFE0F;<!-- gear --></button>
   </div>
   <a href="/admin?cmd=fetch_feeds" class="update-link" title="{#Auto-updates every 5 minutes. Manual updates have a cooldown of 30 seconds.}">{#Update}</a>
   <table class="channel-list">
@@ -244,11 +244,11 @@
       localStorage["useServersidePlayer"] = useServersidePlayer
   }
 
-  $(function(){
+  document.addEventListener('DOMContentLoaded', function(){
       loadPreferences()
 
       // ユーザー設定モーダルのチェックボックスの状態を設定する。
-      for (const checkbox of $('#prefs_modal .modal-body input[type=checkbox]'))
+      for (const checkbox of document.querySelectorAll('#prefs_modal .modal-body input[type=checkbox]'))
       {
           if (columnVisibility[checkbox.dataset.key])
               checkbox.checked = true
@@ -256,7 +256,7 @@
               checkbox.checked = false
       }
 
-      $('#use_serverside_player_checkbox')[0].checked = useServersidePlayer
+      document.getElementById('use_serverside_player_checkbox').checked = useServersidePlayer
   })
 
 function onColumnClicked(key, defaultOrder)
@@ -431,7 +431,8 @@ function updateTable()
           ... channels.map(channel => renderChannelRow(channel))
       )
 
-      $('.channel-list').html(html)
+      for (const list of document.querySelectorAll('.channel-list'))
+          list.innerHTML = html
 }
 
   // グループタブの更新。
@@ -449,7 +450,7 @@ function updateTable()
           ),
       )
 
-      $('#group_tab').html(html)
+      document.getElementById('group_tab').innerHTML = html
   }
 
   Groups = [
@@ -547,7 +548,7 @@ function updateTable()
       }
   }
 
-$(function(){
+document.addEventListener('DOMContentLoaded', function(){
       main()
 })
 </script>
