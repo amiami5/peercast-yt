@@ -25,11 +25,12 @@ impl PlayList {
         PlayList { ty, max_urls: max, urls: Vec::new(), titles: Vec::new() }
     }
 
-    /// `addURL` (`::String::set` と同じく 255 バイトまで)
+    /// `addURL` (`::String::set` と同じく 255 バイトまで)。
+    /// 1 行ずつ書くので、チャンネル名などに入った改行などの制御文字は除く
     pub fn add_url(&mut self, url: &[u8], title: &[u8]) {
         if self.urls.len() < self.max_urls {
-            self.urls.push(pcstr::cut(url));
-            self.titles.push(pcstr::cut(title));
+            self.urls.push(pcstr::strip_controls(&pcstr::cut(url)));
+            self.titles.push(pcstr::strip_controls(&pcstr::cut(title)));
         }
     }
 
@@ -134,5 +135,12 @@ mod tests {
         let mut out = StringStream::new();
         p.write(&mut out).unwrap();
         assert_eq!(out.str(), &b"[playlist]\r\n\r\nNumberOfEntries=1\r\nFile1=u\r\nTitle1=t\r\nLength1=-1\r\nVersion=2\r\n"[..]);
+
+        // チャンネル名の改行で行を書き足されない
+        let mut p = PlayList::new(T_SCPLS, 5);
+        p.add_url(b"u", b"t\r\nFile2=http://evil/");
+        let mut out = StringStream::new();
+        p.write(&mut out).unwrap();
+        assert_eq!(out.str(), &b"[playlist]\r\n\r\nNumberOfEntries=1\r\nFile1=u\r\nTitle1=tFile2=http://evil/\r\nLength1=-1\r\nVersion=2\r\n"[..]);
     }
 }

@@ -475,9 +475,10 @@ impl pcp::Host for PcpHost<'_> {
 
     fn chan_info_string(&mut self, field: pcp::InfoField, bytes: &[u8]) -> std::result::Result<(), Abort> {
         let s = self.info_field(field);
-        // readString で String に書いたもの (NUL まで、255 バイトまで)。種類は変えない
+        // readString で String に書いたもの (NUL まで、255 バイトまで)。種類は変えない。
+        // ほかのノードから届く値なので、改行などの制御文字は落とす
         let b = &bytes[..bytes.iter().position(|&c| c == 0).unwrap_or(bytes.len())];
-        s.data = b[..b.len().min(255)].to_vec();
+        s.data = super::pcstr::strip_controls(&b[..b.len().min(255)]);
         if matches!(field, pcp::InfoField::Url | pcp::InfoField::TrackUrl) && !crate::url::is_http_url(&s.data) {
             s.clear();
         }
