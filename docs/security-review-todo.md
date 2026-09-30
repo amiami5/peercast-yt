@@ -13,3 +13,8 @@
   - 済み: `cmd=login` の Set-Cookie (期限なし・あり両方) に `HttpOnly` を付けた。UI の JS は Cookie を読んでいないので影響はない。
 - [x] #17 `pass=` の効き方がパスごとに違います。`/html/…?pass=` は効かず、`&pass=` なら効き、`/admin?pass=` は効きます。
   - 済み: `/html/`・`/cgi-bin/`・`/cmd?` は、パス全体ではなく最初の `?` より後ろ (`servhs::query_part`) を認証に渡す。`/admin?` や `POST /api/1?` と同じく `?pass=` が効き、パスに続けた `&pass=` は効かない。
+
+## 2026-09-30 に見つけたもの (UI の JavaScript)
+
+- [x] #18 チャンネル一覧の「フィルタ作成」ボタンが、チャンネル名を `onclick` の JavaScript の文字列に埋めていました (名前に `"` を入れると XSS)。
+  - 済み: 名前は `data-name` 属性に置き、`this.dataset.name` を `encodeURIComponent` して渡す。グループのタブも `Groups` の番号で引くようにした。C++ 版に残ることは `docs/cpp-known-issues.md` に書いた。

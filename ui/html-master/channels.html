@@ -119,7 +119,8 @@
             ['th','{#Name}'],
             ['td',
              text(unescapeHtml(info.name)),
-             ['button', { onclick: `window.location = "chanfilters.html?fav=${unescapeHtml(info.name)}"` },
+             // チャンネル名は配信者が決めるので、JS の文字列には埋めずに data 属性から読む。
+             ['button', { 'data-name': unescapeHtml(info.name), onclick: 'window.location = "chanfilters.html?fav=" + encodeURIComponent(this.dataset.name)' },
               "{#Create Filter}"],
             ],
            ],
@@ -437,11 +438,12 @@ function updateTable()
   function updateGroupTab()
   {
       const html = who(
-          ... Groups.map(g =>
+          ... Groups.map((g, index) =>
               ['a',
                {
                    class: selectedGroup == g.id ? 'active-tab' : null,
-                   onclick: `setSelectedGroup('${g.id}'); updateView()`,
+                   // g.id はフィードの URL のこともあるので、JS の文字列には埋めない。
+                   onclick: `setSelectedGroup(Groups[${index}].id); updateView()`,
                },
                ['span', g.channels.length ? `${g.title} (${g.channels.length})` : g.title]]
           ),

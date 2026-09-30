@@ -194,3 +194,12 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   上限を設けた。ホスト名のパターンは、フィルターを設定したときに前もって引き始める。覚えておく秒数と
   待つ時間は ini の `[Server]` の `dnsCacheSeconds` (0 で毎回引き直す) と `dnsWaitMillis` (0 で待たない)
   で変えられる (設定画面にはない)。
+* 移行後のセキュリティの見直し: チャンネル一覧 (`ui/html-master/channels.html`) の情報の窓にある
+  「フィルタ作成」ボタンは、チャンネル名を `onclick` の JavaScript の文字列にそのまま埋めていた
+  (`window.location = "chanfilters.html?fav=<名前>"`)。HTML のエスケープはしているが、ブラウザーは属性の
+  `&quot;` を `"` に戻してから JavaScript として実行するので、名前に `"` を入れたチャンネルを YP に
+  載せれば、ボタンを押した人の管理画面で好きな JavaScript を動かせた (XSS。管理画面の権限で `/admin` や
+  `/api/1` を呼べる)。グループのタブの `setSelectedGroup('<フィードの URL>')` も同じ形だった (こちらは
+  自分で設定した YP の URL なので、他人からは使えない)。UI は C++ 版と共通だったので、C++ 版
+  (`develop-old`) には残っている。Rust 版は、名前を `data-name` 属性に置いて `this.dataset.name` から読み、
+  `encodeURIComponent` して渡す (`&` や `#` を含む名前も正しく渡る)。タブは `Groups` の番号で引く。
