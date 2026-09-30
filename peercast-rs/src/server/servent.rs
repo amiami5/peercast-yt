@@ -1052,6 +1052,7 @@ fn outgoing_proc(c: &mut Conn) {
                 crate::log_debug!("COUT to {}: OK", ip_str);
                 pcp.init(rid);
                 pcp.peer = rhost;
+                pcp.from_root = best.yp;
                 let mut bcs = crate::pcp::BroadcastState::default();
                 error = 0;
                 while error == 0 && sv.thread.active() && !c.sock()?.eof()? && sm.settings().auto_serve {
