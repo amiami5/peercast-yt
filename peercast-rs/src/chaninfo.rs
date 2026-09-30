@@ -148,6 +148,33 @@ pub fn effective_mime<'a>(content_type: &[u8], mime: &'a [u8]) -> &'a [u8] {
     }
 }
 
+/// `/stream/` の応答の `Content-Type`。`styp` はほかのノードや配信者から届く値なので、
+/// `audio/*`・`video/*`・Ogg のような、ブラウザーが文書として開かないメディアの MIME タイプの
+/// ときだけ使い、それ以外 (`text/html` やパラメーター付きのものなど) は種類から決める。
+pub fn stream_mime<'a>(content_type: &[u8], mime: &'a [u8]) -> &'a [u8] {
+    let m = c_str(mime);
+    if is_media_mime(m) {
+        m
+    } else {
+        mime_type(content_type)
+    }
+}
+
+fn is_media_mime(m: &[u8]) -> bool {
+    if m.is_empty() || m.len() > 64 {
+        return false;
+    }
+    let lower = m.to_ascii_lowercase();
+    let sub = if let Some(s) = lower.strip_prefix(b"audio/") {
+        s
+    } else if let Some(s) = lower.strip_prefix(b"video/") {
+        s
+    } else {
+        return matches!(&lower[..], b"application/x-ogg" | b"application/ogg" | b"application/octet-stream");
+    };
+    !sub.is_empty() && sub.iter().all(|&b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-' | b'_'))
+}
+
 /// `getTypeExt()`: 設定された拡張子か、なければ種類から
 pub fn effective_ext<'a>(content_type: &[u8], ext: &'a [u8]) -> &'a [u8] {
     let e = c_str(ext);
@@ -372,6 +399,22 @@ mod tests {
         assert_eq!(playlist_ext(b"OGM"), b".ram");
         assert_eq!(type_string_long(b"FLV", b"", b""), b"FLV (video/x-flv; .flv) [no styp] [no sext]");
         assert_eq!(type_string_long(b"FLV", b"a/b", b".x"), b"FLV (a/b; .x)");
+    }
+
+    #[test]
+    fn stream_mime_only_media() {
+        assert_eq!(stream_mime(b"FLV", b""), b"video/x-flv");
+        assert_eq!(stream_mime(b"FLV", b"video/x-flv\0junk"), b"video/x-flv");
+        assert_eq!(stream_mime(b"MKV", b"video/webm"), b"video/webm");
+        assert_eq!(stream_mime(b"MP3", b"Audio/MPEG"), b"Audio/MPEG");
+        assert_eq!(stream_mime(b"OGG", b"application/x-ogg"), b"application/x-ogg");
+        assert_eq!(stream_mime(b"FLV", b"text/html"), b"video/x-flv");
+        assert_eq!(stream_mime(b"FLV", b"image/svg+xml"), b"video/x-flv");
+        assert_eq!(stream_mime(b"FLV", b"application/xhtml+xml"), b"video/x-flv");
+        assert_eq!(stream_mime(b"FLV", b"video/"), b"video/x-flv");
+        assert_eq!(stream_mime(b"FLV", b"video/mp4; x=text/html"), b"video/x-flv");
+        assert_eq!(stream_mime(b"FLV", b"video/mp4\r\nX-A: b"), b"video/x-flv");
+        assert_eq!(stream_mime(b"RAW", b"text/html"), b"application/octet-stream");
     }
 
     #[test]

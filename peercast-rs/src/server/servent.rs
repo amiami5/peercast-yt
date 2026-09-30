@@ -1400,6 +1400,8 @@ fn return_stream_headers(c: &mut Conn, info: &ChanInfo) -> Result<()> {
         s.write_line(format!("icy-metaint:{}", icy_meta))?;
         s.write_line(format!("{} {}", PCX_HS_CHANNELID, ci::id_str(&info.id)))?;
         s.write_line(format!("Content-Type: {}", MIME_MP3))?;
+        s.write_line("X-Content-Type-Options: nosniff")?;
+        s.write_line("Content-Security-Policy: sandbox")?;
     } else {
         s.write_line(HTTP_SC_OK)?;
         s.write_line(format!("Server: {}", PCX_AGENT))?;
@@ -1416,7 +1418,10 @@ fn return_stream_headers(c: &mut Conn, info: &ChanInfo) -> Result<()> {
                 s.write_line("Content-Length: 10000000")?;
             }
             s.write_line("Access-Control-Allow-Origin: *")?;
-            line(s, &[b"Content-Type: ", &info.mime()])?;
+            line(s, &[b"Content-Type: ", &info.stream_mime()])?;
+            // 配信の中身を管理画面と同じオリジンの文書として開かせない
+            s.write_line("X-Content-Type-Options: nosniff")?;
+            s.write_line("Content-Security-Policy: sandbox")?;
         } else if out_proto == ci::SP_PCP {
             s.write_line(format!("{} {}", PCX_HS_POS, stream_pos))?;
             s.write_line(format!("Content-Type: {}", MIME_XPCP))?;
