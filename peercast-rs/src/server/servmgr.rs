@@ -824,19 +824,27 @@ impl ServMgr {
         Err(sock)
     }
 
-    /// `procConnectArgs`: "[チャンネルID]?ip=...&tip=..." から、チャンネルの情報とヒットを作る
-    pub fn proc_connect_args(&self, pc: &Peercast, s: &[u8]) -> ChanInfo {
+    /// `procConnectArgs`: "[チャンネルID]?ip=...&tip=..." から、チャンネルの情報とヒットを作る。
+    /// `ip=` / `tip=` は `hints` (private な接続か auth トークンのある要求) のときだけ受け付け、
+    /// 名前は引かずに IP アドレスだけを使う
+    pub fn proc_connect_args(&self, pc: &Peercast, s: &[u8], hints: bool) -> ChanInfo {
         let s = &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())];
         let (idpart, args) = match s.iter().position(|&c| c == b'?') {
             Some(i) => (&s[..i], &s[i + 1..]),
             None => (s, &b""[..]),
         };
         let info = ChanInfo::init_name_id(idpart);
+        if !hints {
+            return info;
+        }
         let q = crate::servhs::Query::new(args);
         let ip = q.get(b"ip");
         let tip = q.get(b"tip");
         if !ip.is_empty() {
-            let h = Host::from_str_name(&ip, DEFAULT_PORT);
+            let Some(h) = Host::from_str_addr(&ip, DEFAULT_PORT) else {
+                crate::log_debug!("'ip' parameter is not an IP address. Ignored.");
+                return info;
+            };
             let mut hit = ChanHit::new();
             hit.host = h;
             hit.rhost[0] = h;
@@ -845,7 +853,10 @@ impl ServMgr {
             hit.recv = true;
             pc.chanmgr.add_hit(pc, &hit);
         } else if !tip.is_empty() {
-            let h = Host::from_string(&tip, DEFAULT_PORT);
+            let Some(h) = Host::from_str_addr(&tip, DEFAULT_PORT) else {
+                crate::log_debug!("'tip' parameter is not an IP address. Ignored.");
+                return info;
+            };
             let (sh4, sh6) = {
                 let st = self.settings();
                 (st.server_host.ip, st.server_host_ipv6.ip)
@@ -862,9 +873,9 @@ impl ServMgr {
     }
 
     /// `getChannel`: チャンネルを探し、`relay` なら中継を始めて待つ。見つかれば情報を返す
-    /// `getChannel`: 見付からなければ false と、引数から読んだ情報
-    pub fn get_channel(&self, pc: &Arc<Peercast>, s: &[u8], relay: bool) -> (ChanInfo, bool) {
-        let info = self.proc_connect_args(pc, s);
+    /// `getChannel`: 見付からなければ false と、引数から読んだ情報。`hints` は `proc_connect_args`
+    pub fn get_channel(&self, pc: &Arc<Peercast>, s: &[u8], relay: bool, hints: bool) -> (ChanInfo, bool) {
+        let info = self.proc_connect_args(pc, s, hints);
         match self.find_playing_channel(pc, &info, relay) {
             Some(i) => (i, true),
             None => (info, false),

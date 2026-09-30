@@ -124,13 +124,10 @@ pub fn public_controller(pc: &Arc<Peercast>, req: &Request) -> Result<Response> 
         crate::public::Route::Play => {
             let id = crate::servhs::Query::new(&req.query_string).get(b"id");
             let id = super::pcstr::cut(&id);
-            let (_, found) = pc.servmgr.get_channel(pc, &id, true);
-            if !found {
-                return Ok(Response::not_found(b"File not found"));
-            }
+            // 認証なしで見られるので、中継は始めず、自分が配信しているチャンネルだけにする (一覧と同じ)
             let ch = match pc.chanmgr.find_channel_by_id(&crate::gnuid::from_str(&id)) {
-                Some(c) => c,
-                None => return Ok(Response::not_found(b"File not found")),
+                Some(c) if c.is_broadcasting() => c,
+                _ => return Ok(Response::not_found(b"File not found")),
             };
             let (path, lang) = mapper.local_file_path(&req.path, &langs);
             let mut locals = BTreeMap::new();

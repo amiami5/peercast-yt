@@ -1546,9 +1546,9 @@ fn return_hits(c: &mut Conn, info: &ChanInfo, rhost: &Host, remote_id: &[u8; 16]
 }
 
 /// `triggerChannel`: 指定されたチャンネルを流す
-pub fn trigger_channel(c: &mut Conn, s: &[u8], proto: i32, relay: bool) -> Result<()> {
+pub fn trigger_channel(c: &mut Conn, s: &[u8], proto: i32, relay: bool, hints: bool) -> Result<()> {
     let pc = c.pc;
-    let (info, _) = pc.servmgr.get_channel(pc, s, relay);
+    let (info, _) = pc.servmgr.get_channel(pc, s, relay, hints);
     {
         let mut st = c.sv.st();
         st.ty = if proto == ci::SP_PCP { T_RELAY } else { T_DIRECT };

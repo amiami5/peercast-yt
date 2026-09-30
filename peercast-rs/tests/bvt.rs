@@ -626,14 +626,9 @@ fn icy_push(port: u16, first_line: &'static [u8], headers: &'static [&'static [u
 /// localhost からは締め出さないので、このマシンのループバックでないアドレスからつなぐ
 #[test]
 fn shoutcast_password_lockout() {
-    // 経路を引くだけで、パケットは送らない
-    let lan = std::net::UdpSocket::bind("0.0.0.0:0")
-        .and_then(|u| u.connect("192.0.2.1:9").map(|_| u))
-        .and_then(|u| u.local_addr())
-        .map(|a| a.ip());
-    let lan = match lan {
-        Ok(ip) if !ip.is_loopback() && !ip.is_unspecified() => ip,
-        _ => {
+    let lan = match lan_addr() {
+        Some(ip) => ip,
+        None => {
             eprintln!("ループバックでないアドレスがないので飛ばす");
             return;
         }
@@ -757,6 +752,74 @@ fn push_giv_limit() {
     std::thread::sleep(Duration::from_millis(500));
     push(&mut s, [127, 0, 0, 7]);
     assert_eq!(wait_count(1), 1);
+}
+
+/// このマシンのループバックでないアドレス (経路を引くだけで、パケットは送らない)
+fn lan_addr() -> Option<std::net::IpAddr> {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|u| u.connect("192.0.2.1:9").map(|_| u))
+        .and_then(|u| u.local_addr())
+        .map(|a| a.ip())
+        .ok()
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+}
+
+/// 認証なしの要求の `?tip=` / `?ip=` ではヒットを足さず、名前も引かない。公開ディレクトリの
+/// 再生ページからは中継を始めさせられない (security-review #25)
+#[test]
+fn connect_args_untrusted() {
+    let s = Server::start_with(17220, |ini| ini.replacen("publicDirectory = No", "publicDirectory = Yes", 1));
+    let p = s.port;
+    // ヒットのあるチャンネルは、公開ディレクトリの index.txt に出る
+    let found = || String::from_utf8_lossy(&get(p, "/public/index.txt").body).to_uppercase();
+    let at = |host: std::net::IpAddr, path: &str| {
+        let mut c = TcpStream::connect((host, p)).unwrap();
+        // ヒットがあると /channel/ は応答までしばらく待つが、応答は見ないので待たない
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        c.write_all(format!("GET {} HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", path, p).as_bytes()).unwrap();
+        let mut buf = Vec::new();
+        let _ = c.read_to_end(&mut buf);
+        String::from_utf8_lossy(&buf).lines().next().unwrap_or("").to_string()
+    };
+    let lo: std::net::IpAddr = [127, 0, 0, 1].into();
+
+    // 公開ディレクトリの再生ページ: 配信していないチャンネルは 404 で、中継も始めない
+    let id1 = "11111111111111111111111111111111";
+    assert_eq!(get(p, &format!("/public/play.html?id={}", id1)).code, 404);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(matches!(jrpc_call(p, "getChannels", "[]"), peercast_rs::json::Value::Array(a) if a.is_empty()));
+
+    // 名前は引かない (localhost からでも。/channel/ は中継を始めない)
+    let id2 = "22222222222222222222222222222222";
+    at(lo, &format!("/channel/{}?tip=localhost:7144", id2));
+    at(lo, &format!("/channel/{}?ip=localhost:7144", id2));
+    assert!(!found().contains(id2), "{}", found());
+
+    // ループバックでないアドレスからの要求では足さない
+    let id3 = "33333333333333333333333333333333";
+    if let Some(lan) = lan_addr() {
+        for path in [format!("/stream/{}.flv?tip=127.0.0.1:7144", id3), format!("/channel/{}?tip=127.0.0.1:7144", id3), format!("/pls/{}?tip=127.0.0.1:7144", id3)] {
+            let r = at(lan, &path);
+            assert!(r.contains("404") || r.contains("503"), "{}: {}", path, r);
+        }
+        assert!(!found().contains(id3), "{}", found());
+    } else {
+        eprintln!("ループバックでないアドレスがないので、その確かめは飛ばす");
+    }
+
+    // localhost からの IP アドレスなら、これまでどおり足す
+    at(lo, &format!("/channel/{}?tip=127.0.0.1:7144", id3));
+    assert!(found().contains(id3), "{}", found());
+
+    // ヒットのあるチャンネルでも、公開ディレクトリの再生ページからは中継を始めない (ヒットの先につなぎに来ない)
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let id4 = "44444444444444444444444444444444";
+    at(lo, &format!("/channel/{}?tip={}", id4, listener.local_addr().unwrap()));
+    assert!(found().contains(id4), "{}", found());
+    assert_eq!(get(p, &format!("/public/play.html?id={}", id4)).code, 404);
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(listener.accept().is_err(), "中継を始めた");
 }
 
 /// 配信元の種類ごと: HTTP の取得 (fetch)、ShoutCast と Icecast の放送、ICY のメタデータ付きの視聴
