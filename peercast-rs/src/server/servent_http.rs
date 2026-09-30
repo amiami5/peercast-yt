@@ -825,6 +825,23 @@ fn handshake_local_file(ctx: &Ctx, http: &mut Http, fn_: &[u8]) -> Result<()> {
                     locals.insert(b"channel".to_vec(), chan_state(&lf.id).unwrap_or(super::state::Value::Null));
                 }
             }
+            servhs::LocalPage::Broadcast => {
+                let server = {
+                    let s = pc.servmgr.settings();
+                    format!("{}:{}", s.server_host.ip_str(), s.server_host.port)
+                };
+                let p = servhs::push_settings(server.as_bytes(), &Query::new(&req.query_string));
+                use super::state::s;
+                locals.insert(
+                    b"broadcast".to_vec(),
+                    super::state::obj(vec![
+                        ("server", s(&server)),
+                        ("httpPushUrl", s(p.http_push_url)),
+                        ("wmPublishingPoint", s(p.wm_publishing_point)),
+                        ("wmUrl", s(p.wm_url)),
+                    ]),
+                );
+            }
             servhs::LocalPage::Plain => {}
         }
         if let Some(p) = file_name.iter().position(|&c| c == b'?') {

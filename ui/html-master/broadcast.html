@@ -3,9 +3,6 @@
   {#_Broadcast_navbar} - {#PeerCast on} {^SERVER_NAME}
 {^end}
 {^define HEAD}
-  <script src="js/httppush.js"></script>
-  <script src="js/wmhttp.js"></script>
-  <script>SERVER = "{$servMgr.serverIP}:{$servMgr.serverPort}";</script>
   <style>
     .table-panel { min-width: 320px }
     input[type=text], input:not([type]), input[type=url] { width: 100% }
@@ -79,97 +76,104 @@
 
 <br>
 <a name="httppush"></a>
+<form action="broadcast.html#httppush" method="get">
 <table class="table-panel" align="center" border="0">
   <tbody>
     <tr align="middle">
       <td colspan="2"><b>{#HTTP Push Stream}</b></td></tr>
     <tr align="left">
       <td>{#Name}</td>
-      <td><input id="name"></td></tr>
+      <td><input name="push_name" value="{$page.push_name}" required></td></tr>
     <tr align="left">
       <td>{#Genre}</td>
-      <td><input id="genre"></td></tr>
+      <td><input name="push_genre" value="{$page.push_genre}"></td></tr>
     <tr align="left">
       <td>{#Description}</td>
-      <td><input id="desc"></td></tr>
+      <td><input name="push_desc" value="{$page.push_desc}"></td></tr>
     <tr align="left">
       <td>{#Contact}</td>
-      <td><input id="url" type="url"></td></tr>
+      <td><input name="push_url" type="url" value="{$page.push_url}"></td></tr>
     <tr align="left">
       <td>{#Type}</td>
       <td>
-        <select id="type">
-          <option value="UNKNOWN" selected>{#Unknown}</option>
-          <option value="FLV">FLV</option>
-          <option value="MKV">MKV</option>
-          <option value="MP3">MP3</option>
-          <option value="OGG">OGG</option>
-          <option value="RAW">RAW</option>
-          <option value="WEBM">WEBM</option>
-          <option value="MP4">MP4</option>
+        <select name="push_type">
+          <option value="UNKNOWN">{#Unknown}</option>
+          <option value="FLV" {@if page.push_type == "FLV"}selected{@end}>FLV</option>
+          <option value="MKV" {@if page.push_type == "MKV"}selected{@end}>MKV</option>
+          <option value="MP3" {@if page.push_type == "MP3"}selected{@end}>MP3</option>
+          <option value="OGG" {@if page.push_type == "OGG"}selected{@end}>OGG</option>
+          <option value="RAW" {@if page.push_type == "RAW"}selected{@end}>RAW</option>
+          <option value="WEBM" {@if page.push_type == "WEBM"}selected{@end}>WEBM</option>
+          <option value="MP4" {@if page.push_type == "MP4"}selected{@end}>MP4</option>
         </select>
       </td>
     </tr>
     <tr align="left">
       <td>{#IP Version}</td>
       <td>
-        <select id="ipv">
+        <select name="push_ipv">
           <option value="4">IPv4</option>
-          <option value="6">IPv6</option>
+          <option value="6" {@if page.push_ipv == "6"}selected{@end}>IPv6</option>
         </select>
       </td>
+    </tr>
+    <tr align="left">
+      <td colspan="2" align="middle"><input type="submit" value="{#Create URL}"></td>
     </tr>
     <tr align="middle">
       <td colspan="2"><b>{#Output URL for ffmpeg}</b></td></tr>
     <tr align="left">
       <td colspan="2" align="middle">
-        <textarea id="output" style="width: 100%; min-height: 4em; font-family: monospace">
-        </textarea>
+        <textarea readonly onfocus="this.select()" style="width: 100%; min-height: 4em; font-family: monospace">{@if broadcast.httpPushUrl}"{$broadcast.httpPushUrl}"{@end}</textarea>
       </td>
     </tr>
   </tbody>
 </table>
+</form>
 
 <br>
 <a name="wmhttp"></a>
 <div style="min-height: 95vh">
+<form action="broadcast.html#wmhttp" method="get">
   <table class="table-panel" align="center" border="0">
     <tbody>
       <tr align="middle">
         <td colspan="2"><b>{#Windows Media HTTP Push Stream}</b></td></tr>
       <tr align="left">
         <td>{#Name}</td>
-        <td><input id="wm_name"></td></tr>
+        <td><input name="wm_name" value="{$page.wm_name}" required></td></tr>
       <tr align="left">
         <td>{#Genre}</td>
-        <td><input id="wm_genre"></td></tr>
+        <td><input name="wm_genre" value="{$page.wm_genre}"></td></tr>
       <tr align="left">
         <td>{#Description}</td>
-        <td><input id="wm_desc"></td></tr>
+        <td><input name="wm_desc" value="{$page.wm_desc}"></td></tr>
       <tr align="left">
         <td>{#Contact}</td>
-        <td><input id="wm_url" type="url"></td>
+        <td><input name="wm_url" type="url" value="{$page.wm_url}"></td>
+      </tr>
+      <tr align="left">
+        <td colspan="2" align="middle"><input type="submit" value="{#Create URL}"></td>
       </tr>
       <tr align="middle">
         <td colspan="2"><b>{#Encoder Settings}</b></td></tr>
       <tr align="left">
         <td>{#Server Name}</td>
-        <td><input id="wm_output_server_name" type="text"></td>
+        <td><input type="text" readonly onfocus="this.select()" value="{@if broadcast.wmUrl}{$broadcast.server}{@end}"></td>
       </tr>
       <tr align="left">
         <td>{#Publishing Point}</td>
         <td>
-          <textarea id="wm_output_publishing_point" style="width: 100%; min-height: 4em; font-family: monospace">
-          </textarea>
+          <textarea readonly onfocus="this.select()" style="width: 100%; min-height: 4em; font-family: monospace">{$broadcast.wmPublishingPoint}</textarea>
         </td>
       </tr>
       <tr align="left">
         <td>{#URL}</td>
         <td>
-          <textarea id="wm_output_url" style="width: 100%; min-height: 4em; font-family: monospace">
-          </textarea>
+          <textarea readonly onfocus="this.select()" style="width: 100%; min-height: 4em; font-family: monospace">{$broadcast.wmUrl}</textarea>
         </td>
       </tr>
     </tbody>
   </table>
+</form>
 </div>

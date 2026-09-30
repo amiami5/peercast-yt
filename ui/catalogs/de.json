@@ -103,6 +103,7 @@
     "Contact"                 : "Kontakt",
     "Type"                    : "Format",
     "Create Relay"            : "Relay erstellen",
+    "Create URL"              : "URL erstellen",
 
     // connections.html
     "_Type_connection"        : "Typ",
