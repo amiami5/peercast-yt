@@ -243,8 +243,7 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                     return Err(http_error(HTTP_SC_FORBIDDEN, 403));
                 }
                 let password = ctx.pc.servmgr.settings().password.clone();
-                // DNS リバインディングで localhost に来たブラウザーは、Host がループバックの名前にならない
-                let localhost = is_localhost(&ctx.host()) && crate::http::is_loopback_host_header(&hd(b"Host"));
+                let localhost = trust_localhost(ctx, &hd(b"Host"), &hd(b"User-Agent"));
                 let ip = ctx.host().ip.str();
                 if !localhost {
                     auth_lockout(ctx.pc, &ip)?;
@@ -704,6 +703,23 @@ fn auth_record(pc: &Peercast, ip: &str, ok: bool) {
     }
 }
 
+/// localhost からの要求として認証を省いてよいか。Host が localhost や IP アドレスでなければ DNS リバインディング
+/// かもしれず、User-Agent がこのノードのものなら、リダイレクトなどでこのノード自身に送らされた要求かもしれない
+fn trust_localhost(ctx: &Ctx, host: &[u8], user_agent: &[u8]) -> bool {
+    if !is_localhost(&ctx.host()) {
+        return false;
+    }
+    if !crate::http::is_loopback_host_header(host) {
+        crate::log_warn!("Host header is not a loopback name; not trusting localhost: {}", b(host));
+        return false;
+    }
+    if user_agent == PCX_AGENT.as_bytes() {
+        crate::log_warn!("Request from this node itself; not trusting localhost");
+        return false;
+    }
+    true
+}
+
 /// `handshakeAuth`: 認証できれば true。できなければ応答を書いて false
 fn handshake_auth(ctx: &Ctx, http: &mut Http, args: &[u8], reject_cross_origin: bool) -> Result<bool> {
     http.read_headers()?;
@@ -713,12 +729,8 @@ fn handshake_auth(ctx: &Ctx, http: &mut Http, args: &[u8], reject_cross_origin: 
         crate::log_warn!("Rejected cross-origin request");
         return Err(http_error(HTTP_SC_FORBIDDEN, 403));
     }
-    if is_localhost(&ctx.host()) {
-        // Host が localhost や IP アドレスでなければ DNS リバインディングかもしれないので、認証を省かない
-        if crate::http::is_loopback_host_header(&hd(b"Host")) {
-            return Ok(true);
-        }
-        crate::log_warn!("Host header is not a loopback name; not trusting localhost: {}", b(&hd(b"Host")));
+    if trust_localhost(ctx, &hd(b"Host"), &hd(b"User-Agent")) {
+        return Ok(true);
     }
     let (password, auth_type, port) = {
         let s = ctx.pc.servmgr.settings();

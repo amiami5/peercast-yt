@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::chaninfo::{self as ci, ChanInfo};
 use super::channel::{self as chn, Channel};
 use super::error::{Error, Result};
-use super::host::Host;
+use super::host::{Host, Ip};
 use super::http::{Http, PCX_AGENT};
 use super::packetbuf::{self as pb, ChanPacket};
 use super::pcpconst::*;
@@ -920,15 +920,17 @@ fn source_protocol(url: &[u8]) -> (i32, &[u8]) {
 /// `URLSource::stream`
 fn url_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>, base: &[u8]) {
     let mut url: Vec<u8> = Vec::new();
+    let mut origin = Ip::default();
     let mut retry = RetryDelay::default();
     while ch.thread.active() && !pc.is_quitting() {
         // 管理者が入力した URL だけを信じる。返ってきたのはリダイレクト先 (中継元が書いたもの)
         let trusted = url.is_empty();
         if trusted {
             url = base.to_vec();
+            origin = Ip::default();
         }
         let started = std::time::Instant::now();
-        url = stream_url(pc, ch, &url, 0, trusted);
+        url = stream_url(pc, ch, &url, 0, trusted, &mut origin);
         retry.wait(started, || !ch.thread.active() || pc.is_quitting());
     }
 }
@@ -963,8 +965,10 @@ const MAX_PLAYLIST_DEPTH: i32 = 8;
 /// `trusted` は、URL が管理者の入力したものか (ローカルのプレイリストの中身を含む)。そうでない
 /// (リダイレクト先や HTTP で取ったプレイリストの中身) なら、`pipe:` やファイルを指す URL で
 /// 外部のプログラムを起こしたりローカルのファイルを読んだりしないよう、ネットワークの URL だけを
-/// 受け付ける (C++ 版は区別しなかった)。
-fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32, trusted: bool) -> Vec<u8> {
+/// 受け付ける (C++ 版は区別しなかった)。さらに、つなぐのは公開アドレスか、管理者が入力した URL のアドレス
+/// `origin` と同じときだけにし、ループバックや LAN の中 (このノードの管理画面を含む) に要求を送らされないように
+/// する。`trusted` の HTTP の URL につないだら、`origin` をそのアドレスにする。
+fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32, trusted: bool, origin: &mut Ip) -> Vec<u8> {
     let mut next_url = Vec::new();
     if pc.is_quitting() || !ch.thread.active() {
         return next_url;
@@ -1000,6 +1004,11 @@ fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32, tru
                 crate::log_info!("Fetch Dir={}", String::from_utf8_lossy(d));
             }
             let host = Host::from_str_name(host_part, 80);
+            if trusted {
+                *origin = host.ip;
+            } else if !super::http::allowed_untrusted_ip(&host.ip, origin) {
+                return Err(Error::stream("Refusing a non-public address given by the source"));
+            }
             let mut sock = ClientSocket::new();
             sock.connect(host)?;
             set_src_stat(ch, Some(sock.shared_stat()));
@@ -1122,6 +1131,7 @@ fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32, tru
             // HTTP で取ったものは中継元が書いたもの
             let entries_trusted = trusted && proto == ci::SP_FILE;
             let mut u_trusted = false;
+            let mut u_origin = *origin;
             crate::log_info!("Playlist: {} URLs", pl.urls.len());
             if depth >= MAX_PLAYLIST_DEPTH {
                 return Err(Error::stream("Playlist nesting too deep"));
@@ -1132,9 +1142,10 @@ fn stream_url(pc: &Arc<Peercast>, ch: &Arc<Channel>, url: &[u8], depth: i32, tru
                     u = pl.urls[url_num % pl.urls.len()].clone();
                     url_num += 1;
                     u_trusted = entries_trusted;
+                    u_origin = *origin;
                 }
                 let started = std::time::Instant::now();
-                u = stream_url(pc, ch, &u, depth + 1, u_trusted);
+                u = stream_url(pc, ch, &u, depth + 1, u_trusted, &mut u_origin);
                 // 返ってきたのはリダイレクト先 (中継元が書いたもの)
                 u_trusted = false;
                 retry.wait(started, || !ch.thread.active() || pc.is_quitting());
