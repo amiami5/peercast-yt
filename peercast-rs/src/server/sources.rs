@@ -67,6 +67,7 @@ impl SourceStream {
         let kind = if proto == ci::SP_PCP {
             crate::log_info!("Channel is PCP");
             let mut p = PcpStream::new(remote);
+            p.upstream_of = Some(ch.id());
             if let Some(h) = peer {
                 p.peer = h;
             }

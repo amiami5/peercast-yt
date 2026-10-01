@@ -1182,6 +1182,73 @@ fn cross_site_cannot_start_relay() {
     }
 }
 
+/// PCP のストリームのデータ (`pkt`) とチャンネルの情報の更新は、そのチャンネルの上流からのものだけ使う
+/// (security-review #35)。配信しているノードへの CIN と、中継しているノードの下流 (中継先) から送ってみる
+#[test]
+fn pcp_data_from_upstream_only() {
+    let src = Server::start(17231);
+    let relay = Server::start(17232);
+    let _push = push_flv(src.port, "upstreamtest");
+    let cid = wait_channels(src.port, 1)[0].1.clone();
+    let id: Vec<u8> = (0..16).map(|i| u8::from_str_radix(&cid[i * 2..i * 2 + 2], 16).unwrap()).collect();
+    let head = |port: u16, q: &str| format!("GET /stream/{}.flv{} HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", cid, q, port);
+    let tip = format!("?tip=127.0.0.1:{}", src.port);
+    check_flv("relay", &read_stream(relay.port, &head(relay.port, &tip), 200000, Duration::from_secs(30)), 100000);
+
+    let helo = |sid: &[u8]| {
+        let mut out = AtomBuf::default();
+        out.parent(id4(b"helo"), 3);
+        out.string(id4(b"agnt"), b"PeerCast/0.1218 (YT50)");
+        out.int(id4(b"ver"), 1218);
+        out.bytes(id4(b"sid"), sid);
+        out.0
+    };
+    // ストリームを入れ替える head と、名前の更新
+    let mut evil = AtomBuf::default();
+    evil.parent(id4(b"chan"), 3);
+    evil.bytes(id4(b"id"), &id);
+    evil.parent(id4(b"info"), 1);
+    evil.string(id4(b"name"), b"evilname");
+    evil.parent(id4(b"pkt"), 3);
+    evil.bytes(id4(b"type"), b"head");
+    evil.int(id4(b"pos"), 0);
+    evil.bytes(id4(b"data"), b"EVILHEAD");
+    // oleh が届くまで読み、あとは読み捨てながら `evil` を送る
+    let send_evil = |mut s: TcpStream| {
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !got.windows(4).any(|w| w == b"oleh") {
+            let n = s.read(&mut buf).unwrap();
+            assert!(n > 0, "oleh が届かない: {}", String::from_utf8_lossy(&got));
+            got.extend_from_slice(&buf[..n]);
+        }
+        let mut drain = s.try_clone().unwrap();
+        std::thread::spawn(move || while matches!(drain.read(&mut buf), Ok(n) if n > 0) {});
+        s.write_all(&evil.0).unwrap();
+        s
+    };
+
+    // 配信しているノードへ CIN として
+    let mut c = TcpStream::connect(("127.0.0.1", src.port)).unwrap();
+    let mut pcp = AtomBuf::default();
+    pcp.int(*b"pcp\n", 1);
+    c.write_all(&[pcp.0, helo(b"upstream-cin-ses")].concat()).unwrap();
+    let _c = send_evil(c);
+    // 中継しているノードへ下流として
+    let mut d = TcpStream::connect(("127.0.0.1", relay.port)).unwrap();
+    let req = format!("GET /channel/{} HTTP/1.0\r\nHost: 127.0.0.1:{}\r\nx-peercast-pcp:1\r\n\r\n", cid, relay.port);
+    d.write_all(&[req.into_bytes(), helo(b"upstream-down-se")].concat()).unwrap();
+    let _d = send_evil(d);
+    std::thread::sleep(Duration::from_secs(2));
+
+    for (label, port) in [("src", src.port), ("relay", relay.port)] {
+        check_flv(label, &read_stream(port, &head(port, ""), 100000, Duration::from_secs(20)), 50000);
+        let names: Vec<String> = wait_channels(port, 1).into_iter().map(|(name, _)| name).collect();
+        assert_eq!(names, ["upstreamtest"], "{}", label);
+    }
+}
+
 // ---------------------------------------------------------------- TLS
 
 /// テストの自己署名の証明書 server.crt と鍵 server.key を `dir` に作る
