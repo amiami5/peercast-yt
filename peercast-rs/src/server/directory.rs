@@ -380,71 +380,57 @@ pub struct UptestEndpoint {
     pub xml: Vec<u8>,
 }
 
+/// `UptestInfo` の欄
+fn info_field<'a>(info: &'a crate::uptest::Info, name: &str) -> &'a [u8] {
+    let i = crate::uptest::FIELDS.iter().position(|f| *f == name).unwrap_or(0);
+    &info[i]
+}
+
 impl UptestEndpoint {
     fn new(url: &[u8]) -> UptestEndpoint {
         UptestEndpoint { url: url.to_vec(), status: crate::uptest::UNTRIED, info: Default::default(), last_tried_at: 0, xml: Vec::new() }
     }
 
     fn field(&self, name: &str) -> &[u8] {
-        let i = crate::uptest::FIELDS.iter().position(|f| *f == name).unwrap_or(0);
-        &self.info[i]
+        info_field(&self.info, name)
     }
+}
 
-    /// `update`: yp4g.xml を取り直す
-    fn update(&mut self) {
-        self.last_tried_at = sys::get_time();
-        crate::log_debug!("Speedtest: {}", String::from_utf8_lossy(&self.url));
-        match download(&self.url).and_then(|x| read_info(&x).map(|i| (x, i))) {
-            Ok((x, i)) => {
-                self.xml = x;
-                self.info = i;
-                self.status = crate::uptest::SUCCESS;
-                crate::log_info!("Speedtest result: {} kbps", String::from_utf8_lossy(self.field("speed")));
-            }
-            Err(e) => {
-                crate::log_error!("UptestEndpoint {}: {}", String::from_utf8_lossy(&self.url), e);
-                self.status = crate::uptest::ERROR;
-            }
-        }
+/// yp4g.xml を取って読む。取りに行った先のアドレスも返す
+fn fetch_info(url: &[u8]) -> Result<(Vec<u8>, crate::uptest::Info, Ip)> {
+    let (x, ip) = download(url)?;
+    let info = read_info(&x)?;
+    Ok((x, info, ip))
+}
+
+/// `takeSpeedtest` の後半: 乱数のデータを送って測ってもらう。`yp` は yp4g.xml を取ったアドレス
+fn post_speedtest(info: &crate::uptest::Info, yp: Ip) -> std::result::Result<(), Vec<u8>> {
+    if info_field(info, "checkable") != b"1" {
+        crate::log_error!("speedtest server unavailable: checkable != 1");
+        return Err(b"speedtest server unavailable".to_vec());
     }
-
-    /// `takeSpeedtest`: 乱数のデータを送って測ってもらう
-    fn take_speedtest(&mut self) -> std::result::Result<(), Vec<u8>> {
-        match download(&self.url).and_then(|x| read_info(&x).map(|i| (x, i))) {
-            Ok((x, i)) => {
-                self.xml = x;
-                self.info = i;
-                crate::log_debug!(
-                    "Speedtest {}: checkable = {}",
-                    String::from_utf8_lossy(&self.url),
-                    String::from_utf8_lossy(self.field("checkable"))
-                );
-            }
-            Err(e) => {
-                crate::log_error!("Speedtest {}: {}", String::from_utf8_lossy(&self.url), e);
-                return Err(e.msg.into_bytes());
+    let (addr, port, object) = (info_field(info, "addr"), info_field(info, "port"), info_field(info, "object"));
+    let port = crate::uptest::check_srv(addr, port, object).map_err(|e| {
+        crate::log_error!("Speedtest: {}", e);
+        format!("speedtest server: {}", e).into_bytes()
+    })?;
+    let size = crate::uptest::post_size(info_field(info, "post_size")).map_err(|e| {
+        crate::log_error!("Speedtest: {}", e);
+        e.as_bytes().to_vec()
+    })?;
+    crate::log_debug!("Posting {} bytes of random data to {} ...", size, String::from_utf8_lossy(&crate::uptest::post_url(addr, &port.to_string().into_bytes(), object)));
+    match post_random_data(addr, port, object, size, yp) {
+        Ok(code) => {
+            crate::log_trace!("... done");
+            if code == 302 {
+                Ok(())
+            } else {
+                Err(format!("unexpected status code {}", code).into_bytes())
             }
         }
-        if self.field("checkable") != b"1" {
-            crate::log_error!("speedtest server unavailable: checkable != 1");
-            return Err(b"speedtest server unavailable".to_vec());
-        }
-        let post = crate::uptest::post_url(self.field("addr"), self.field("port"), self.field("object"));
-        let size = (crate::http::atoi(self.field("post_size")) as i64 * 1000).max(0) as usize;
-        crate::log_debug!("Posting {} bytes of random data to {} ...", size, String::from_utf8_lossy(&post));
-        match post_random_data(&post, size) {
-            Ok(code) => {
-                crate::log_trace!("... done");
-                if code == 302 {
-                    Ok(())
-                } else {
-                    Err(format!("unexpected status code {}", code).into_bytes())
-                }
-            }
-            Err(e) => {
-                crate::log_error!("exception occurred while posting: {}", e);
-                Err(b"exception occurred while posting".to_vec())
-            }
+        Err(e) => {
+            crate::log_error!("exception occurred while posting: {}", e);
+            Err(format!("exception occurred while posting: {}", e).into_bytes())
         }
     }
 }
@@ -461,8 +447,8 @@ fn read_info(x: &[u8]) -> Result<crate::uptest::Info> {
     })
 }
 
-/// `UptestEndpoint::download`
-fn download(url: &[u8]) -> Result<Vec<u8>> {
+/// `UptestEndpoint::download`: 本体と、つないだ先のアドレス
+fn download(url: &[u8]) -> Result<(Vec<u8>, Ip)> {
     let u = crate::url::parse_url(url).map_err(|_| Error::general("invalid URI"))?;
     if u.scheme != b"http" {
         return Err(Error::general("unsupported protocol"));
@@ -479,25 +465,37 @@ fn download(url: &[u8]) -> Result<Vec<u8>> {
     if res.status_code != 200 {
         return Err(Error::general(format!("unexpected status code {}", res.status_code)));
     }
-    Ok(res.body)
+    Ok((res.body, host.ip))
 }
 
-/// `UptestEndpoint::postRandomData`: 状態の番号を返す
-fn post_random_data(url: &[u8], size: usize) -> Result<i32> {
-    let u = crate::url::parse_url(url).map_err(|_| Error::general("invalid URI"))?;
-    let host = Host::from_str_name(&u.host, super::http::uri_port(&u));
+/// 速度測定のデータを送ってよい宛先か。yp4g.xml は平文の HTTP で取るので書き換えられうる。
+/// ループバック・プライベート・リンクローカル・自分のアドレスへは、yp4g.xml を取ったのと同じ
+/// アドレスのときだけ送る (localhost からの要求は管理画面で認証なしに通るため。security-review #29)
+fn uptest_dest_allowed(dest: &Host, yp: Ip) -> bool {
+    if dest.port == 0 || dest.ip.is_unconnectable() {
+        return false;
+    }
+    dest.ip == yp || !(dest.ip.is_lan() || super::servent::is_localhost(dest))
+}
+
+/// `UptestEndpoint::postRandomData`: 状態の番号を返す。`addr`・`port`・`object` は `uptest::check_srv` で
+/// 確かめたもの
+fn post_random_data(addr: &[u8], port: u16, object: &[u8], size: usize, yp: Ip) -> Result<i32> {
+    let host = Host::from_str_name(addr, port);
     if !host.ip.is_set() {
         return Err(Error::general("Could not resolve host name"));
     }
+    if !uptest_dest_allowed(&host, yp) {
+        return Err(Error::general(format!("destination not allowed: {}", host.str())));
+    }
     let mut sock = ClientSocket::new();
     sock.connect(host)?;
-    let path = [&b"/"[..], &u.path].concat();
     let mut req = Request::new(
         b"POST",
-        &path,
+        object,
         b"HTTP/1.0",
         Headers::from(&[
-            ("Host", &u.host),
+            ("Host", addr),
             ("Connection", b"close"),
             ("User-Agent", PCX_AGENT.as_bytes()),
             ("Content-Length", size.to_string().as_bytes()),
@@ -509,7 +507,8 @@ fn post_random_data(url: &[u8], size: usize) -> Result<i32> {
     Ok(Http::new(&mut sock).send_request(&req)?.status_code)
 }
 
-/// `UptestServiceRegistry`
+/// `UptestServiceRegistry`。通信は一覧のロックの外で行う (C++ 版はロックを持ったまま取りに行き、
+/// その間は設定画面の状態の取得なども待たされた)
 #[derive(Default)]
 pub struct UptestServiceRegistry {
     providers: Mutex<Vec<UptestEndpoint>>,
@@ -547,11 +546,31 @@ impl UptestServiceRegistry {
 
     /// `takeSpeedtest`
     pub fn take_speedtest(&self, index: i32) -> std::result::Result<(), Vec<u8>> {
-        let mut p = self.lock();
-        if index < 0 || index as usize >= p.len() {
-            return Err(b"index out of range".to_vec());
+        let url = {
+            let p = self.lock();
+            if index < 0 || index as usize >= p.len() {
+                return Err(b"index out of range".to_vec());
+            }
+            p[index as usize].url.clone()
+        };
+        let (x, info, yp) = match fetch_info(&url) {
+            Ok(v) => v,
+            Err(e) => {
+                crate::log_error!("Speedtest {}: {}", String::from_utf8_lossy(&url), e);
+                return Err(e.msg.into_bytes());
+            }
+        };
+        crate::log_debug!(
+            "Speedtest {}: checkable = {}",
+            String::from_utf8_lossy(&url),
+            String::from_utf8_lossy(info_field(&info, "checkable"))
+        );
+        // 待つ間に消されていたら、結果は捨てる
+        if let Some(e) = self.lock().iter_mut().find(|e| e.url == url) {
+            e.xml = x;
+            e.info = info.clone();
         }
-        p[index as usize].take_speedtest()
+        post_speedtest(&info, yp)
     }
 
     /// `getXML`
@@ -571,25 +590,65 @@ impl UptestServiceRegistry {
         self.lock().clear();
     }
 
-    /// `update`: 成功していないものを、間を空けて取り直す
-    pub fn update(&self) {
-        let mut p = self.lock();
-        for e in p.iter_mut() {
-            if e.status != crate::uptest::SUCCESS {
-                if crate::uptest::is_ready(e.status, e.last_tried_at, sys::get_time()) {
-                    e.update();
-                } else {
-                    crate::log_trace!("{} not ready to download", String::from_utf8_lossy(&e.url));
+    /// `UptestEndpoint::update`: yp4g.xml を取り直す
+    fn refresh(&self, urls: Vec<Vec<u8>>) {
+        for url in urls {
+            crate::log_debug!("Speedtest: {}", String::from_utf8_lossy(&url));
+            let r = fetch_info(&url);
+            let mut p = self.lock();
+            let e = match p.iter_mut().find(|e| e.url == url) {
+                Some(e) => e,
+                None => continue,
+            };
+            match r {
+                Ok((x, i, _)) => {
+                    e.xml = x;
+                    e.info = i;
+                    e.status = crate::uptest::SUCCESS;
+                    crate::log_info!("Speedtest result: {} kbps", String::from_utf8_lossy(e.field("speed")));
+                }
+                Err(err) => {
+                    crate::log_error!("UptestEndpoint {}: {}", String::from_utf8_lossy(&url), err);
+                    e.status = crate::uptest::ERROR;
                 }
             }
         }
     }
 
+    /// `update`: 成功していないものを、間を空けて取り直す
+    pub fn update(&self) {
+        let urls = {
+            let mut p = self.lock();
+            let now = sys::get_time();
+            let mut urls = Vec::new();
+            for e in p.iter_mut() {
+                if e.status != crate::uptest::SUCCESS {
+                    if crate::uptest::is_ready(e.status, e.last_tried_at, now) {
+                        e.last_tried_at = now;
+                        urls.push(e.url.clone());
+                    } else {
+                        crate::log_trace!("{} not ready to download", String::from_utf8_lossy(&e.url));
+                    }
+                }
+            }
+            urls
+        };
+        self.refresh(urls);
+    }
+
     /// `forceUpdate`
     pub fn force_update(&self) {
-        for e in self.lock().iter_mut() {
-            e.update();
-        }
+        let urls = {
+            let mut p = self.lock();
+            let now = sys::get_time();
+            p.iter_mut()
+                .map(|e| {
+                    e.last_tried_at = now;
+                    e.url.clone()
+                })
+                .collect()
+        };
+        self.refresh(urls);
     }
 
     /// `getState`
@@ -754,4 +813,27 @@ pub fn ipv6_port_check(session_id: &[u8; 16], port: u16) -> Result<PortCheckResu
         }
     }
     Ok(PortCheckResult { ip, ports })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uptest_dest() {
+        let v4 = |a: u8, b: u8, c: u8, d: u8| Ip::from_v4(u32::from_be_bytes([a, b, c, d]));
+        let yp = v4(203, 0, 113, 1);
+        let ok = |ip: Ip, port: u16, yp: Ip| uptest_dest_allowed(&Host::new(ip, port), yp);
+        assert!(ok(v4(198, 51, 100, 7), 80, yp));
+        assert!(ok(yp, 80, yp));
+        assert!(!ok(v4(198, 51, 100, 7), 0, yp));
+        for ip in [v4(127, 0, 0, 1), v4(10, 0, 0, 1), v4(192, 168, 1, 1), v4(169, 254, 1, 1), v4(0, 0, 0, 0), v4(224, 0, 0, 1)] {
+            assert!(!ok(ip, 80, yp), "{}", ip.str());
+        }
+        // yp4g.xml を LAN の中から取ったときは、同じアドレスにだけ送れる
+        let lan = v4(192, 168, 1, 1);
+        assert!(ok(lan, 80, lan));
+        assert!(!ok(v4(192, 168, 1, 2), 80, lan));
+        assert!(!ok(v4(127, 0, 0, 2), 80, v4(127, 0, 0, 1)));
+    }
 }

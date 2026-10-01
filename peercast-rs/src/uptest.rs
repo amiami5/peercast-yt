@@ -146,6 +146,41 @@ pub fn post_url(addr: &[u8], port: &[u8], object: &[u8]) -> Vec<u8> {
     [&b"http://"[..], c_str(addr), b":", c_str(port), c_str(object)].concat()
 }
 
+/// `uptest_srv` の `addr`・`port`・`object` を、POST の宛先とパスに使ってよいか確かめ、ポートを返す。
+/// yp4g.xml は平文の HTTP で取るので書き換えられうる。改行などで要求を書き足されないよう、
+/// `addr` はホスト名か IPv4 アドレスに使う文字だけ、`object` は `/` で始まる、空白・制御文字・`"` などの
+/// ない URL のパスだけにする (security-review #29)
+pub fn check_srv(addr: &[u8], port: &[u8], object: &[u8]) -> Result<u16, &'static str> {
+    if addr.is_empty() || addr.len() > 253 || !addr.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-') {
+        return Err("invalid addr");
+    }
+    let port = match port {
+        p if !p.is_empty() && p.len() <= 5 && p.iter().all(u8::is_ascii_digit) => {
+            p.iter().fold(0u32, |a, &c| a * 10 + (c - b'0') as u32)
+        }
+        _ => return Err("invalid port"),
+    };
+    if !(1..=65535).contains(&port) {
+        return Err("invalid port");
+    }
+    let path_ok = |c: u8| (0x21..=0x7e).contains(&c) && !b"\"<>\\^`{|}#".contains(&c);
+    if object.first() != Some(&b'/') || object.len() > 1024 || !object.iter().all(|&c| path_ok(c)) {
+        return Err("invalid object");
+    }
+    Ok(port as u16)
+}
+
+/// `post_size` (KB) の上限。正当な値は 250 ほど
+pub const MAX_POST_SIZE_KB: i32 = 10_000;
+
+/// `post_size` の値から送るバイト数。上限を超えるものは誤り (C++ 版は確かめずに確保する)
+pub fn post_size(v: &[u8]) -> Result<usize, &'static str> {
+    match crate::http::atoi(c_str(v)) {
+        n if n > MAX_POST_SIZE_KB => Err("post_size too large"),
+        n => Ok(n.max(0) as usize * 1000),
+    }
+}
+
 /// `UptestEndpoint::Status`
 pub const UNTRIED: i32 = 0;
 pub const SUCCESS: i32 = 1;
@@ -256,6 +291,34 @@ mod tests {
         }
         let _ = read_info(&vec![b'a'; 9000]);
         let _ = read_info(&[&b"<"[..], &vec![b'a'; 9000], b" x=\"1\"/>"].concat());
+    }
+
+    #[test]
+    fn srv_checks() {
+        assert_eq!(check_srv(b"example.com", b"443", b"/yp/uptest.cgi?a=1&b=%20"), Ok(443));
+        assert_eq!(check_srv(b"192.168.0.1", b"1", b"/"), Ok(1));
+        assert_eq!(check_srv(b"a", b"65535", b"/x"), Ok(65535));
+        for addr in [&b""[..], b"a b", b"a\r\nb", b"a/b", b"a:1", b"a@b", b"a\0", b"[::1]", b"a\"b"] {
+            assert_eq!(check_srv(addr, b"80", b"/"), Err("invalid addr"), "{:?}", addr);
+        }
+        assert_eq!(check_srv(&[b'a'; 254], b"80", b"/"), Err("invalid addr"));
+        for port in [&b""[..], b"0", b"65536", b"99999", b"123456", b"-1", b"+80", b" 80", b"80\r\n", b"0x50"] {
+            assert_eq!(check_srv(b"a", port, b"/"), Err("invalid port"), "{:?}", port);
+        }
+        for object in [&b""[..], b"x", b"/a b", b"/a\r\nHost: x", b"/a\n", b"/a\0", b"/\"", b"/<", b"/#", b"/\x7f", b"/\x80"] {
+            assert_eq!(check_srv(b"a", b"80", object), Err("invalid object"), "{:?}", object);
+        }
+        assert_eq!(check_srv(b"a", b"80", &[&b"/"[..], &[b'a'; 1024]].concat()), Err("invalid object"));
+    }
+
+    #[test]
+    fn post_sizes() {
+        assert_eq!(post_size(b"250"), Ok(250_000));
+        assert_eq!(post_size(b"10000"), Ok(10_000_000));
+        assert_eq!(post_size(b"10001"), Err("post_size too large"));
+        assert_eq!(post_size(b"99999999999"), Err("post_size too large"));
+        assert_eq!(post_size(b"-5"), Ok(0));
+        assert_eq!(post_size(b""), Ok(0));
     }
 
     #[test]

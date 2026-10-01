@@ -1090,3 +1090,145 @@ fn tls_slow_client() {
     let closed = closed_rx.recv_timeout(limit).expect("要求のレコードを 1 バイトずつ送ると切られない");
     assert!(closed - t0 < limit);
 }
+
+/// 速度測定の偽のサーバー: GET には yp4g.xml を、POST には 302 を返し、届いた要求を覚える
+struct FakeUptest {
+    port: u16,
+    xml: Arc<std::sync::Mutex<String>>,
+    requests: Arc<std::sync::Mutex<Vec<(String, usize)>>>,
+}
+
+impl FakeUptest {
+    fn start() -> FakeUptest {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let xml = Arc::new(std::sync::Mutex::new(String::new()));
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (x, r) = (xml.clone(), requests.clone());
+        std::thread::spawn(move || {
+            for c in l.incoming() {
+                let Ok(mut c) = c else { continue };
+                let (x, r) = (x.clone(), r.clone());
+                std::thread::spawn(move || {
+                    c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut buf = Vec::new();
+                    let mut b = [0u8; 4096];
+                    let end = loop {
+                        if let Some(e) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break e + 4;
+                        }
+                        match c.read(&mut b) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&b[..n]),
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&buf[..end]).into_owned();
+                    let len = head
+                        .lines()
+                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                        .unwrap_or(0);
+                    while buf.len() < end + len {
+                        match c.read(&mut b) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => buf.extend_from_slice(&b[..n]),
+                        }
+                    }
+                    // 本体のあとに続くもの (書き足された要求) も覚える
+                    let _ = c.set_read_timeout(Some(Duration::from_millis(300)));
+                    while let Ok(n) = c.read(&mut b) {
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&b[..n]);
+                    }
+                    let rest = String::from_utf8_lossy(buf.get(end + len..).unwrap_or(&[])).into_owned();
+                    r.lock().unwrap().push((head.clone() + &rest, buf.len().min(end + len) - end));
+                    let res = if head.starts_with("GET ") {
+                        let body = x.lock().unwrap().clone();
+                        format!("HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body)
+                    } else {
+                        "HTTP/1.0 302 Found\r\nLocation: /\r\nContent-Length: 0\r\n\r\n".to_string()
+                    };
+                    let _ = c.write_all(res.as_bytes());
+                });
+            }
+        });
+        FakeUptest { port, xml, requests }
+    }
+
+    fn set_srv(&self, addr: &str, port: &str, object: &str, post_size: &str) {
+        *self.xml.lock().unwrap() = format!(
+            "<yp4g><yp name=\"test\"/><host ip=\"127.0.0.1\" port_open=\"1\" speed=\"0\" over=\"0\"/>\
+             <uptest checkable=\"1\" remain=\"0\"/>\
+             <uptest_srv addr=\"{}\" port=\"{}\" object=\"{}\" post_size=\"{}\" limit=\"3000\" interval=\"15\" enabled=\"1\"/></yp4g>",
+            addr, port, object, post_size
+        );
+    }
+
+    /// 届いた POST (要求の頭と本体の長さ)
+    fn posts(&self) -> Vec<(String, usize)> {
+        self.requests.lock().unwrap().iter().filter(|(h, _)| !h.starts_with("GET ")).cloned().collect()
+    }
+
+    fn all(&self) -> String {
+        self.requests.lock().unwrap().iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join("\n----\n")
+    }
+}
+
+/// 速度測定は、yp4g.xml の `uptest_srv` の値で要求を書き足させず、LAN の中の別のアドレスへは送らず、
+/// 大きすぎる `post_size` では送らずに誤りにする (security-review #29)
+#[test]
+fn uptest_srv_checked() {
+    let mut s = Server::start(17224);
+    let p = s.port;
+    let fake = FakeUptest::start();
+    let fp = fake.port.to_string();
+    fake.set_srv("127.0.0.1", &fp, "/uptest.cgi", "1");
+    let r = get(p, &format!("/admin?cmd=add_speedtest&url=http%3A%2F%2F127.0.0.1%3A{}%2Fyp4g.xml", fp));
+    assert_eq!(r.code, 302, "{}", String::from_utf8_lossy(&r.body));
+    let take = || get(p, "/admin?cmd=take_speedtest&index=0");
+
+    // yp4g.xml を取ったのと同じアドレスへは送る
+    let r = take();
+    assert_eq!(r.code, 302, "{}", String::from_utf8_lossy(&r.body));
+    let posts = fake.posts();
+    assert_eq!(posts.len(), 1, "{}", fake.all());
+    assert!(posts[0].0.starts_with("POST /uptest.cgi HTTP/1.0\r\n"), "{}", posts[0].0);
+    assert_eq!(posts[0].1, 1000);
+
+    // object の改行で、ヘッダーや要求を書き足させない
+    fake.set_srv("127.0.0.1", &fp, "/uptest.cgi\r\nX-Injected: 1\r\n\r\nGET /admin?cmd=injected HTTP/1.0\r\nX: ", "0");
+    assert_eq!(take().code, 500);
+    // addr の改行も
+    fake.set_srv("127.0.0.1\r\nX-Injected: 1", &fp, "/uptest.cgi", "0");
+    assert_eq!(take().code, 500);
+    assert_eq!(fake.posts().len(), 1, "{}", fake.all());
+    assert!(!fake.all().contains("Injected") && !fake.all().contains("injected"), "{}", fake.all());
+
+    // LAN の中の、yp4g.xml を取ったのと違うアドレスへは送らない
+    match std::net::TcpListener::bind("127.0.0.2:0") {
+        Ok(other) => {
+            other.set_nonblocking(true).unwrap();
+            let op = other.local_addr().unwrap().port().to_string();
+            fake.set_srv("127.0.0.2", &op, "/uptest.cgi", "1");
+            assert_eq!(take().code, 500);
+            std::thread::sleep(Duration::from_millis(300));
+            assert!(other.accept().is_err(), "127.0.0.2 へつないだ");
+        }
+        Err(e) => eprintln!("127.0.0.2 で待ち受けられないので、その確かめは飛ばす: {}", e),
+    }
+
+    // 大きすぎる post_size では送らず、落ちない
+    fake.set_srv("127.0.0.1", &fp, "/uptest.cgi", "2000000000");
+    assert_eq!(take().code, 500);
+    assert_eq!(fake.posts().len(), 1, "{}", fake.all());
+    assert!(s.child.try_wait().unwrap().is_none(), "peercast が落ちた");
+
+    // 直したあとも、正当な値なら送れる
+    fake.set_srv("127.0.0.1", &fp, "/uptest.cgi?x=1", "2");
+    assert_eq!(take().code, 302);
+    let posts = fake.posts();
+    assert_eq!(posts.len(), 2, "{}", fake.all());
+    assert!(posts[1].0.starts_with("POST /uptest.cgi?x=1 HTTP/1.0\r\n"), "{}", posts[1].0);
+    assert_eq!(posts[1].1, 2000);
+}
