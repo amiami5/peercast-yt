@@ -130,3 +130,22 @@
 - 掲示板の取得 (`bbs_http.rs`): 公開アドレスだけにつなぎ、リダイレクト先も確かめている。
 - rtmp-server: 既定でこの PC からの接続だけを受け付ける。
 - ソケット: 要求を読み終えるまでの期限が効いている。
+
+## clippy の警告 (2026-10-01、セキュリティの見直しのあとで片付ける)
+
+`cargo clippy --workspace --all-targets` (clippy 0.1.98) で、error はなく warning が 82 件。セキュリティの問題ではなく、書き方の提案と、少し性能に関わるもの。#34〜#40 が済んだら、まとめて片付けるコミットを作る。それ以降は、変更のたびに警告が増えていないことを確かめる。
+
+- [ ] 性能に少し関わるもの
+  - `Err` の型が 136 バイト以上と大きい (`server/channel.rs`・`servent.rs`・`servmgr.rs`)。`Error` を `Box` にするなどを考える。
+  - enum の要素の大きさの差が大きい (`chandir.rs` 368 バイト、`server/regex.rs` 256 バイト)。
+  - `DoubleEndedIterator` に `last()` を使っていて、全部たどる (`server/servent_http.rs`)。
+- [ ] 間違いにつながりうるもの
+  - `if` の両方の枝が同じ (`server/channel.rs`)。意図したものか確かめる。
+  - 引き算の下限を手で確かめている (`chanpacket.rs` 2 件、`saturating_sub` にできる)。
+  - `Result<_, ()>` を返している (`xml.rs` 3 件)。誤りの理由が分からない。
+- [ ] 書き方だけのもの (自動で直せるものが多い。`cargo clippy --fix` も使える)
+  - `map_or` を簡単にできる (13 件: `server/host.rs`・`regex.rs`・`servent.rs`・`sys.rs`・`directory.rs`・`flag.rs`・`chanmgr.rs`・`jrpc.rs`)。
+  - 型が複雑なので `type` で名前を付ける (7 件: `server/log.rs` 4 件・`channel.rs`・`server/commands.rs`・rtmp-server-rs)。
+  - `repeat().take()` を `repeat_n` に (6 件、rtmp-server-rs の `amf0.rs` とテスト)。
+  - 不要な `to_vec` (`commands.rs` 4 件)、すぐ外す参照 (`server/servmgr.rs`・`directory.rs` 4 件)、`Default::default()` のあとのフィールドの代入 (`pcp/handshake.rs`・`server/chaninfo.rs`・`server/sources.rs`)、`Range::contains` にできる比べ方 (`json/mod.rs`・`servent.rs`・`template/value.rs`)。
+  - そのほか 1 件ずつのもの (引数が 8 つの関数 `bbs/mod.rs`、`SSL` の名前 `server/tls.rs`、`next` という名前のメソッド `server/sys.rs`、`assert_eq!` に `true`/`false` `servhs/tests.rs` など)。
