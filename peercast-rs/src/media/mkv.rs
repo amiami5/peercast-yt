@@ -6,10 +6,11 @@
 //! C++ 版の `std::runtime_error` ("bad data" など) は、`readHeader` と `readPacket` が
 //! 同じメッセージの `StreamException` に変えていたので、Rust 版も `Error::Stream` にする。
 
-use super::{fail, read_exact, Error, HeadKind, Host, LogLevel, MemStream, Result, MAX_DATALEN};
+use super::{fail, read_exact_into, Error, HeadKind, Host, LogLevel, MemStream, Result, MAX_DATALEN};
 
-/// `VInt::MAX_SIZE`: 要素のサイズとして受け付ける上限
-pub const MAX_SIZE: u64 = 256 * 1024 * 1024;
+/// `VInt::MAX_SIZE`: 要素のサイズとして受け付ける上限。C++ 版は 256 MB だが、配信元しだいで
+/// メモリを使いすぎないように下げた (Cluster は数秒分なので足りる)。
+pub const MAX_SIZE: u64 = 16 * 1024 * 1024;
 /// パケットの大きさの目安
 const PACKET_SIZE: usize = 15 * 1024;
 
@@ -223,10 +224,10 @@ impl Mkv {
         while payload_remaining > 0 {
             let id = mem_vint(&mut m)?;
             let size = mem_vint(&mut m)?;
-            let block = m.read_exact(size.checked_uint()?)?;
+            let block = m.read_slice(size.checked_uint()?)?;
 
             if id.name() == "SimpleBlock" {
-                let mut mem = MemStream::new(&block);
+                let mut mem = MemStream::new(block);
                 let trackno = mem_vint(&mut mem)?;
                 if trackno.uint() == self.video_track_number {
                     // トラック番号、タイムコード (2 バイト) のあとのフラグ。
@@ -262,53 +263,53 @@ impl Mkv {
 
     /// `sendCluster`: 非継続パケットの頭出しができないクライアントのために、なるべく要素を
     /// パケットの先頭にして送信する
+    ///
+    /// 要素は Cluster の中に続けて並んでいるので、まだ送っていない部分を複製して溜めずに、
+    /// その始まりの位置 (`pending`) だけを覚えて `cluster` の一部を送る。
     fn send_cluster(&mut self, cluster: &[u8], h: &mut dyn Host) -> Result<()> {
         let mut cont = if self.has_key_frame(cluster)? { false } else { self.has_key_frame };
 
         let mut m = MemStream::new(cluster);
-        let id = mem_vint(&mut m)?;
+        mem_vint(&mut m)?;
         let size = mem_vint(&mut m)?;
-        let mut buffer = [id.bytes, size.bytes.clone()].concat();
+        let mut pending = 0;
 
         let mut payload_remaining = size.uint() as i64;
         while payload_remaining > 0 {
+            let start = m.position();
             let id = mem_vint(&mut m)?;
             let size = mem_vint(&mut m)?;
             h.log(LogLevel::Debug, &format!("Got {} size={}", id.name(), size.uint()));
 
             let element_len = (id.bytes.len() + size.bytes.len()) as u64 + size.uint();
-            if !buffer.is_empty() && buffer.len() as u64 + element_len > PACKET_SIZE as u64 {
-                self.send_packet(false, &buffer, cont, h)?;
+            if pending < start && (start - pending) as u64 + element_len > PACKET_SIZE as u64 {
+                self.send_packet(false, &cluster[pending..start], cont, h)?;
                 cont = true;
-                buffer.clear();
+                pending = start;
             }
 
-            let payload = m.read_exact(size.checked_uint()?)?;
+            let payload = m.read_slice(size.checked_uint()?)?;
 
             if id.name() == "Timecode" && h.read_delay() {
-                let tc = unpack_unsigned_int(&payload)?;
+                let tc = unpack_unsigned_int(payload)?;
                 self.rate_limit(tc, h);
             }
 
             if element_len > PACKET_SIZE as u64 {
-                if !buffer.is_empty() {
+                if pending < start {
                     return fail("Logic error");
                 }
-                let element = [&id.bytes[..], &size.bytes, &payload].concat();
-                for chunk in element.chunks(PACKET_SIZE) {
+                for chunk in cluster[start..m.position()].chunks(PACKET_SIZE) {
                     self.send_packet(false, chunk, cont, h)?;
                     cont = true;
                 }
-            } else {
-                buffer.extend_from_slice(&id.bytes);
-                buffer.extend_from_slice(&size.bytes);
-                buffer.extend_from_slice(&payload);
+                pending = m.position();
             }
             payload_remaining -= element_len as i64;
         }
 
-        if !buffer.is_empty() {
-            self.send_packet(false, &buffer, cont, h)?;
+        if pending < m.position() {
+            self.send_packet(false, &cluster[pending..m.position()], cont, h)?;
         }
         Ok(())
     }
@@ -376,23 +377,22 @@ impl Mkv {
 
     pub fn read_header(&mut self, h: &mut dyn Host) -> Result<()> {
         // ヘッダーは MAX_DATALEN を超えると送れない (sendPacket が例外を投げる)。C++ 版は
-        // Cluster まで全部を溜めていたが、Rust 版は超えた分を溜めずに長さだけ数える。
-        let mut header = Header::default();
+        // Cluster まで全部を溜めていたが、Rust 版は入りきらない要素を読まずに誤りにする。
+        let mut header = Vec::new();
 
         loop {
             let id = host_vint(h)?;
             let size = host_vint(h)?;
             h.log(LogLevel::Debug, &format!("Got LEVEL0 {} size={}", id.name(), size.uint()));
 
-            header.add(&id.bytes);
-            header.add(&size.bytes);
-
             if id.name() != "Segment" {
                 // Segment 以外のレベル 0 要素は単にヘッドパケットに追加する
-                let data = read_exact(h, size.checked_uint()?)?;
-                header.add(&data);
+                read_head_element(h, &mut header, &id, &size)?;
                 continue;
             }
+            head_fits(&header, (id.bytes.len() + size.bytes.len()) as u64)?;
+            header.extend_from_slice(&id.bytes);
+            header.extend_from_slice(&size.bytes);
 
             // Segment 内のレベル 1 要素を読む
             loop {
@@ -402,27 +402,20 @@ impl Mkv {
 
                 if id.name() != "Cluster" {
                     // Cluster 以外の要素はヘッドパケットに追加する
-                    header.add(&id.bytes);
-                    header.add(&size.bytes);
-                    let data = read_exact(h, size.checked_uint()?)?;
+                    let start = read_head_element(h, &mut header, &id, &size)?;
                     if id.name() == "Tracks" {
-                        self.read_tracks(&data, h)?;
+                        self.read_tracks(&header[start..], h)?;
                     }
-                    header.add(&data);
                     if id.name() == "Info" {
-                        self.read_info(&data, h);
+                        self.read_info(&header[start..], h);
                     }
                 } else {
                     // ヘッダーパケットを送信
-                    if header.overflow {
-                        return fail("MKV packet too big");
-                    }
-                    self.send_packet(true, &header.data, false, h)?;
+                    self.send_packet(true, &header, false, h)?;
                     self.start_time = h.time();
 
                     // もうIDとサイズを読んでしまったので、最初のクラスターを送信
-                    let mut cluster = [id.bytes, size.bytes.clone()].concat();
-                    cluster.extend(read_exact(h, size.checked_uint()?)?);
+                    let cluster = read_cluster(h, id, size)?;
                     return self.send_cluster(&cluster, h);
                 }
             }
@@ -440,28 +433,38 @@ impl Mkv {
             return fail("Logic error");
         }
 
-        let mut cluster = [id.bytes, size.bytes.clone()].concat();
-        cluster.extend(read_exact(h, size.checked_uint()?)?);
+        let cluster = read_cluster(h, id, size)?;
         self.send_cluster(&cluster, h)
     }
 }
 
-/// `readHeader` で溜めるヘッダーパケット
-#[derive(Default)]
-struct Header {
-    data: Vec<u8>,
-    overflow: bool,
+/// ヘッダーパケットに `n` バイト足しても `MAX_DATALEN` に収まるか
+fn head_fits(header: &[u8], n: u64) -> Result<()> {
+    if header.len() as u64 + n > MAX_DATALEN as u64 {
+        return fail("MKV packet too big");
+    }
+    Ok(())
 }
 
-impl Header {
-    fn add(&mut self, b: &[u8]) {
-        if self.overflow || self.data.len() + b.len() > MAX_DATALEN {
-            self.overflow = true;
-            self.data.clear();
-        } else {
-            self.data.extend_from_slice(b);
-        }
-    }
+/// ヘッダーに入る要素 (ID とサイズは読んだもの) の中身を読んで `header` に足し、中身の
+/// 始まりの位置を返す。入りきらない要素は、中身を読まずに誤りにする。
+fn read_head_element(h: &mut dyn Host, header: &mut Vec<u8>, id: &VInt, size: &VInt) -> Result<usize> {
+    let n = size.checked_uint()?;
+    head_fits(header, (id.bytes.len() + size.bytes.len() + n) as u64)?;
+    header.extend_from_slice(&id.bytes);
+    header.extend_from_slice(&size.bytes);
+    let start = header.len();
+    read_exact_into(h, header, n)?;
+    Ok(start)
+}
+
+/// Cluster (ID とサイズは読んだもの) の中身を読み、ID とサイズを前に付けて返す
+fn read_cluster(h: &mut dyn Host, id: VInt, size: VInt) -> Result<Vec<u8>> {
+    let n = size.checked_uint()?;
+    let mut cluster = id.bytes;
+    cluster.extend_from_slice(&size.bytes);
+    read_exact_into(h, &mut cluster, n)?;
+    Ok(cluster)
 }
 
 #[cfg(test)]
@@ -550,6 +553,32 @@ mod tests {
         v.extend([0x18, 0x53, 0x80, 0x67, 0x01, 0, 0, 0, 0, 0, 0, 0]);
         v.extend([0x16, 0x54, 0xAE, 0x6B, 0x01, 0, 0, 0, 0xff, 0xff, 0xff, 0xf0]);
         assert_eq!(run(Kind::Mkv, &mut TestHost::new(&v), 0), Err(Error::Stream("MKV: element size too large".into())));
+
+        // Cluster も MAX_SIZE までしか受け付けない
+        let mut v = el(&[0x1A, 0x45, 0xDF, 0xA3], b"");
+        v.extend([0x18, 0x53, 0x80, 0x67, 0x01, 0, 0, 0, 0, 0, 0, 0]);
+        v.extend([0x1F, 0x43, 0xB6, 0x75, 0x01]);
+        v.extend(&(MAX_SIZE + 1).to_be_bytes()[1..]);
+        assert_eq!(run(Kind::Mkv, &mut TestHost::new(&v), 0), Err(Error::Stream("MKV: element size too large".into())));
+    }
+
+    #[test]
+    fn header_too_big_is_not_read() {
+        // ヘッダーに入りきらない要素は、中身が届く前に誤りにする (中身は付けていない)
+        let mut v = el(&[0x1A, 0x45, 0xDF, 0xA3], b"");
+        v.extend([0x18, 0x53, 0x80, 0x67, 0x01, 0, 0, 0, 0, 0, 0, 0]);
+        v.extend([0x16, 0x54, 0xAE, 0x6B, 0x01, 0, 0, 0, 0, 0, 0x40, 0x00]);
+        assert_eq!(run(Kind::Mkv, &mut TestHost::new(&v), 0), Err(Error::Stream("MKV packet too big".into())));
+
+        // ちょうど MAX_DATALEN のヘッダーは送れる
+        let ebml = el(&[0x1A, 0x45, 0xDF, 0xA3], b"");
+        let seg = [0x18, 0x53, 0x80, 0x67, 0x01, 0, 0, 0, 0, 0, 0, 0];
+        let void_len = MAX_DATALEN - ebml.len() - seg.len() - 9;
+        let mut v = [&ebml[..], &seg, &el(&[0xEC], &vec![0; void_len])].concat();
+        v.extend(el(&[0x1F, 0x43, 0xB6, 0x75], &el(&[0xE7], &[0])));
+        let mut h = TestHost::new(&v);
+        assert_eq!(run(Kind::Mkv, &mut h, 0), Ok(()));
+        assert_eq!(h.events[0], format!("head Mkv 0 {}", MAX_DATALEN));
     }
 
     #[test]
