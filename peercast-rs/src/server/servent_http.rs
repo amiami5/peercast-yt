@@ -1724,19 +1724,19 @@ fn handshake_xml(ctx: &Ctx, http: &mut Http) -> Result<()> {
     let sm = &pc.servmgr;
     let max_uptime = pc.chanmgr.max_uptime();
     let mut rn = XmlNode::new("peercast");
-    rn.add(XmlNode::new(format!("servent uptime=\"{}\"", sm.uptime() as i32)));
-    rn.add(XmlNode::new(format!(
-        "bandwidth out=\"{}\" in=\"{}\"",
-        per_second(Stat::BytesOut).wrapping_sub(per_second(Stat::LocalBytesOut)) as i32,
-        per_second(Stat::BytesIn).wrapping_sub(per_second(Stat::LocalBytesIn)) as i32
-    )));
-    rn.add(XmlNode::new(format!(
-        "connections total=\"{}\" relays=\"{}\" direct=\"{}\"",
-        sm.num_connected() as i32,
-        sm.num_streams_type(pc, svt::T_RELAY, true) as i32,
-        sm.num_streams_type(pc, svt::T_DIRECT, true) as i32
-    )));
-    let mut an = XmlNode::new(format!("channels_relayed total=\"{}\"", pc.chanmgr.num_channels()));
+    rn.add(XmlNode::new("servent").attr("uptime", (sm.uptime() as i32).to_string()));
+    rn.add(
+        XmlNode::new("bandwidth")
+            .attr("out", (per_second(Stat::BytesOut).wrapping_sub(per_second(Stat::LocalBytesOut)) as i32).to_string())
+            .attr("in", (per_second(Stat::BytesIn).wrapping_sub(per_second(Stat::LocalBytesIn)) as i32).to_string()),
+    );
+    rn.add(
+        XmlNode::new("connections")
+            .attr("total", (sm.num_connected() as i32).to_string())
+            .attr("relays", (sm.num_streams_type(pc, svt::T_RELAY, true) as i32).to_string())
+            .attr("direct", (sm.num_streams_type(pc, svt::T_DIRECT, true) as i32).to_string()),
+    );
+    let mut an = XmlNode::new("channels_relayed").attr("total", pc.chanmgr.num_channels().to_string());
     for c in pc.chanmgr.channels() {
         if c.is_active() {
             let info = c.info();
@@ -1747,7 +1747,7 @@ fn handshake_xml(ctx: &Ctx, http: &mut Http) -> Result<()> {
         }
     }
     rn.add(an);
-    let mut fnode = XmlNode::new(format!("channels_found total=\"{}\"", pc.chanmgr.num_hit_lists()));
+    let mut fnode = XmlNode::new("channels_found").attr("total", pc.chanmgr.num_hit_lists().to_string());
     for l in pc.chanmgr.hitlists() {
         let mut n = l.info.channel_xml(max_uptime);
         n.add(l.xml(true));
@@ -1758,16 +1758,16 @@ fn handshake_xml(ctx: &Ctx, http: &mut Http) -> Result<()> {
     let mut hc = XmlNode::new("host_cache");
     for sh in sm.host_cache() {
         if sh.ty != super::servmgr::SH_NONE {
-            hc.add(XmlNode::new(format!(
-                "host ip=\"{}\" type=\"{}\" time=\"{}\"",
-                sh.host.str(),
-                super::servmgr::serv_host_type_str(sh.ty),
-                sh.time as i32
-            )));
+            hc.add(
+                XmlNode::new("host")
+                    .attr("ip", sh.host.str())
+                    .attr("type", super::servmgr::serv_host_type_str(sh.ty))
+                    .attr("time", (sh.time as i32).to_string()),
+            );
         }
     }
     rn.add(hc);
-    let doc = rn.write_document()?;
+    let doc = rn.write_document();
     let s = &mut *http.stream;
     s.write_line(HTTP_SC_OK)?;
     s.write_line(format!("Server: {}", PCX_AGENT))?;

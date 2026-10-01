@@ -591,6 +591,23 @@ fn relays_stream_ext() {
     assert!(!text.contains("/../"), "{}", text);
 }
 
+/// viewxml の属性の値は、ほかのノードから届く `type` も含めてエスケープする (security-review #31)。
+/// PCP で届くのと同じく、ini の `contentType` には表にない文字列もそのまま入る
+#[test]
+fn viewxml_escapes_values() {
+    let s = Server::start_with(17227, |ini| {
+        ini + "\n[RelayChannel]\nname = x\"<n>&'\nid = 0123456789ABCDEF0123456789ABCDEF\n\
+               contentType = FLV\" evil=\"<script>\ngenre = g\"/><evil/>\nstayConnected = Yes\n[End]\n"
+    });
+    let r = get(s.port, "/admin?cmd=viewxml");
+    assert_eq!(r.code, 200);
+    let text = String::from_utf8(r.body).unwrap();
+    assert!(text.contains("name=\"x&quot;&lt;n&gt;&amp;&#039;\""), "{}", text);
+    assert!(text.contains("type=\"FLV&quot; evil=&quot;&lt;script&gt;\""), "{}", text);
+    assert!(text.contains("genre=\"g&quot;/&gt;&lt;evil/&gt;\""), "{}", text);
+    assert!(!text.contains("evil=\"") && !text.contains("<script") && !text.contains("<evil"), "{}", text);
+}
+
 /// MP3 のフレーム (MPEG1 Layer III 128kbps 44.1kHz、パディングなし: 417 バイト) を `n` 個
 fn mp3_frames(n: usize, tag: u8) -> Vec<u8> {
     let mut frame = b"\xff\xfb\x90\x64".to_vec();

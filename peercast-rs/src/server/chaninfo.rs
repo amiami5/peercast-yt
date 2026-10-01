@@ -285,53 +285,45 @@ impl ChanInfo {
         ci::write_track_atoms(out, &self.track.view());
     }
 
-    fn uni(s: &PcString) -> String {
-        String::from_utf8_lossy(&s.converted(StrType::UnicodeSafe)).into_owned()
+    /// XML の属性の値 (エスケープは `XmlNode` が書き出すときにする)
+    fn uni(s: &PcString) -> Vec<u8> {
+        s.converted(StrType::Unicode)
     }
 
     /// `createChannelXML`
     pub fn channel_xml(&self, max_uptime: u32) -> XmlNode {
-        let mut a = format!(
-            "channel name=\"{}\" id=\"{}\" bitrate=\"{}\" type=\"{}\" genre=\"{}\" desc=\"{}\" url=\"{}\" uptime=\"{}\" comment=\"{}\" skips=\"{}\" age=\"{}\" bcflags=\"{}\"",
-            Self::uni(&self.name),
-            id_str(&self.id),
-            self.bitrate,
-            String::from_utf8_lossy(&self.content_type.data),
-            Self::uni(&self.genre),
-            Self::uni(&self.desc),
-            Self::uni(&self.url),
-            self.uptime(max_uptime) as i32,
-            Self::uni(&self.comment),
-            self.num_skips as i32,
-            self.age() as i32,
-            self.bc_id[0] as i32
-        )
-        .into_bytes();
-        a.truncate(8191);
-        XmlNode::new(a)
+        XmlNode::new("channel")
+            .attr("name", Self::uni(&self.name))
+            .attr("id", id_str(&self.id))
+            .attr("bitrate", self.bitrate.to_string())
+            .attr("type", &self.content_type.data)
+            .attr("genre", Self::uni(&self.genre))
+            .attr("desc", Self::uni(&self.desc))
+            .attr("url", Self::uni(&self.url))
+            .attr("uptime", (self.uptime(max_uptime) as i32).to_string())
+            .attr("comment", Self::uni(&self.comment))
+            .attr("skips", (self.num_skips as i32).to_string())
+            .attr("age", (self.age() as i32).to_string())
+            .attr("bcflags", (self.bc_id[0] as i32).to_string())
     }
 
     /// `createRelayChannelXML`
     pub fn relay_channel_xml(&self, max_uptime: u32) -> XmlNode {
-        XmlNode::new(format!(
-            "channel id=\"{}\" uptime=\"{}\" skips=\"{}\" age=\"{}\"",
-            id_str(&self.id),
-            self.uptime(max_uptime) as i32,
-            self.num_skips as i32,
-            self.age() as i32
-        ))
+        XmlNode::new("channel")
+            .attr("id", id_str(&self.id))
+            .attr("uptime", (self.uptime(max_uptime) as i32).to_string())
+            .attr("skips", (self.num_skips as i32).to_string())
+            .attr("age", (self.age() as i32).to_string())
     }
 
     /// `createTrackXML`
     pub fn track_xml(&self) -> XmlNode {
-        XmlNode::new(format!(
-            "track title=\"{}\" artist=\"{}\" album=\"{}\" genre=\"{}\" contact=\"{}\"",
-            Self::uni(&self.track.title),
-            Self::uni(&self.track.artist),
-            Self::uni(&self.track.album),
-            Self::uni(&self.track.genre),
-            Self::uni(&self.track.contact)
-        ))
+        XmlNode::new("track")
+            .attr("title", Self::uni(&self.track.title))
+            .attr("artist", Self::uni(&self.track.artist))
+            .attr("album", Self::uni(&self.track.album))
+            .attr("genre", Self::uni(&self.track.genre))
+            .attr("contact", Self::uni(&self.track.contact))
     }
 
     /// `getState`

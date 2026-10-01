@@ -540,13 +540,14 @@ impl pcp::Host for PcpHost<'_> {
         });
         let chan_log = pc.servmgr.settings().chan_log.data.clone();
         if let (Some(chl), false) = (log_info, chan_log.is_empty()) {
-            let mut rn = super::xmlnode::XmlNode::new(format!("update time=\"{}\"", sys::get_time()));
+            let mut rn = super::xmlnode::XmlNode::new("update").attr("time", sys::get_time().to_string());
             let mut n = chl.info.channel_xml(pc.chanmgr.max_uptime());
             n.add(chl.xml(false));
             n.add(chl.info.track_xml());
             rn.add(n);
             let mut out = Vec::new();
-            match rn.write(&mut out).and_then(|_| super::stream::FileStream::open_append(&chan_log)) {
+            rn.write(&mut out);
+            match super::stream::FileStream::open_append(&chan_log) {
                 Ok(mut f) => {
                     let _ = f.write(&out);
                 }

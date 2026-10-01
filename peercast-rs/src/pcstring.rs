@@ -167,8 +167,18 @@ fn is_euc(a: u8) -> bool {
     (0xa1..=0xfe).contains(&a)
 }
 
-fn is_utf8_lead(a: u8, b: u8) -> bool {
-    (a & 0xc0) == 0xc0 && (b & 0x80) == 0x80
+/// `input[i]` から始まる UTF-8 の 1 文字のバイト数。先頭バイトが 2〜4 バイトの文字のもので、
+/// 続くバイトがすべてあって 0x80〜0xBF のときだけ。C++ 版は 2 バイト目しか見ずに、先頭バイトの
+/// 上位の 1 の数だけそのまま出していたので、続きに入った `"` や `<` がエスケープされなかった。
+fn utf8_seq_len(input: &[u8], i: usize) -> Option<usize> {
+    let n = match input[i] {
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        0xf0..=0xf7 => 4,
+        _ => return None,
+    };
+    let rest = input.get(i + 1..i + n)?;
+    rest.iter().all(|&b| (0x80..=0xbf).contains(&b)).then_some(n)
 }
 
 fn push_codepoint(buf: &mut Vec<u8>, cp: u32) {
@@ -189,14 +199,9 @@ pub fn unknown_to_unicode(input: &[u8], safe: bool) -> Vec<u8> {
         let d = at(input, i);
         let mut buf = Vec::new();
 
-        if is_utf8_lead(c, d) {
-            let num_chars = (0..6).take_while(|&k| c & (0x80 >> k) != 0).count();
-            buf.push(c);
-            for _ in 0..num_chars - 1 {
-                // C++ 版は入力の終わりを越えて読んでいた。ここでは 0 とみなす。
-                buf.push(at(input, i));
-                i += 1;
-            }
+        if let Some(n) = utf8_seq_len(input, i - 1) {
+            buf.extend_from_slice(&input[i - 1..i - 1 + n]);
+            i += n - 1;
         } else if is_sjis(c, d) {
             push_codepoint(&mut buf, crate::jis::sjis_to_unicode(((c as u16) << 8) | d as u16) as u32);
             i += 1;
@@ -351,8 +356,22 @@ mod tests {
 
     #[test]
     fn unknown_to_unicode_truncated_utf8_stops_at_end() {
-        assert_eq!(unknown_to_unicode(b"a\xe3\x81", false), b"a\xe3\x81");
-        assert_eq!(unknown_to_unicode(b"\xfc\x80", false), b"\xfc\x80");
+        // 続きが足りないものは UTF-8 とみなさない (ここでは Shift_JIS の 1 文字になる)
+        for s in [b"a\xe3\x81".as_slice(), b"\xfc\x80", b"\xf0\x9f\x98"] {
+            let out = unknown_to_unicode(s, false);
+            assert!(std::str::from_utf8(&out).is_ok(), "{:?}", out);
+        }
+        assert_eq!(unknown_to_unicode("😀".as_bytes(), false), "😀".as_bytes());
+    }
+
+    #[test]
+    fn unknown_to_unicode_checks_continuation_bytes() {
+        // 2 バイト目だけ続きのバイトで、そのあとに `"` や `<` があっても、まとめて出さずにエスケープする
+        for s in [b"\xe3\x81\"x".as_slice(), b"\xf0\x9f<x>", b"\xe8\x80\"<\""] {
+            let out = unknown_to_unicode(s, true);
+            assert!(!out.iter().any(|&c| c == b'"' || c == b'<' || c == b'>'), "{:?}", out);
+            assert!(std::str::from_utf8(&out).is_ok(), "{:?}", out);
+        }
     }
 
     #[test]
