@@ -1257,3 +1257,29 @@ fn uptest_srv_checked() {
         assert_eq!(posts[i].1, 1000);
     }
 }
+
+/// キャッシュの yp4g.xml は、管理画面のオリジンで XML (XHTML の script が動く) として開かせない (security-review #30)
+#[test]
+fn speedtest_cached_xml_as_text() {
+    let s = Server::start(17225);
+    let p = s.port;
+    let fake = FakeUptest::start("127.0.0.1:0").unwrap();
+    let fp = fake.port.to_string();
+    let script = "<x:script xmlns:x=\"http://www.w3.org/1999/xhtml\">alert(1)</x:script>";
+    fake.set_srv("127.0.0.1", &fp, "/uptest.cgi", "1");
+    {
+        let mut x = fake.xml.lock().unwrap();
+        *x = x.replacen("</yp4g>", &format!("{}</yp4g>", script), 1);
+    }
+    let r = get(p, &format!("/admin?cmd=add_speedtest&url=http%3A%2F%2F127.0.0.1%3A{}%2Fyp4g.xml", fp));
+    assert_eq!(r.code, 302, "{}", String::from_utf8_lossy(&r.body));
+    // 測定のあとに yp4g.xml を取り直してキャッシュする
+    let r = get(p, "/admin?cmd=take_speedtest&index=0");
+    assert_eq!(r.code, 302, "{}", String::from_utf8_lossy(&r.body));
+    let r = get(p, "/admin?cmd=speedtest_cached_xml&index=0");
+    assert_eq!(r.code, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert!(String::from_utf8_lossy(&r.body).contains(script), "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(r.header("Content-Type"), Some("text/plain; charset=utf-8"));
+    assert_eq!(r.header("X-Content-Type-Options"), Some("nosniff"));
+    assert_eq!(r.header("Content-Security-Policy"), Some("sandbox"));
+}

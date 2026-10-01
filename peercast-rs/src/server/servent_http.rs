@@ -1186,9 +1186,16 @@ fn run_cmd(ctx: &Ctx, http: &mut Http, cmd: &[u8], query: &[u8], jump: &mut Vec<
                 },
                 _ => match reg.xml(index) {
                     Ok(xml) => {
+                        // 外から取った XML を管理画面のオリジンで XML として開かせると、XHTML の script が動く。
+                        // 文字として見せるだけにし、推測もさせず、開いても script を動かさない
                         let len = xml.len().to_string();
                         http.send_response(Response::ok(
-                            Headers::from(&[("Content-Type", b"application/xml"), ("Content-Length", len.as_bytes())]),
+                            Headers::from(&[
+                                ("Content-Type", b"text/plain; charset=utf-8".as_slice()),
+                                ("X-Content-Type-Options", b"nosniff"),
+                                ("Content-Security-Policy", b"sandbox"),
+                                ("Content-Length", len.as_bytes()),
+                            ]),
                             xml,
                         ))
                     }
