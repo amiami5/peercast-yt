@@ -481,7 +481,11 @@ fn uptest_dest_allowed(dest: &Host, yp: Ip) -> bool {
 /// `UptestEndpoint::postRandomData`: 状態の番号を返す。`addr`・`port`・`object` は `uptest::check_srv` で
 /// 確かめたもの
 fn post_random_data(addr: &[u8], port: u16, object: &[u8], size: usize, yp: Ip) -> Result<i32> {
-    let host = Host::from_str_name(addr, port);
+    // IPv6 アドレスは名前を引かずにそのまま使う
+    let host = match crate::uptest::ipv6_literal(addr) {
+        Some(v6) => Host::new(Ip::parse(v6).unwrap_or_default(), port),
+        None => Host::from_str_name(addr, port),
+    };
     if !host.ip.is_set() {
         return Err(Error::general("Could not resolve host name"));
     }
@@ -495,7 +499,7 @@ fn post_random_data(addr: &[u8], port: u16, object: &[u8], size: usize, yp: Ip) 
         object,
         b"HTTP/1.0",
         Headers::from(&[
-            ("Host", addr),
+            ("Host", &crate::uptest::url_host(addr)),
             ("Connection", b"close"),
             ("User-Agent", PCX_AGENT.as_bytes()),
             ("Content-Length", size.to_string().as_bytes()),

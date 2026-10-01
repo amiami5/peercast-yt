@@ -1099,8 +1099,8 @@ struct FakeUptest {
 }
 
 impl FakeUptest {
-    fn start() -> FakeUptest {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    fn start(bind: &str) -> std::io::Result<FakeUptest> {
+        let l = std::net::TcpListener::bind(bind)?;
         let port = l.local_addr().unwrap().port();
         let xml = Arc::new(std::sync::Mutex::new(String::new()));
         let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1153,7 +1153,7 @@ impl FakeUptest {
                 });
             }
         });
-        FakeUptest { port, xml, requests }
+        Ok(FakeUptest { port, xml, requests })
     }
 
     fn set_srv(&self, addr: &str, port: &str, object: &str, post_size: &str) {
@@ -1181,7 +1181,7 @@ impl FakeUptest {
 fn uptest_srv_checked() {
     let mut s = Server::start(17224);
     let p = s.port;
-    let fake = FakeUptest::start();
+    let fake = FakeUptest::start("127.0.0.1:0").unwrap();
     let fp = fake.port.to_string();
     fake.set_srv("127.0.0.1", &fp, "/uptest.cgi", "1");
     let r = get(p, &format!("/admin?cmd=add_speedtest&url=http%3A%2F%2F127.0.0.1%3A{}%2Fyp4g.xml", fp));
@@ -1231,4 +1231,29 @@ fn uptest_srv_checked() {
     assert_eq!(posts.len(), 2, "{}", fake.all());
     assert!(posts[1].0.starts_with("POST /uptest.cgi?x=1 HTTP/1.0\r\n"), "{}", posts[1].0);
     assert_eq!(posts[1].1, 2000);
+
+    // IPv6 アドレスの addr ([] で囲んでも囲まなくてもよい)。yp4g.xml を [::1] から取れば ::1 へ送れる
+    let fake6 = match FakeUptest::start("[::1]:0") {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[::1] で待ち受けられないので、IPv6 の確かめは飛ばす: {}", e);
+            return;
+        }
+    };
+    let fp6 = fake6.port.to_string();
+    // 127.0.0.1 から取った yp4g.xml で ::1 へは送らない
+    fake.set_srv("::1", &fp6, "/uptest.cgi", "1");
+    assert_eq!(take().code, 500);
+    assert!(fake6.posts().is_empty(), "{}", fake6.all());
+    let r = get(p, &format!("/admin?cmd=add_speedtest&url=http%3A%2F%2F%5B%3A%3A1%5D%3A{}%2Fyp4g.xml", fp6));
+    assert_eq!(r.code, 302, "{}", String::from_utf8_lossy(&r.body));
+    for (i, addr) in ["::1", "[::1]"].iter().enumerate() {
+        fake6.set_srv(addr, &fp6, "/uptest.cgi", "1");
+        let r = get(p, "/admin?cmd=take_speedtest&index=1");
+        assert_eq!(r.code, 302, "{}: {}", addr, String::from_utf8_lossy(&r.body));
+        let posts = fake6.posts();
+        assert_eq!(posts.len(), i + 1, "{}", fake6.all());
+        assert!(posts[i].0.contains("\r\nHost: [::1]\r\n"), "{}", posts[i].0);
+        assert_eq!(posts[i].1, 1000);
+    }
 }

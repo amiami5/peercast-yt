@@ -141,17 +141,37 @@ pub fn read_info(body: &[u8]) -> Result<Info, ReadError> {
     Ok(info)
 }
 
-/// `UptestInfo::postURL`
+/// `UptestInfo::postURL`。IPv6 アドレスは `[]` で囲む
 pub fn post_url(addr: &[u8], port: &[u8], object: &[u8]) -> Vec<u8> {
-    [&b"http://"[..], c_str(addr), b":", c_str(port), c_str(object)].concat()
+    [&b"http://"[..], &url_host(c_str(addr)), b":", c_str(port), c_str(object)].concat()
+}
+
+/// `[]` で囲んだものも含めて、IPv6 アドレスなら囲まずに返す
+pub fn ipv6_literal(addr: &[u8]) -> Option<&[u8]> {
+    let inner = match addr {
+        [b'[', inner @ .., b']'] => inner,
+        _ => addr,
+    };
+    let ok = std::str::from_utf8(inner).ok()?.parse::<std::net::Ipv6Addr>().is_ok();
+    ok.then_some(inner)
+}
+
+/// URL や Host ヘッダーに書くときのホスト (IPv6 アドレスは `[]` で囲む)
+pub fn url_host(addr: &[u8]) -> Vec<u8> {
+    match ipv6_literal(addr) {
+        Some(v6) => [&b"["[..], v6, b"]"].concat(),
+        None => addr.to_vec(),
+    }
 }
 
 /// `uptest_srv` の `addr`・`port`・`object` を、POST の宛先とパスに使ってよいか確かめ、ポートを返す。
 /// yp4g.xml は平文の HTTP で取るので書き換えられうる。改行などで要求を書き足されないよう、
-/// `addr` はホスト名か IPv4 アドレスに使う文字だけ、`object` は `/` で始まる、空白・制御文字・`"` などの
+/// `addr` はホスト名か IPv4 アドレスに使う文字だけか、IPv6 アドレス (`[]` で囲んでも、囲まなくても
+/// よい。スコープの `%` は付けられない)、`object` は `/` で始まる、空白・制御文字・`"` などの
 /// ない URL のパスだけにする (security-review #29)
 pub fn check_srv(addr: &[u8], port: &[u8], object: &[u8]) -> Result<u16, &'static str> {
-    if addr.is_empty() || addr.len() > 253 || !addr.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-') {
+    let name_ok = !addr.is_empty() && addr.len() <= 253 && addr.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-');
+    if !name_ok && ipv6_literal(addr).is_none() {
         return Err("invalid addr");
     }
     let port = match port {
@@ -298,7 +318,18 @@ mod tests {
         assert_eq!(check_srv(b"example.com", b"443", b"/yp/uptest.cgi?a=1&b=%20"), Ok(443));
         assert_eq!(check_srv(b"192.168.0.1", b"1", b"/"), Ok(1));
         assert_eq!(check_srv(b"a", b"65535", b"/x"), Ok(65535));
-        for addr in [&b""[..], b"a b", b"a\r\nb", b"a/b", b"a:1", b"a@b", b"a\0", b"[::1]", b"a\"b"] {
+        // IPv6 アドレスは [] で囲んでも囲まなくてもよい
+        for addr in [&b"::1"[..], b"[::1]", b"2001:db8::1", b"[2001:db8::1]", b"::ffff:127.0.0.1"] {
+            assert_eq!(check_srv(addr, b"80", b"/"), Ok(80), "{:?}", addr);
+        }
+        assert_eq!(url_host(b"::1"), b"[::1]");
+        assert_eq!(url_host(b"[::1]"), b"[::1]");
+        assert_eq!(url_host(b"example.com"), b"example.com");
+        assert_eq!(post_url(b"2001:db8::1", b"80", b"/x"), b"http://[2001:db8::1]:80/x");
+        for addr in [
+            &b""[..], b"a b", b"a\r\nb", b"a/b", b"a:1", b"a@b", b"a\0", b"a\"b", b"[a]", b"[::1", b"::1]", b"[::1]:80",
+            b"fe80::1%eth0", b"[fe80::1%25eth0]", b"::1\r\nX: y", b"[[::1]]", b":::1",
+        ] {
             assert_eq!(check_srv(addr, b"80", b"/"), Err("invalid addr"), "{:?}", addr);
         }
         assert_eq!(check_srv(&[b'a'; 254], b"80", b"/"), Err("invalid addr"));
