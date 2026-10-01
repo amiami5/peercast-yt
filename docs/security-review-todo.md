@@ -52,4 +52,28 @@
   - 案: 定数時間で比べる関数を使う。
   - 済み: 長さが同じならどこで違っても同じだけ時間をかけて比べる `strutil::ct_eq` と `strutil::ct_starts_with` を作り (結果は `black_box` を通して、途中で打ち切る最適化をさせない)、管理パスワード (`?pass=` と Basic 認証)、ShoutCast の 1 行目 (`servhs::request_kind`)、ShoutCast・Icecast の放送のパスワード (`servhs::icy_password_ok`)、ログインの Cookie の ID (`CookieList::contains`)、`?auth=` のトークン (`valid_auth_token`・`flv_valid_auth_token`) の比較に使う。長さが違うことは分かってしまう (パスワードの長さは隠さない)。rtmp-server のストリームキーは前から `same_bytes` で定数時間に比べている。単体テスト (`ct_eq_cases`) と、これまでの bvt (`pass_in_query`・`shoutcast_password_lockout`・`sources` など) で確かめた。時間の差を測っての確認はしていない。
 
-まだ深くは見ていないところ: メディアのパーサー (FLV、MKV、OGG、MP4)、XML と JSON のパーサー、uptest、正規表現、ini の読み書き。
+## 2026-10-01 に見つけたもの (残っていたところの見直し、重さの順)
+
+前の見直しで「まだ深くは見ていないところ」としていた、メディアのパーサー (FLV、MKV、OGG、MP4、MP3)、XML と JSON のパーサー、uptest、正規表現、ini の読み書きを見た。コードを読んで判断したもので、実際に動かしての確認はまだしていない。
+
+- [ ] #29 速度測定 (`directory.rs` の `UptestEndpoint::take_speedtest` → `post_random_data`) が、yp4g.xml に書かれた `uptest_srv` の `addr`・`port`・`object` をそのまま POST の宛先とパスに使っています。宛先に制限がなく (ループバックや LAN も可)、値の改行も除かず、`Http::send_request` も要求の行やヘッダーの値の CR/LF を確かめずに書くので、要求を書き足せます。localhost からの要求は管理画面で認証なしに通るため、yp4g.xml を書き換えられる者が、管理者が「速度測定」を押したときに、このノード自身へ管理の要求を送らせられるおそれがあります。既定の登録先 (`http://bayonet.ddo.jp/sp/yp4g.xml`) は平文の HTTP なので、通り道で書き換えられます。あわせて、`post_size` に上限がなく (値 × 1000 バイトを一度に確保する)、大きな値でメモリを確保できずにプロセスごと落ちます。
+  - 案: `addr`・`port`・`object` は、空白・制御文字・`"` などがあれば断り、`port` は 1〜65535 の数だけにする。宛先がループバック・プライベート・リンクローカル・自分のアドレスなら断る (yp4g.xml を取ったホストと同じものに限ることも考える)。`post_size` に上限を設ける (正当な値は 250 なので、例えば 10 MB まで)。さらに、出ていく HTTP の要求を書くところ (`Http::send_request`) で、メソッド・パス・ヘッダーの名前と値に CR・LF・NUL があれば送らずに誤りにする (ほかの外向きの要求もまとめて守る)。
+  - ほか: 登録先の一覧のロックを持ったまま yp4g.xml を取りに行き POST もする (`update`・`force_update`・`take_speedtest`) ので、相手が遅いと、その間は設定画面の状態の取得 (`getState` の `uptestServiceRegistry`) なども待たされる。あわせて直すなら、ロックの外で通信する。
+- [ ] #30 `/admin?cmd=speedtest_cached_xml` が、外から取った yp4g.xml を `Content-Type: application/xml` で、管理画面と同じオリジンからそのまま返しています (speedtest.html にリンクがある)。XML の中の XHTML の名前空間の `script` 要素はブラウザーで動くので、yp4g.xml を書き換えられる者 (#29 と同じく既定の登録先は平文の HTTP) が、管理者がキャッシュの XML を開いたときに、管理画面のオリジンで JavaScript を動かせるおそれがあります。
+  - 案: `text/plain; charset=utf-8` で返し、`X-Content-Type-Options: nosniff` と `Content-Security-Policy: sandbox` を付ける (#20 の `/stream/` と同じ)。
+- [ ] #31 `/admin?cmd=viewxml` (index.html にリンクがある) と、`chanLog` を設定したときに書くチャンネルの記録 (`pcpstream.rs` の `chan_end`) の XML で、ほかのノードから届く値のエスケープが不完全です。`Content-Type` は `text/xml`。
+  - (a) `channel` の `type` 属性 (`ChanInfo::channel_xml` の `content_type`) は、PCP の `type` で届いた文字列 (制御文字を除いただけ) をエスケープせずに書いている。`"`・`<`・`>` を入れられる。
+  - (b) ほかの属性 (名前・ジャンル・説明・URL・コメント・曲の情報) は `StrType::UnicodeSafe` (`pcstring::unknown_to_unicode` の `safe`) で `&` `"` `'` `<` `>` を実体参照にしているが、UTF-8 の先頭バイトに見えるバイト (2 バイト目が 0x80〜0xBF) のあとは、1 バイト目の上位の 1 の数だけ、続きのバイトかを確かめずにそのまま出すので、そこに入った `"` や `<` はエスケープされない (C++ 版と同じ)。
+  - XML の構造 (属性や要素) を書き換えたり、`XmlNode::write` の属性の解析を失敗させて viewxml を出せなくしたりできる。viewxml を読むほかのツールに偽の値を渡せる。管理者がブラウザーで開いたときに script まで動かせるかは確かめていない ((b) は不正な UTF-8 になるのでブラウザーでは読めなくなるが、(a) は正しい UTF-8 のまま入れられる)。
+  - 案: `XmlNode` を、名前と生の値の組で持ち、書き出すときに値を XML のエスケープ (`&` `<` `>` `"` `'` と制御文字) をするように変える (`channel_xml`・`track_xml` は `UnicodeSafe` でなく `Unicode` で変換して渡す)。`unknown_to_unicode` も、続くバイトがすべて 0x80〜0xBF のときだけ UTF-8 の 1 文字とみなし、そうでなければ先頭バイトを 1 バイトの文字として扱う。PCP の `type` は受け取るときに英数字だけ (短いもの) に限ることも考える。
+- [ ] #32 メディアのパーサーが、配信元の入力しだいで大きなメモリを使います。MKV は 1 つの要素を 256 MB (`mkv::MAX_SIZE`) までまるごと読み、Cluster はさらに `send_cluster` の中で要素ごとに複製するので、1 本の配信で数百 MB になりうる。ヘッダーに入る要素 (Cluster より前) も、`MAX_DATALEN` を超えて送れないと分かっていても最後まで読む。MP4 はボックスを 64 MB まで、FLV はタグを 16 MB まで受け付ける (先に長さ分のバッファを作る)。配信元は管理者が選ぶもの (HTTP Push は LAN からだけ、ICY はパスワード、URL は管理者が入力) なので影響は小さいが、URL の配信元が平文の HTTP なら通り道で書き換えられる。
+  - 案: MKV の Cluster より前の要素は、ヘッダーに入りきらない長さなら読まずに誤りにする。Cluster と MP4 のボックスの上限を下げる (例えば 16 MB)。`send_cluster` は複製せずに区切りの位置だけで送る。
+
+見て、問題がなかったもの:
+
+- JSON のパーサー (`json::parse`): ネットワークから受け取るもの (JSON-RPC の要求、portcheck の応答) は、解析の前に入れ子の深さを確かめている (#15)。ほかはこのノードが書いたファイルと内部の状態だけ。
+- XML のパーサー (`xml::read`): 使うのは uptest の yp4g.xml だけで、タグ 1 つ・内容 1 つの長さに上限があり (100 KB)、応答の本体も 32 MB まで。木は再帰せずにたどる。
+- 正規表現 (`server/regex.rs`): パターンはコードの定数と同梱のテンプレート (`navbar.html` の `request.path =~ "..."`) だけで、外から指定できない。照合は明示的なスタックで行う。相手のエージェント名や IP アドレスの文字列への照合も、パターンが単純なので時間はかからない。
+- ini の読み書き (`server/ini.rs`): 書くときに値の制御文字を除き、1 行 255 バイトに収まるように切るので、ネットワークから受け取った名前などで行を書き足せない。読むときも 255 バイトを超えた分は捨てる。`sourceURL` (`pipe:` などで起動しうる) は管理者が入力した URL (`Channel::start_url`) だけが入る。
+- AMF0 (FLV のメタデータ): 入れ子の深さと値の数に上限がある。
+- OGG・MP3: 長さはどれも `MAX_DATALEN` などで確かめている。時刻の計算で大きな値や NaN になっても、待つ時間は 60 秒までに収まる (`Channel::sleep_until`)。MP3 の ICY メタデータが 1024 バイトを超えると残りを読み捨てずにずれる (C++ 版と同じ。セキュリティの問題ではない)。

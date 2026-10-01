@@ -222,3 +222,11 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   PCP の root atom をどのノードから届いても受け付ける。管理パスワード・Basic 認証・放送のパスワード・
   ログインの Cookie の ID の比較も定数時間ではない (#28。C++ 版は締め出しもないので、応答までの時間から
   1 文字ずつ当てる余地がより大きい)。
+* 移行後のセキュリティの見直し (2026-10-01。`docs/security-review-todo.md` の #29〜#32。Rust 版はまだ直していない):
+  速度測定 (`UptestEndpoint::takeSpeedtest` → `postRandomData`) は、yp4g.xml の `uptest_srv` の `addr`・`port`・
+  `object` をそのまま POST の宛先とパスに使い、宛先の制限も改行の確認もない (既定の登録先は平文の HTTP)。
+  `post_size` にも上限がない。`CMD_speedtest_cached_xml` は、取ってきた yp4g.xml を `application/xml` で
+  管理画面と同じオリジンから返す。viewxml (`ChanInfo::createChannelXML`) は、`type` 属性に PCP で届いた
+  `contentType` をエスケープせずに書き、ほかの属性も `T_UNICODESAFE` の変換が UTF-8 の先頭バイトのあとの
+  バイトを確かめずに通すので、`"` や `<` が残りうる。メディアのパーサーも、MKV の要素 (256 MB まで) などを
+  まるごとメモリに読む。
