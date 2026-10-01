@@ -1102,6 +1102,86 @@ fn admin_distrusts_own_agent() {
     assert_eq!(r.code, 200);
 }
 
+/// ほかのサイトのページから送らされた要求 (CSRF) と、Host がほかのドメイン名の要求 (DNS リバインディング) では、
+/// localhost からでも HTTP Push を受け付けず、中継も始めない。利用者がリンクを押して開いたものと、
+/// ヘッダーのない要求 (プレイヤーなど) はこれまでどおり (security-review #34)
+#[test]
+fn cross_site_cannot_start_relay() {
+    let s = Server::start(17230);
+    let p = s.port;
+    let mut n = 0;
+    // 要求を送り、中継を始めたか (ヒットの先につなぎに来たか) を確かめる。ケースごとに別のチャンネル ID と待ち受けを使う
+    let mut check = |label: &str, host: &str, extra: &str, path: &str, want: bool| {
+        n += 1;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let path = path.replacen("{}", &format!("{:032x}", 0xa000 + n), 1).replacen("{}", &listener.local_addr().unwrap().to_string(), 1);
+        let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+        // 中継を始めると応答までしばらく待つが、応答は見ないので待たない
+        c.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        c.write_all(format!("GET {} HTTP/1.1\r\nHost: {}\r\n{}\r\n", path, host, extra).as_bytes()).unwrap();
+        let mut buf = Vec::new();
+        let _ = c.read_to_end(&mut buf);
+        let t0 = Instant::now();
+        let mut got = false;
+        while t0.elapsed() < Duration::from_secs(if want { 10 } else { 2 }) {
+            if listener.accept().is_ok() {
+                got = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(got, want, "{}", label);
+    };
+    let lo = format!("127.0.0.1:{}", p);
+    let cross = "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: video\r\n";
+    let navigate = "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\nSec-Fetch-User: ?1\r\n";
+
+    // 中継を始めないもの
+    for (label, host, extra, path) in [
+        ("stream: cross-site", lo.as_str(), cross, "/stream/{}.flv?tip={}"),
+        ("stream: Origin", lo.as_str(), "Origin: http://evil.example.com\r\n", "/stream/{}.flv?tip={}"),
+        ("stream: rebinding", "evil.example.com", "", "/stream/{}.flv?tip={}"),
+        ("pls: cross-site", lo.as_str(), cross, "/pls/{}?tip={}"),
+        ("pls: rebinding", "evil.example.com", "", "/pls/{}?tip={}"),
+        ("play.html: cross-site", lo.as_str(), "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: iframe\r\n", "/html/en/play.html?id={}%3Ftip%3D{}"),
+    ] {
+        check(label, host, extra, path, false);
+    }
+    // これまでどおり中継を始めるもの
+    for (label, host, extra, path) in [
+        ("stream: no headers", lo.as_str(), "", "/stream/{}.flv?tip={}"),
+        ("stream: same-origin", lo.as_str(), "Sec-Fetch-Site: same-origin\r\n", "/stream/{}.flv?tip={}"),
+        ("stream: LAN name", "mypc.local", "", "/stream/{}.flv?tip={}"),
+        ("pls: user navigation", lo.as_str(), navigate, "/pls/{}?tip={}"),
+        ("play.html: user navigation", lo.as_str(), navigate, "/html/en/play.html?id={}%3Ftip%3D{}"),
+    ] {
+        check(label, host, extra, path, true);
+    }
+
+    // HTTP Push: ほかのサイトのページからの POST (利用者がフォームを送ったものも) と DNS リバインディングは断る
+    let push = |host: &str, extra: &str| {
+        let head = format!("POST /?name=csrf&type=FLV HTTP/1.1\r\nHost: {}\r\nContent-Type: video/x-flv\r\n{}\r\n", host, extra);
+        request(p, &head, b"FLV\x01\x01\x00\x00\x00\x09\0\0\0\0").code
+    };
+    assert_eq!(push(&lo, "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\n"), 403);
+    assert_eq!(push(&lo, navigate), 403);
+    assert_eq!(push(&lo, "Origin: null\r\n"), 403);
+    assert_eq!(push("evil.example.com", ""), 403);
+    // ヘッダーのない配信ソフトからは、これまでどおり受け付ける (中継のチャンネルも残っているかもしれないので名前で探す)
+    let _push = push_flv(p, "pushok");
+    let t0 = Instant::now();
+    loop {
+        let names: Vec<String> = wait_channels(p, 0).into_iter().map(|(name, _)| name).collect();
+        assert!(!names.iter().any(|n| n == "csrf"), "{:?}", names);
+        if names.iter().any(|n| n == "pushok") {
+            break;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(15), "pushok ができない: {:?}", names);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 // ---------------------------------------------------------------- TLS
 
 /// テストの自己署名の証明書 server.crt と鍵 server.key を `dir` に作る

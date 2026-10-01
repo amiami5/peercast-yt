@@ -197,9 +197,11 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
             if !is_localhost(&c.sv.host()) && (!c.sv.is_allowed(c.pc, allow) || !c.sv.is_filtered(c.pc, filter)) {
                 return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
             }
-            // `?ip=` / `?tip=` でヒットを足せるのも、中継を始めさせられる要求だけ (#25)
-            let trusted = c.sv.is_private(c.pc) || has_valid_auth_token(c.pc, &arg);
-            return svt::trigger_channel(c, &arg, proto, relay_allowed && trusted, trusted);
+            // `?ip=` / `?tip=` でヒットを足せるのも、中継を始めさせられる要求だけ (#25)。
+            // ほかのサイトのページから送らされたものでないかをヘッダーで見るので、先に読む (#34)
+            let req = svt::read_stream_headers(c)?;
+            let trusted = trust_private(c.pc, c.sv, &req.headers, true) || has_valid_auth_token(c.pc, &arg);
+            return svt::trigger_channel(c, &arg, proto, relay_allowed && trusted, trusted, &req);
         }
         _ => {}
     }
@@ -288,9 +290,9 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                 return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
             }
             let arg = from(5);
-            let relay = ctx.sv.is_private(ctx.pc) || has_valid_auth_token(ctx.pc, &arg);
-            let (info, found) = ctx.pc.servmgr.get_channel(ctx.pc, &arg, relay, relay);
             http.read_headers()?;
+            let relay = trust_private(ctx.pc, ctx.sv, &http.headers, true) || has_valid_auth_token(ctx.pc, &arg);
+            let (info, found) = ctx.pc.servmgr.get_channel(ctx.pc, &arg, relay, relay);
             if found {
                 crate::log_debug!("User-Agent: {}", b(&http.headers.get(b"User-Agent")));
                 handshake_pls(ctx, http, &info)
@@ -545,6 +547,10 @@ fn handshake_http_push(c: &mut Conn, args: &[u8]) -> Result<()> {
         http.read_headers()?;
         http.headers.clone()
     };
+    // ほかのサイトのページから送らされたもの (fetch の本体はそのまま配信できる) と DNS リバインディングは断る (#34)
+    if !trust_private(pc, c.sv, &headers, false) {
+        return Err(http_error(HTTP_SC_FORBIDDEN, 403));
+    }
     // 返事を書かずに配信のデータを読み始めるので、要求を読み終えるまでの期限はここで外す
     c.sock()?.end_handshake();
     if q.get(b"name").is_empty() {
@@ -720,6 +726,30 @@ fn trust_localhost(ctx: &Ctx, host: &[u8], user_agent: &[u8]) -> bool {
     true
 }
 
+/// ほかのサイトのページから送らされた要求か (CSRF)。`navigate_ok` なら、利用者がリンクを押して開いたもの
+/// (YP のサイトの再生のリンクなど) は除く
+fn cross_site(h: &Headers, navigate_ok: bool) -> bool {
+    crate::http::is_cross_origin_request(&h.get(b"Sec-Fetch-Site"), &h.get(b"Origin"), &h.get(b"Host"))
+        && !(navigate_ok && crate::http::is_user_navigation(&h.get(b"Sec-Fetch-Mode"), &h.get(b"Sec-Fetch-User")))
+}
+
+/// 中継を始めさせたり配信を受け付けたりしてよい、手元 (private) からの要求か。ほかのサイトのページから
+/// 送らされた要求と、Host が手元の名前でないもの (DNS リバインディング) は信じない (#34)
+fn trust_private(pc: &Peercast, sv: &Servent, h: &Headers, navigate_ok: bool) -> bool {
+    if !sv.is_private(pc) {
+        return false;
+    }
+    if !crate::http::is_lan_host_header(&h.get(b"Host")) {
+        crate::log_warn!("Host header is not a local name; not trusting private: {}", b(&h.get(b"Host")));
+        return false;
+    }
+    if cross_site(h, navigate_ok) {
+        crate::log_warn!("Cross-origin request; not trusting private");
+        return false;
+    }
+    true
+}
+
 /// `handshakeAuth`: 認証できれば true。できなければ応答を書いて false
 fn handshake_auth(ctx: &Ctx, http: &mut Http, args: &[u8], reject_cross_origin: bool) -> Result<bool> {
     http.read_headers()?;
@@ -831,11 +861,16 @@ fn handshake_local_file(ctx: &Ctx, http: &mut Http, fn_: &[u8]) -> Result<()> {
         let chan_state = |id: &[u8]| pc.chanmgr.find_channel_by_id(&crate::gnuid::from_str(id)).map(|c| c.state(pc));
         match lf.page {
             servhs::LocalPage::Play => {
-                // 視聴ページなら、チャンネルのリレーを始めておく
+                // 視聴ページなら、チャンネルのリレーを始めておく。ほかのサイトのページから送らされたもの
+                // (利用者がリンクを押して開いたものは除く) なら、`id` に `?ip=` を入れても中継は始めない (#34)
                 if !lf.split_ok || lf.id.is_empty() {
                     return Err(http_error(HTTP_SC_BADREQUEST, 400));
                 }
-                let (_, found) = pc.servmgr.get_channel(pc, &lf.id, true, true);
+                let relay = !cross_site(&req.headers, true);
+                if !relay {
+                    crate::log_warn!("Cross-origin request; not starting relay");
+                }
+                let (_, found) = pc.servmgr.get_channel(pc, &lf.id, relay, relay);
                 if !found {
                     return Err(http_error(HTTP_SC_NOTFOUND, 404));
                 }

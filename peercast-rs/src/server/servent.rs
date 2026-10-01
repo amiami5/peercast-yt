@@ -11,7 +11,7 @@ use super::chaninfo::{self as ci, ChanInfo};
 use super::cookie::Cookie;
 use super::error::{Error, Result};
 use super::host::{Host, Ip};
-use super::http::{Http, HTTP_SC_OK, HTTP_SC_NOTFOUND, HTTP_SC_UNAVAILABLE, MIME_MP3, MIME_XPCP, PCX_AGENT};
+use super::http::{Headers, Http, HTTP_SC_OK, HTTP_SC_NOTFOUND, HTTP_SC_UNAVAILABLE, MIME_MP3, MIME_XPCP, PCX_AGENT};
 use super::packetbuf::{self as pb, ChanPacket};
 use super::pcpconst::*;
 use super::pcpstream::{PcpShared, PcpStream};
@@ -1257,30 +1257,28 @@ pub fn is_termination_candidate(hit: &ChanHit) -> bool {
 static STREAM_REQUEST: Mutex<()> = Mutex::new(());
 
 /// `handshakeStream`: /stream/ と /channel/ の要求に答える。流せるなら true
-fn handshake_stream(c: &mut Conn, info: &ChanInfo) -> Result<bool> {
+fn handshake_stream(c: &mut Conn, info: &ChanInfo, req: &StreamHeaders) -> Result<bool> {
     let pc = c.pc;
     let sv = c.sv;
-    // ヘッダーを読む
+    // ヘッダーを見る
     let mut got_pcp = false;
     let mut req_pos: u32 = 0;
-    {
-        let mut http = Http::new(c.sock()?);
-        while http.next_header()? {
-            let arg = match http.arg_str() {
-                Some(a) => a.to_vec(),
-                None => continue,
-            };
-            if http.is_header(PCX_HS_PCP) {
-                got_pcp = crate::http::atoi(&arg) != 0;
-            } else if http.is_header(PCX_HS_POS) {
-                req_pos = crate::http::atoi(&arg) as u32;
-            } else if http.is_header("icy-metadata") {
-                sv.st().add_metadata = crate::http::atoi(&arg) > 0;
-            } else if http.is_header("User-Agent:") {
-                sv.st().agent.assign(&arg);
-            }
-            crate::log_debug!("Stream: {}", String::from_utf8_lossy(&http.cmd_line));
+    for (line, arg) in &req.lines {
+        let arg = match arg {
+            Some(a) => a,
+            None => continue,
+        };
+        let is_header = |hs: &str| crate::http::stristr(line, hs.as_bytes()).is_some();
+        if is_header(PCX_HS_PCP) {
+            got_pcp = crate::http::atoi(arg) != 0;
+        } else if is_header(PCX_HS_POS) {
+            req_pos = crate::http::atoi(arg) as u32;
+        } else if is_header("icy-metadata") {
+            sv.st().add_metadata = crate::http::atoi(arg) > 0;
+        } else if is_header("User-Agent:") {
+            sv.st().agent.assign(arg);
         }
+        crate::log_debug!("Stream: {}", String::from_utf8_lossy(line));
     }
 
     let mut chan_ready = false;
@@ -1547,7 +1545,7 @@ fn return_hits(c: &mut Conn, info: &ChanInfo, rhost: &Host, remote_id: &[u8; 16]
 }
 
 /// `triggerChannel`: 指定されたチャンネルを流す
-pub fn trigger_channel(c: &mut Conn, s: &[u8], proto: i32, relay: bool, hints: bool) -> Result<()> {
+pub fn trigger_channel(c: &mut Conn, s: &[u8], proto: i32, relay: bool, hints: bool, req: &StreamHeaders) -> Result<()> {
     let pc = c.pc;
     let (info, _) = pc.servmgr.get_channel(pc, s, relay, hints);
     {
@@ -1555,15 +1553,32 @@ pub fn trigger_channel(c: &mut Conn, s: &[u8], proto: i32, relay: bool, hints: b
         st.ty = if proto == ci::SP_PCP { T_RELAY } else { T_DIRECT };
         st.output_protocol = proto;
     }
-    process_stream(c, &info)
+    process_stream(c, &info, req)
+}
+
+/// ストリームの要求のヘッダー。中継を始めてよいかをヘッダーで決めるので、チャンネルを探す前に読む
+pub struct StreamHeaders {
+    /// 行と、`:` のあとの値
+    lines: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+    pub headers: Headers,
+}
+
+/// ストリームの要求のヘッダーを読む
+pub fn read_stream_headers(c: &mut Conn) -> Result<StreamHeaders> {
+    let mut http = Http::new(c.sock()?);
+    let mut lines = Vec::new();
+    while http.next_header()? {
+        lines.push((http.cmd_line.clone(), http.arg_str().map(|a| a.to_vec())));
+    }
+    Ok(StreamHeaders { lines, headers: http.headers.clone() })
 }
 
 /// `processStream`
-fn process_stream(c: &mut Conn, info: &ChanInfo) -> Result<()> {
+fn process_stream(c: &mut Conn, info: &ChanInfo, req: &StreamHeaders) -> Result<()> {
     let pc = c.pc;
     let sv = c.sv;
     sv.set_status(S_HANDSHAKE);
-    if !handshake_stream(c, info)? {
+    if !handshake_stream(c, info, req)? {
         return Ok(());
     }
     if ci::is_set(&info.id) {

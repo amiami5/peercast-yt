@@ -173,6 +173,26 @@ pub fn is_loopback_host_header(host: &[u8]) -> bool {
     dots == 3
 }
 
+/// Host ヘッダーが、手元 (ループバックか LAN) の名前か IP アドレスか。ループバックの名前と IP アドレスのほかに、
+/// ドットのない名前と、`.local`・`.lan`・`.home.arpa`・`.internal` で終わる名前を手元とみなす。
+/// ほかのドメイン名は、ほかのサイトが名前を引いた結果を手元のアドレスに変えたもの (DNS リバインディング) かもしれない
+pub fn is_lan_host_header(host: &[u8]) -> bool {
+    if is_loopback_host_header(host) {
+        return true;
+    }
+    let end = host.iter().position(|&c| c == b':').unwrap_or(host.len());
+    let name = host[..end].to_ascii_lowercase();
+    if name.is_empty() || !name.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'-' || c == b'.') {
+        return false;
+    }
+    !name.contains(&b'.') || [&b".local"[..], b".lan", b".home.arpa", b".internal"].iter().any(|s| name.ends_with(s))
+}
+
+/// 利用者がリンクを押して開いたページか (`Sec-Fetch-Mode: navigate` と `Sec-Fetch-User: ?1`)
+pub fn is_user_navigation(sec_fetch_mode: &[u8], sec_fetch_user: &[u8]) -> bool {
+    sec_fetch_mode.eq_ignore_ascii_case(b"navigate") && sec_fetch_user == b"?1"
+}
+
 // ---------------------------------------------------------------- 日付
 
 const DAYS_OF_WEEK: [&[u8]; 7] = [b"Sun", b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat"];
@@ -465,6 +485,19 @@ mod tests {
         assert!(is_loopback_host_header(b"127.0.0.1:7144"));
         assert!(!is_loopback_host_header(b"example.com"));
         assert!(!is_loopback_host_header(b":7144"));
+        assert!(is_lan_host_header(b"127.0.0.1:7144"));
+        assert!(is_lan_host_header(b"[fe80::1]:7144"));
+        assert!(is_lan_host_header(b"mypc:7144"));
+        assert!(is_lan_host_header(b"MyPC.Local:7144"));
+        assert!(is_lan_host_header(b"nas.home.arpa"));
+        assert!(!is_lan_host_header(b"evil.example.com:7144"));
+        assert!(!is_lan_host_header(b"localhost.evil.com"));
+        assert!(!is_lan_host_header(b"evil.local.com"));
+        assert!(!is_lan_host_header(b":7144"));
+        assert!(!is_lan_host_header(b"a b"));
+        assert!(is_user_navigation(b"navigate", b"?1"));
+        assert!(!is_user_navigation(b"navigate", b""));
+        assert!(!is_user_navigation(b"no-cors", b"?1"));
     }
 
     #[test]
