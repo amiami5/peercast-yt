@@ -63,13 +63,16 @@ pub struct PcpStream {
     pub peer: Host,
     /// rootHost (YP) への COUT か。root atom (更新間隔やルートのメッセージなど) はこのときだけ使う
     pub from_root: bool,
+    /// チャンネルの中継元 (上流) への接続なら、そのチャンネルの ID。ストリームのデータ (`pkt`) と
+    /// チャンネルの情報の更新は、このチャンネルについてだけ受け付ける
+    pub upstream_of: Option<[u8; 16]>,
 }
 
 impl PcpStream {
     pub fn new(remote_id: [u8; 16]) -> PcpStream {
         let in_data = PacketBuffer::new();
         in_data.init_accept(pb::T_PCP);
-        PcpStream { shared: Arc::new(PcpShared::new(remote_id)), in_data, last_packet_time: 0, next_root_packet: 0, peer: Host::none(), from_root: false }
+        PcpStream { shared: Arc::new(PcpShared::new(remote_id)), in_data, last_packet_time: 0, next_root_packet: 0, peer: Host::none(), from_root: false, upstream_of: None }
     }
 
     /// `init`
@@ -135,7 +138,7 @@ impl PcpStream {
     /// 受け取ったパケットの処理 (`procAtom`)
     fn proc_packet(&mut self, pc: &Arc<Peercast>, data: &mut [u8], bcs: &mut BroadcastState) -> Result<i32> {
         let mut state = pcp::State { bcs: bcs.clone(), next_root_packet: self.next_root_packet };
-        let mut host = PcpHost { pc, shared: &self.shared, peer: self.peer, from_root: self.from_root, ch: None, has_chl: false, new_info: ChanInfo::new(), error: None };
+        let mut host = PcpHost { pc, shared: &self.shared, peer: self.peer, from_root: self.from_root, upstream_of: self.upstream_of, ch: None, has_chl: false, new_info: ChanInfo::new(), error: None };
         let r = pcp::proc_packet(&mut host, data, &mut state);
         *bcs = state.bcs;
         self.next_root_packet = state.next_root_packet;
@@ -211,6 +214,7 @@ struct PcpHost<'a> {
     shared: &'a Arc<PcpShared>,
     peer: Host,
     from_root: bool,
+    upstream_of: Option<[u8; 16]>,
     ch:Option<Arc<Channel>>,
     has_chl: bool,
     new_info: ChanInfo,
@@ -244,6 +248,11 @@ impl PcpHost<'_> {
             pcp::InfoField::TrackUrl => &mut i.track.contact,
             pcp::InfoField::TrackAlbum => &mut i.track.album,
         }
+    }
+
+    /// このチャンネルの上流からの接続か
+    fn is_upstream(&self, ch: &Channel) -> bool {
+        self.upstream_of == Some(ch.id())
     }
 
     fn find_chan(&mut self, id: &[u8; 16]) {
@@ -463,9 +472,10 @@ impl pcp::Host for PcpHost<'_> {
             if p.data.len() > MAX_DATALEN {
                 return Err(Error::stream("Data size too large"));
             }
+            // 上流でない接続 (下流の中継先や CIN、ほかのチャンネルの上流) から届いたものは読み飛ばす
             let ch = match &self.ch {
-                Some(c) => c.clone(),
-                None => return Ok(()),
+                Some(c) if self.is_upstream(c) => c.clone(),
+                _ => return Ok(()),
             };
             let mut pack = ChanPacket { ty: p.kind, pos: p.pos, sync: 0, cont: p.cont, data: p.data.clone() };
             let stream_pos = ch.st().stream_pos;
@@ -555,7 +565,7 @@ impl pcp::Host for PcpHost<'_> {
             }
         }
         if let Some(ch) = &self.ch {
-            if !ch.is_broadcasting() {
+            if !ch.is_broadcasting() && self.is_upstream(ch) {
                 ch.update_info(pc, &new_info);
             }
         }
