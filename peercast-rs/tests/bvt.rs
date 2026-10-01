@@ -1249,6 +1249,114 @@ fn pcp_data_from_upstream_only() {
     }
 }
 
+/// 届いた atom から、`bcst` の中の `chan` の子を探す。`bcst` が届かずに `limit` を過ぎたら `None`
+fn read_bcst_chan(s: &mut TcpStream, limit: Duration) -> Option<Vec<Atom>> {
+    let t0 = Instant::now();
+    while t0.elapsed() < limit {
+        if let Atom::Parent(id, children) = read_atom(s) {
+            if &id == b"bcst" {
+                for a in children {
+                    if let Atom::Parent(cid, cc) = a {
+                        if &cid == b"chan" {
+                            return Some(cc);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 引数のない GIV は、COUT が相手から QUIT を受けた直後だけ受け付け、放送 ID は YP への COUT にだけ送る
+/// (security-review #36)
+#[test]
+fn giv_cout_only_after_quit() {
+    let yp = std::net::TcpListener::bind("127.0.0.1:17234").unwrap();
+    let src = Server::start_with(17233, |ini| ini.replacen("rootHost = ", "rootHost = 127.0.0.1:17234", 1));
+    let p = src.port;
+    // 1 つを止めても配信を続け、COUT が切れないように 2 つ配信する
+    let _push1 = push_flv(p, "givtest1");
+    let _push2 = push_flv(p, "givtest2");
+    let chans = wait_channels(p, 2);
+
+    // 引数のない GIV を送り、最初の 12 バイト (受け付けたなら `pcp\n` の atom) を読む。
+    // 受け付けたか (COUT を始めたか) と、ソケットと、読んだものを返す
+    let giv = || {
+        let mut s = TcpStream::connect(("127.0.0.1", p)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        s.write_all(b"GIV\r\n\r\n").unwrap();
+        let mut buf = [0u8; 12];
+        let ok = s.read_exact(&mut buf).is_ok() && &buf[..4] == b"pcp\n";
+        (ok, s, String::from_utf8_lossy(&buf).into_owned())
+    };
+    let oleh = |s: &mut TcpStream| {
+        let mut out = AtomBuf::default();
+        out.parent(id4(b"oleh"), 2);
+        out.string(id4(b"agnt"), b"PeerCast/0.1218");
+        out.bytes(id4(b"sid"), b"fake-yp-session!");
+        s.write_all(&out.0).unwrap();
+    };
+
+    // 偽の YP が COUT を受ける
+    yp.set_nonblocking(true).unwrap();
+    let t0 = Instant::now();
+    let mut c = loop {
+        match yp.accept() {
+            Ok((c, _)) => break c,
+            Err(_) => {
+                assert!(t0.elapsed() < Duration::from_secs(20), "COUT がつなぎに来ない");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    };
+    c.set_nonblocking(false).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    assert!(matches!(read_atom(&mut c), Atom::Data(id, _) if &id == b"pcp\n"));
+    match read_atom(&mut c) {
+        Atom::Parent(id, cc) if &id == b"helo" => assert!(child(&cc, b"bcid").is_some(), "YP への helo に放送 ID がない"),
+        _ => panic!("helo expected"),
+    }
+    oleh(&mut c);
+
+    // YP につないでいる間 (QUIT を受ける前) の GIV は断る
+    let (ok, _s, got) = giv();
+    assert!(!ok && got.contains("503"), "QUIT を受ける前の GIV を断らない: {:?}", got);
+
+    // YP へのトラッカーの更新には放送 ID を入れる
+    let mut out = AtomBuf::default();
+    out.parent(id4(b"root"), 1);
+    out.parent(id4(b"upd"), 0);
+    c.write_all(&out.0).unwrap();
+    let cc = read_bcst_chan(&mut c, Duration::from_secs(10)).expect("YP にトラッカーの更新が届かない");
+    assert!(child(&cc, b"bcid").is_some(), "YP へのトラッカーの更新に放送 ID がない");
+
+    // YP が断る (QUIT)。ノードが閉じるまで読む
+    let mut out = AtomBuf::default();
+    out.int(id4(b"quit"), 1003);
+    c.write_all(&out.0).unwrap();
+    let mut buf = [0u8; 4096];
+    while matches!(c.read(&mut buf), Ok(n) if n > 0) {}
+
+    // QUIT のあとの GIV は受け付け、そのソケットで COUT を始める。放送 ID は送らない
+    let (ok, mut g, got) = giv();
+    assert!(ok, "QUIT のあとの GIV で COUT を始めない: {}", got);
+    match read_atom(&mut g) {
+        Atom::Parent(id, cc) if &id == b"helo" => assert!(child(&cc, b"bcid").is_none(), "GIV の相手への helo に放送 ID を入れた"),
+        _ => panic!("helo expected"),
+    }
+    oleh(&mut g);
+
+    // 1 つ止めると、トラッカーの更新が届く。放送 ID は入れない
+    jrpc_call(p, "stopChannel", &format!(r#"["{}"]"#, chans[0].1));
+    let cc = read_bcst_chan(&mut g, Duration::from_secs(20)).expect("GIV の相手にトラッカーの更新が届かない");
+    assert!(child(&cc, b"bcid").is_none(), "GIV の相手へのトラッカーの更新に放送 ID を入れた");
+
+    // 使ったあとは、次に QUIT を受けるまで GIV を受け付けない
+    let (ok, _s, got) = giv();
+    assert!(!ok && got.contains("503"), "2 つ目の GIV を断らない: {:?}", got);
+}
+
 // ---------------------------------------------------------------- TLS
 
 /// テストの自己署名の証明書 server.crt と鍵 server.key を `dir` に作る

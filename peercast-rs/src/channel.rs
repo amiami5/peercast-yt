@@ -54,17 +54,20 @@ fn write_bcst_version(out: &mut AtomBuf) {
     out.short(PCP_BCST_VERSION_EX_NUMBER, PCP_CLIENT_VERSION_EX_NUMBER as i16);
 }
 
-/// `writeTrackerUpdateAtom` の atom (`hit` は C++ 側が `initLocal` で作ったもの)
-pub fn tracker_update_atom(out: &mut AtomBuf, session_id: &[u8; 16], broadcast_id: &[u8; 16], info: &Info, hit: &Hit) {
+/// `writeTrackerUpdateAtom` の atom (`hit` は C++ 側が `initLocal` で作ったもの)。
+/// 放送 ID (`broadcast_id`) は YP に送るときだけ渡す (C++ 版はどの COUT にも送る)
+pub fn tracker_update_atom(out: &mut AtomBuf, session_id: &[u8; 16], broadcast_id: Option<&[u8; 16]>, info: &Info, hit: &Hit) {
     out.parent(PCP_BCST, 10);
     out.char(PCP_BCST_GROUP, PCP_BCST_GROUP_ROOT as u8);
     out.char(PCP_BCST_HOPS, 0);
     out.char(PCP_BCST_TTL, 7);
     out.bytes(PCP_BCST_FROM, session_id);
     write_bcst_version(out);
-    out.parent(PCP_CHAN, 4);
+    out.parent(PCP_CHAN, 3 + broadcast_id.is_some() as i32);
     out.bytes(PCP_CHAN_ID, &info.id);
-    out.bytes(PCP_CHAN_BCID, broadcast_id);
+    if let Some(bcid) = broadcast_id {
+        out.bytes(PCP_CHAN_BCID, bcid);
+    }
     chaninfo::write_info_atoms(out, info);
     chaninfo::write_track_atoms(out, &info.track);
     chanhit::write_atoms(out, hit, &info.id);

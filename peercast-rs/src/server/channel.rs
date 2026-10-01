@@ -467,14 +467,15 @@ impl Channel {
         self.update_info(pc, &new_info);
     }
 
-    /// `writeTrackerUpdateAtom`
-    pub fn write_tracker_update_atom(&self, pc: &Peercast, out: &mut AtomBuf) -> super::error::Result<()> {
+    /// `writeTrackerUpdateAtom`: `with_bcid` のときだけ放送 ID を入れる
+    pub fn write_tracker_update_atom(&self, pc: &Peercast, out: &mut AtomBuf, with_bcid: bool) -> super::error::Result<()> {
         let info = self.info();
         if !pc.chanmgr.has_hitlist_by_id(&info.id) {
             return Err(super::error::Error::stream("Broadcast channel has no hitlist"));
         }
         let hit = self.local_hit(pc, true);
-        crate::channel::tracker_update_atom(out, &pc.servmgr.session_id, &pc.chanmgr.broadcast_id(), &info.view(), &hit.view());
+        let bcid = pc.chanmgr.broadcast_id();
+        crate::channel::tracker_update_atom(out, &pc.servmgr.session_id, with_bcid.then_some(&bcid), &info.view(), &hit.view());
         Ok(())
     }
 
@@ -501,16 +502,30 @@ impl Channel {
         let ctime = sys::get_time();
         let last = self.st().last_tracker_update;
         if ctime.wrapping_sub(last) > 30 || force {
-            let mut out = AtomBuf::default();
-            if let Err(e) = self.write_tracker_update_atom(pc, &mut out) {
-                crate::log_error!("broadcastTrackerUpdate: {}", e);
-                return;
+            // 放送 ID があれば、どのチャンネルの `?auth=` も作れる。YP (`rootHost`) への COUT にだけ送り、
+            // ヒットリストから選んだトラッカーや GIV で来た相手には送らない
+            let mut packs = Vec::with_capacity(2);
+            for with_bcid in [false, true] {
+                let mut out = AtomBuf::default();
+                if let Err(e) = self.write_tracker_update_atom(pc, &mut out, with_bcid) {
+                    crate::log_error!("broadcastTrackerUpdate: {}", e);
+                    return;
+                }
+                match ChanPacket::new(pb::T_PCP, &out.0, 0) {
+                    Ok(p) => packs.push(p),
+                    Err(_) => return,
+                }
             }
-            let mut pack = match ChanPacket::new(pb::T_PCP, &out.0, 0) {
-                Ok(p) => p,
-                Err(_) => return,
-            };
-            let cnt = pc.servmgr.broadcast_packet(&mut pack, &[0; 16], &pc.servmgr.session_id, sv_id, super::servent::T_COUT);
+            let sid = pc.servmgr.session_id;
+            let cnt = pc
+                .servmgr
+                .servents()
+                .iter()
+                .filter(|sv| {
+                    let to_yp = sv.to_yp.load(std::sync::atomic::Ordering::SeqCst);
+                    sv.send_packet(&packs[to_yp as usize], &[0; 16], &sid, sv_id, super::servent::T_COUT)
+                })
+                .count();
             if cnt != 0 {
                 crate::log_debug!("Sent tracker update for {} to {} client(s)", String::from_utf8_lossy(&self.st().info.name.data), cnt);
                 self.st().last_tracker_update = ctime;
