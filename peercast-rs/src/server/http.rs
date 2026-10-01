@@ -482,9 +482,20 @@ impl<'a> Http<'a> {
     }
 
     /// `send(const HTTPRequest&)`: 要求を書いて応答を読む
+    ///
+    /// 要求の行やヘッダーに CR・LF・NUL があれば、何も書かずに誤りにする (外から受け取った値で
+    /// 要求を書き足されないように。security-review #29)
     pub fn send_request(&mut self, req: &Request) -> Result<Response> {
         let path_query =
             if req.query_string.is_empty() { req.path.clone() } else { [&req.path[..], b"?", &req.query_string].concat() };
+        let bad = |s: &[u8]| s.iter().any(|&c| c == b'\r' || c == b'\n' || c == 0);
+        if bad(&req.method)
+            || bad(&path_query)
+            || bad(&req.protocol_version)
+            || req.headers.iter().any(|(k, v)| bad(k) || k.contains(&b':') || bad(v))
+        {
+            return Err(Error::argument("request line or header contains CR, LF or NUL"));
+        }
         self.write_line_f(&[&req.method, b" ", &path_query, b" ", &req.protocol_version])?;
         for (k, v) in req.headers.iter() {
             let k = cap(k);
@@ -664,6 +675,36 @@ mod tests {
         assert_eq!(r.query_string, b"x=1");
         assert_eq!(r.headers.get(b"host"), b"localhost:7144");
         assert!(r.headers.has_key_with_value(b"Cookie", b" A=B "));
+    }
+
+    #[test]
+    fn send_request_rejects_crlf() {
+        let host: &[u8] = b"a";
+        let reqs = [
+            Request::new(b"POST", b"/x\r\nGET /admin", b"HTTP/1.0", Headers::from(&[("Host", host)])),
+            Request::new(b"GET", b"/x\n", b"HTTP/1.0", Headers::from(&[("Host", host)])),
+            Request::new(b"GET\0", b"/x", b"HTTP/1.0", Headers::from(&[("Host", host)])),
+            Request::new(b"GET", b"/x", b"HTTP/1.0\r\n", Headers::from(&[("Host", host)])),
+            Request::new(b"GET", b"/x", b"HTTP/1.0", Headers::from(&[("Host", &b"a\r\nX-Y: z"[..])])),
+            Request::new(b"GET", b"/x", b"HTTP/1.0", Headers::from(&[("Host", &b"a\0"[..])])),
+            Request::new(b"GET", b"/x", b"HTTP/1.0", Headers::from(&[("X\r\nY", host)])),
+            Request::new(b"GET", b"/x", b"HTTP/1.0", Headers::from(&[("X: Y", host)])),
+        ];
+        for req in reqs {
+            let mut s = StringStream::from(b"HTTP/1.0 200 OK\r\n\r\n".to_vec());
+            assert!(Http::new(&mut s).send_request(&req).is_err());
+            // 何も書いていない
+            assert_eq!(s.into_inner(), b"HTTP/1.0 200 OK\r\n\r\n");
+        }
+        let mut req = Request::new(b"GET", b"/x", b"HTTP/1.0", Headers::from(&[("Host", host)]));
+        req.query_string = b"a\r\n".to_vec();
+        let mut s = StringStream::from(b"HTTP/1.0 200 OK\r\n\r\n".to_vec());
+        assert!(Http::new(&mut s).send_request(&req).is_err());
+        let ok = Request::new(b"GET", b"/x?a=1", b"HTTP/1.0", Headers::from(&[("Host", host)]));
+        // StringStream は書いたものを読む位置に書くので、応答は読めない (書いたものだけ確かめる)
+        let mut s = StringStream::new();
+        let _ = Http::new(&mut s).send_request(&ok);
+        assert!(s.into_inner().starts_with(b"GET /x?a=1 HTTP/1.0\r\nHost: a\r\n\r\n"));
     }
 
     #[test]
