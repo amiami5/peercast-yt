@@ -191,22 +191,20 @@ impl ChanHit {
 
     /// `createXML`
     pub fn xml(&self) -> XmlNode {
-        XmlNode::new(format!(
-            "host ip=\"{}\" hops=\"{}\" listeners=\"{}\" relays=\"{}\" uptime=\"{}\" push=\"{}\" relay=\"{}\" direct=\"{}\" cin=\"{}\" stable=\"{}\" version=\"{}\" update=\"{}\" tracker=\"{}\"",
-            self.host.str(),
-            self.num_hops as i32,
-            self.num_listeners as i32,
-            self.num_relays as i32,
-            self.up_time as i32,
-            self.firewalled as i32,
-            self.relay as i32,
-            self.direct as i32,
-            self.cin as i32,
-            self.stable as i32,
-            self.version as i32,
-            sys::get_time().wrapping_sub(self.time) as i32,
-            self.tracker as i32
-        ))
+        XmlNode::new("host")
+            .attr("ip", self.host.str())
+            .attr("hops", (self.num_hops as i32).to_string())
+            .attr("listeners", (self.num_listeners as i32).to_string())
+            .attr("relays", (self.num_relays as i32).to_string())
+            .attr("uptime", (self.up_time as i32).to_string())
+            .attr("push", (self.firewalled as i32).to_string())
+            .attr("relay", (self.relay as i32).to_string())
+            .attr("direct", (self.direct as i32).to_string())
+            .attr("cin", (self.cin as i32).to_string())
+            .attr("stable", (self.stable as i32).to_string())
+            .attr("version", (self.version as i32).to_string())
+            .attr("update", (sys::get_time().wrapping_sub(self.time) as i32).to_string())
+            .attr("tracker", (self.tracker as i32).to_string())
     }
 }
 
@@ -395,16 +393,14 @@ impl ChanHitList {
 
     /// `createXML`
     pub fn xml(&self, add_hits: bool) -> XmlNode {
-        let mut n = XmlNode::new(format!(
-            "hits hosts=\"{}\" listeners=\"{}\" relays=\"{}\" firewalled=\"{}\" closest=\"{}\" furthest=\"{}\" newest=\"{}\"",
-            self.num_hits(),
-            self.num_listeners(),
-            self.num_relays(),
-            self.num_firewalled(),
-            self.closest_hit(),
-            self.furthest_hit(),
-            sys::get_time().wrapping_sub(self.newest_hit()) as i32
-        ));
+        let mut n = XmlNode::new("hits")
+            .attr("hosts", self.num_hits().to_string())
+            .attr("listeners", self.num_listeners().to_string())
+            .attr("relays", self.num_relays().to_string())
+            .attr("firewalled", self.num_firewalled().to_string())
+            .attr("closest", self.closest_hit().to_string())
+            .attr("furthest", self.furthest_hit().to_string())
+            .attr("newest", (sys::get_time().wrapping_sub(self.newest_hit()) as i32).to_string());
         if add_hits {
             for h in &self.hits {
                 if h.host.ip.is_set() {

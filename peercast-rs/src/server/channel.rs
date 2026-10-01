@@ -649,13 +649,11 @@ impl Channel {
             ststr = "OK";
         }
         let hosts = pc.chanmgr.with_hitlist(&self.info(), |chl| chl.num_hits()).unwrap_or(0);
-        XmlNode::new(format!(
-            "relay listeners=\"{}\" relays=\"{}\" hosts=\"{}\" status=\"{}\"",
-            self.local_listeners(pc, true),
-            self.local_relays(pc, true),
-            hosts,
-            ststr
-        ))
+        XmlNode::new("relay")
+            .attr("listeners", self.local_listeners(pc, true).to_string())
+            .attr("relays", self.local_relays(pc, true).to_string())
+            .attr("hosts", hosts.to_string())
+            .attr("status", ststr)
     }
 
     /// `getState`
