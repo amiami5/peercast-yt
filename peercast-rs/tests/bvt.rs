@@ -1000,6 +1000,108 @@ fn sources() {
     }
 }
 
+/// どの接続にも同じ応答を返す HTTP サーバー。ポート番号を返す
+fn fixed_httpd(response: String) -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(mut c) = c else { continue };
+            let response = response.clone();
+            std::thread::spawn(move || {
+                c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut req = Vec::new();
+                let mut b = [0u8; 1024];
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match c.read(&mut b) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => req.extend_from_slice(&b[..n]),
+                    }
+                }
+                let _ = c.write_all(response.as_bytes());
+            });
+        }
+    });
+    port
+}
+
+/// 外から取った URL のリダイレクト先やプレイリストの中身では、LAN やループバックの別のホストにつながない。
+/// もとの URL と同じホストへのリダイレクトはこれまでどおり追う (security-review #33)
+#[test]
+fn no_fetch_into_internal() {
+    let s = Server::start(17228);
+    let p = s.port;
+    // 内部のアドレスの代わり。もとの URL (127.0.0.1) と違うホストにする
+    let internal = match std::net::TcpListener::bind("127.0.0.2:0") {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("127.0.0.2 で待ち受けられないので飛ばす: {}", e);
+            return;
+        }
+    };
+    internal.set_nonblocking(true).unwrap();
+    let internal_url = format!("http://127.0.0.2:{}/x", internal.local_addr().unwrap().port());
+    let not_reached = |label: &str| {
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(internal.accept().is_err(), "{}: 内部のアドレスにつないだ", label);
+    };
+    let redirect = fixed_httpd(format!("HTTP/1.0 302 Found\r\nLocation: {}\r\nContent-Length: 0\r\n\r\n", internal_url));
+    let cmd_get = |url: &str| {
+        let q = format!("get {}", url).replace(':', "%3A").replace('/', "%2F").replace(' ', "%20");
+        // 内部のアドレスにつなぐと、そこが応答しないので返らない。待ちきれなくても続ける
+        let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c.write_all(format!("GET /cmd?q={} HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", q, p).as_bytes()).unwrap();
+        let mut buf = Vec::new();
+        let _ = c.read_to_end(&mut buf);
+        String::from_utf8_lossy(&buf).into_owned()
+    };
+
+    // コンソールの get (YP の index.txt の取得と同じ http::get)
+    cmd_get(&format!("http://127.0.0.1:{}/", redirect));
+    not_reached("get のリダイレクト");
+    // 同じホストへのリダイレクトは追う
+    let ok = fixed_httpd("HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_string());
+    let same = fixed_httpd(format!("HTTP/1.0 302 Found\r\nLocation: http://127.0.0.1:{}/\r\nContent-Length: 0\r\n\r\n", ok));
+    let out = cmd_get(&format!("http://127.0.0.1:{}/", same));
+    assert!(out.contains("hello"), "{}", out);
+
+    let fetch = |port: u16| {
+        let params = format!(
+            r#"{{"url": "http://127.0.0.1:{}/live", "name": "f{}", "desc": "", "genre": "", "contact": "", "bitrate": 0, "type": "FLV"}}"#,
+            port, port
+        );
+        jrpc_call(p, "fetch", &params);
+    };
+    // 配信元の URL のリダイレクト先
+    fetch(redirect);
+    not_reached("配信元のリダイレクト");
+    // HTTP で取ったプレイリストの中身
+    let body = format!("{}\r\n", internal_url);
+    let pls = fixed_httpd(format!("HTTP/1.0 200 OK\r\nContent-Type: audio/x-mpegurl\r\nContent-Length: {}\r\n\r\n{}", body.len(), body));
+    fetch(pls);
+    not_reached("プレイリストの中身");
+}
+
+/// このノード自身が送った要求 (User-Agent が PeerCast) は、localhost からでも認証を省かない (security-review #33)
+#[test]
+fn admin_distrusts_own_agent() {
+    let s = Server::start_with(17229, |ini| {
+        ini.replacen("authType = cookie", "authType = http-basic", 1).replacen("password = \r\n", "password = pass\r\n", 1)
+    });
+    let p = s.port;
+    let code = |ua: &str| {
+        let ua = if ua.is_empty() { String::new() } else { format!("User-Agent: {}\r\n", ua) };
+        request(p, &format!("GET /admin?cmd=viewxml HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n{}\r\n", p, ua), b"").code
+    };
+    assert_eq!(code(""), 200);
+    assert_eq!(code("Mozilla/5.0"), 200);
+    assert_eq!(code(PCX_AGENT), 401);
+    // パスワードを付ければ通る
+    let r = request(p, &format!("GET /admin?cmd=viewxml&pass=pass HTTP/1.0\r\nHost: 127.0.0.1:{}\r\nUser-Agent: {}\r\n\r\n", p, PCX_AGENT), b"");
+    assert_eq!(r.code, 200);
+}
+
 // ---------------------------------------------------------------- TLS
 
 /// テストの自己署名の証明書 server.crt と鍵 server.key を `dir` に作る

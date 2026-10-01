@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::error::{Error, Kind, Result};
-use super::host::Host;
+use super::host::{Host, Ip};
 use super::socket::ClientSocket;
 use super::stream::{Stream, StreamExt};
 use super::sys;
@@ -591,9 +591,17 @@ pub fn parse_authorization_header(arg: &[u8]) -> (Vec<u8>, Vec<u8>) {
     }
 }
 
-/// `http::get`: URL の中身を取る (リダイレクトは 1 回まで)
+/// 管理者が入力したのでない URL (リダイレクト先など) でつないでよいアドレスか。公開アドレスか、管理者が
+/// 入力した URL のホストのアドレス `origin` と同じときだけ。ループバックや LAN の中 (このノードの管理画面を
+/// 含む) に要求を送らされないようにする
+pub fn allowed_untrusted_ip(ip: &Ip, origin: &Ip) -> bool {
+    super::bbs_http::is_public(ip.to_std()) || (origin.is_set() && ip == origin)
+}
+
+/// `http::get`: URL の中身を取る (リダイレクトは 1 回まで)。リダイレクト先は `allowed_untrusted_ip` のときだけ
 pub fn get(url: &[u8]) -> Result<Vec<u8>> {
     let mut url = url.to_vec();
+    let mut origin = Ip::default();
     let mut retry = 0;
     loop {
         if retry > 1 {
@@ -608,6 +616,12 @@ pub fn get(url: &[u8]) -> Result<Vec<u8>> {
         let host = Host::from_str_name(&feed.host, port);
         if !host.ip.is_set() {
             return Err(Error::stream(format!("Could not resolve {}", String::from_utf8_lossy(&feed.host))));
+        }
+        if retry == 0 {
+            origin = host.ip;
+        } else if !allowed_untrusted_ip(&host.ip, &origin) {
+            crate::log_error!("Refusing a redirect to a non-public address: {}", u);
+            return Err(Error::stream("Redirect to a non-public address"));
         }
         let mut sock = if feed.scheme == b"https" { ClientSocket::new_tls(&feed.host) } else { ClientSocket::new() };
         crate::log_trace!("Connecting to {} ({}) port {} ...", String::from_utf8_lossy(&feed.host), host.ip.str(), port);
