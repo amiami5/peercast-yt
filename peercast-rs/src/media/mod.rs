@@ -124,11 +124,25 @@ pub(crate) fn read_into<R: Reader + ?Sized>(r: &mut R, buf: &mut [u8]) -> std::r
     Ok(())
 }
 
+/// `read_into` で `n` バイト読んで `out` の後ろに足す (足りない分は 0)。先に `n` バイトの
+/// バッファを作らず、4096 バイトずつ読んで、届いた分だけメモリを確保する。
+pub(crate) fn read_into_vec<R: Reader + ?Sized>(r: &mut R, out: &mut Vec<u8>, n: usize) -> std::result::Result<(), Abort> {
+    let end = out.len() + n;
+    while out.len() < end {
+        let want = (end - out.len()).min(4096);
+        let got = r.read_some(want)?;
+        out.extend_from_slice(&got[..got.len().min(want)]);
+        if got.len() < want {
+            out.resize(end, 0);
+        }
+    }
+    Ok(())
+}
+
 /// `Stream::read(int)`: 4096 バイトずつ `read(void*, int)` を呼んで、ちょうど `n` バイト読む。
 /// 1 回も読めなければ例外 (C++ 版と同じ処理を Rust で行う。大きな要素でも、届いた分しか
-/// メモリを確保しない)。
-pub(crate) fn read_exact<R: Reader + ?Sized>(r: &mut R, n: usize) -> Result<Vec<u8>> {
-    let mut res = Vec::new();
+/// メモリを確保しない)。読んだものは `res` の後ろに足す。
+pub(crate) fn read_exact_into<R: Reader + ?Sized>(r: &mut R, res: &mut Vec<u8>, n: usize) -> Result<()> {
     let mut remaining = n;
     while remaining > 0 {
         let chunk = r.read_some(remaining.min(4096))?;
@@ -138,7 +152,7 @@ pub(crate) fn read_exact<R: Reader + ?Sized>(r: &mut R, n: usize) -> Result<Vec<
         remaining -= chunk.len().min(remaining);
         res.extend_from_slice(&chunk);
     }
-    Ok(res)
+    Ok(())
 }
 
 /// C++ の `MemoryStream` からの読み出し。足りないときは例外を投げず、読み先を 0 で埋めて
@@ -206,6 +220,20 @@ impl<'a> MemStream<'a> {
     }
 
     /// `Stream::read(int)`: 4096 バイトずつ読み、読めない塊があれば例外。
+    /// `read_exact` と同じだが、複製せずに元のバイト列の一部を返す
+    pub fn read_slice(&mut self, n: usize) -> Result<&'a [u8]> {
+        if n > self.remaining() {
+            return fail("Stream::read: premature end of stream");
+        }
+        let s = &self.buf[self.pos..self.pos + n];
+        self.pos += n;
+        Ok(s)
+    }
+
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+
     pub fn read_exact(&mut self, n: usize) -> Result<Vec<u8>> {
         let mut res = Vec::new();
         let mut remaining = n;

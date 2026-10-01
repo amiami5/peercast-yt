@@ -4,7 +4,7 @@
 //! ヘッダー) をまとめてヘッダーパケットにする。それ以外のタグは、キーフレームで区切って
 //! まとめたり分けたりしながらデータパケットにする。
 
-use super::{fail, read_into, HeadKind, Host, LogLevel, MemStream, Result, MAX_DATALEN};
+use super::{fail, read_into, read_into_vec, HeadKind, Host, LogLevel, MemStream, Result, MAX_DATALEN};
 use crate::amf0::{self, Builder, ObjectKind};
 
 pub const T_AUDIO: u8 = 8;
@@ -28,9 +28,9 @@ impl Tag {
         let mut binary = [0u8; 11];
         read_into(h, &mut binary)?;
         let size = u32::from_be_bytes([0, binary[1], binary[2], binary[3]]) as usize;
-        let mut packet = vec![0u8; 11 + size + 4];
-        packet[..11].copy_from_slice(&binary);
-        read_into(h, &mut packet[11..])?;
+        // サイズは 24 ビット (16 MB まで)。先にその大きさのバッファを作らず、届いた分だけ確保する
+        let mut packet = binary.to_vec();
+        read_into_vec(h, &mut packet, size + 4)?;
         Ok(Tag { packet })
     }
 
