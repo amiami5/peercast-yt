@@ -158,6 +158,10 @@ pub struct Servent {
     /// GIV のためにつなぎに行くものの札 (`acquire_giv`)。`giv_proc` が受け取る
     giv_slot: Mutex<Option<GivSlot>>,
     has_sock: AtomicBool,
+    /// COUT で、引数のない GIV を受け付ける期限 (`sys::get_time`)。相手から QUIT を受けたときに開く
+    giv_until: AtomicU32,
+    /// COUT が YP (`rootHost`) につないでいるか。放送 ID はこのときだけ送る
+    pub to_yp: AtomicBool,
 }
 
 impl Servent {
@@ -198,6 +202,8 @@ impl Servent {
             push_sock: Mutex::new(None),
             giv_slot: Mutex::new(None),
             has_sock: AtomicBool::new(false),
+            giv_until: AtomicU32::new(0),
+            to_yp: AtomicBool::new(false),
         }
     }
 
@@ -266,6 +272,8 @@ impl Servent {
         self.st().reset();
         self.set_pcp(None);
         *self.push_sock.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.giv_until.store(0, Ordering::SeqCst);
+        self.to_yp.store(false, Ordering::SeqCst);
         self.detach();
     }
 
@@ -345,8 +353,12 @@ impl Servent {
         false
     }
 
-    /// `acceptGIV`
+    /// `acceptGIV`: 引数のない GIV のソケットを COUT に置く。相手から QUIT を受けてから `GIV_WINDOW` 秒の間でなければ断る
+    /// (PUSH を頼む相手は YP が決めるので、誰から来るかは分からない。頼んだかもしれないときだけにする)
     pub fn accept_giv(&self, sock: ClientSocket) -> std::result::Result<(), ClientSocket> {
+        if sys::get_time() > self.giv_until.load(Ordering::SeqCst) {
+            return Err(sock);
+        }
         let mut p = self.push_sock.lock().unwrap_or_else(|e| e.into_inner());
         if p.is_none() {
             *p = Some(sock);
@@ -971,6 +983,9 @@ pub fn process_incoming_pcp(c: &mut Conn, suggest_others: bool) -> Result<()> {
     Ok(())
 }
 
+/// COUT が相手から QUIT を受けてから、引数のない GIV を受け付ける秒数
+const GIV_WINDOW: u32 = 30;
+
 /// `outgoingProc`: 配信中、YP (ルート) への COUT
 fn outgoing_proc(c: &mut Conn) {
     let pc = c.pc;
@@ -990,9 +1005,14 @@ fn outgoing_proc(c: &mut Conn) {
                     break;
                 }
                 if let Some(ps) = sv.push_sock.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                    best.host = ps.host;
-                    c.set_sock(ps);
-                    break;
+                    // 置いてから時間の経ったものは使わない。使ったら、次に QUIT を受けるまで GIV は受け付けない
+                    let until = sv.giv_until.swap(0, Ordering::SeqCst);
+                    if sys::get_time() <= until.wrapping_add(GIV_WINDOW) {
+                        best.host = ps.host;
+                        c.set_sock(ps);
+                        break;
+                    }
+                    crate::log_debug!("COUT: dropped stale GIV socket from {}", ps.host.str());
                 }
                 let sid = sm.session_id;
                 let server_host = sm.settings().server_host;
@@ -1050,6 +1070,7 @@ fn outgoing_proc(c: &mut Conn) {
                 }
                 sv.set_status(S_CONNECTED);
                 crate::log_debug!("COUT to {}: OK", ip_str);
+                sv.to_yp.store(best.yp, Ordering::SeqCst);
                 pcp.init(rid);
                 pcp.peer = rhost;
                 pcp.from_root = best.yp;
@@ -1069,6 +1090,12 @@ fn outgoing_proc(c: &mut Conn) {
                     }
                 }
                 sv.set_status(S_CLOSING);
+                sv.to_yp.store(false, Ordering::SeqCst);
+                // 断られた (QUIT を受けた) なら、相手がほかのトラッカーにこちらへの PUSH を頼んでいることがあるので、
+                // しばらく引数のない GIV を受け付ける
+                if (PCP_ERROR_QUIT..PCP_ERROR_BCST).contains(&error) {
+                    sv.giv_until.store(sys::get_time().wrapping_add(GIV_WINDOW), Ordering::SeqCst);
+                }
                 pcp.flush(c.sock()?)?;
                 error += PCP_ERROR_QUIT;
                 write_quit(c.sock()?, error)?;
@@ -1084,6 +1111,7 @@ fn outgoing_proc(c: &mut Conn) {
                     sv.set_status(S_ERROR);
                 }
             }
+            sv.to_yp.store(false, Ordering::SeqCst);
             if let Some(mut s) = c.take_sock() {
                 s.close();
             }
