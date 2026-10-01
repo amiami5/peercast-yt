@@ -15,7 +15,7 @@ certbot に任せ、peercast は証明書のファイルを読むだけにする
 ## 工程
 
 - [x] 1. 証明書の読み込み (`server/tls.rs`)
-  - 済み (1eef75d): 証明書をチェーンのファイルとして読む (`SSL_CTX_use_certificate_chain_file`)。
+  - 済み (9dd0389): 証明書をチェーンのファイルとして読む (`SSL_CTX_use_certificate_chain_file`)。
     前は 1 枚目しか送らず、fullchain.pem の中間証明書が届かないので、curl などで検証に失敗していた。
     受け付ける TLS を 1.2 以上にした。
   - 鍵が証明書と合わないときは、もともと `SSL_CTX_use_PrivateKey_file` で失敗するので、確認は足していない。
