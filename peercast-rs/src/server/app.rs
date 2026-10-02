@@ -48,7 +48,7 @@ impl App {
         if self.enable_notify_send {
             let icon = [&self.html_path[..], b"assets/images/small-logo.png"].concat();
             let args: Vec<std::ffi::OsString> =
-                vec![b"-i".to_vec(), icon, b"--".to_vec(), notif::type_str(ty).as_bytes().to_vec(), message.to_vec()].into_iter().map(os_string).collect();
+                vec![b"-i".to_vec(), icon, b"--".to_vec(), notif::type_str(ty).as_bytes().to_vec(), markup_escape(message)].into_iter().map(os_string).collect();
             // 通知デーモンが起動できない環境では数十秒かかるので、終わりを待たない
             match std::process::Command::new("notify-send").args(&args).spawn() {
                 Ok(mut child) => {
@@ -61,6 +61,21 @@ impl App {
             }
         }
     }
+}
+
+/// notify-send の本文のエスケープ。本文は多くの通知のデーモンでマークアップとして解釈されるので、
+/// チャンネル名やコメントのタグが効かないよう `& < >` を実体参照にする (要約はマークアップにならない)
+fn markup_escape(s: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    for &c in s {
+        match c {
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'>' => out.extend_from_slice(b"&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(unix)]
@@ -107,4 +122,15 @@ pub fn call_local_url(path: &[u8], port: u16) {
 /// `USys::exit`
 pub fn exit(code: i32) -> ! {
     std::process::exit(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markup_escape_tags() {
+        assert_eq!(markup_escape(b"<a href=\"x\">A&B</a> 'q'"), b"&lt;a href=\"x\"&gt;A&amp;B&lt;/a&gt; 'q'".to_vec());
+        assert_eq!(markup_escape("日本語".as_bytes()), "日本語".as_bytes().to_vec());
+    }
 }
