@@ -1273,6 +1273,82 @@ fn pcp_data_from_upstream_only() {
     }
 }
 
+/// PCP の相手がチャンネル ID を変えて送っても、ヒットリストは上限 (1000) までしか増えない (#37)
+#[test]
+fn hit_lists_capped() {
+    let s = Server::start(17236);
+    let p = s.port;
+    // 配信していないと CIN を受け付けない。配信しているチャンネルのヒットリストは消されない
+    let _push = push_flv(p, "captest");
+    let cid = wait_channels(p, 1)[0].1.clone();
+    let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut out = AtomBuf::default();
+    out.int(*b"pcp\n", 1);
+    out.parent(id4(b"helo"), 3);
+    out.string(id4(b"agnt"), b"PeerCast/0.1218 (YT50)");
+    out.int(id4(b"ver"), 1218);
+    out.bytes(id4(b"sid"), b"hitlist-cap-sess");
+    c.write_all(&out.0).unwrap();
+    let mut got = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !got.windows(4).any(|w| w == b"oleh") {
+        let n = c.read(&mut buf).unwrap();
+        assert!(n > 0, "oleh が届かない");
+        got.extend_from_slice(&buf[..n]);
+    }
+    let mut drain = c.try_clone().unwrap();
+    std::thread::spawn(move || while matches!(drain.read(&mut buf), Ok(n) if n > 0) {});
+    let mut hits = AtomBuf::default();
+    // チャンネル ID を変えたヒットを送る (ヒットリストができる)。1 つの atom ごとに少し待つので、
+    // bcst にまとめる (1 つの bcst は 16 KB まで)
+    let cap_id = |n: u32| {
+        let mut id = [0x5au8; 16];
+        id[..4].copy_from_slice(&n.to_be_bytes());
+        id
+    };
+    for n in 0..1200u32 {
+        if n % 200 == 0 {
+            hits.parent(id4(b"bcst"), 201);
+            hits.char(id4(b"ttl"), 1);
+        }
+        let id = cap_id(n);
+        let mut ip = [0u8; 16];
+        ip[10..12].copy_from_slice(&[0xff, 0xff]);
+        ip[12..].copy_from_slice(&[203, 0, 113, (n % 250) as u8 + 1]);
+        hits.parent(id4(b"host"), 3);
+        hits.bytes(id4(b"cid"), &id);
+        hits.address(id4(b"ip"), &ip);
+        hits.short(id4(b"port"), 7144);
+    }
+    c.write_all(&hits.0).unwrap();
+    // 全部読み終わるのを待って、数を見る
+    let total = || {
+        let body = String::from_utf8_lossy(&get(p, "/admin?cmd=viewxml").body).into_owned();
+        let i = body.find("<channels_found total=\"").expect("channels_found") + 23;
+        body[i..].split('"').next().unwrap().parse::<usize>().unwrap()
+    };
+    let t0 = Instant::now();
+    let mut last = usize::MAX;
+    loop {
+        let n = total();
+        if n == last {
+            break;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(20), "ヒットリストの数が落ち着かない");
+        last = n;
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert_eq!(last, 1000);
+    let body = String::from_utf8_lossy(&get(p, "/admin?cmd=viewxml").body).into_owned();
+    assert!(body.contains(&cid), "配信しているチャンネルのヒットリストが消された");
+    let hex = |id: [u8; 16]| id.iter().map(|b| format!("{:02X}", b)).collect::<String>();
+    let upper = body.to_uppercase();
+    assert!(upper.contains(&hex(cap_id(1199))), "新しいヒットリストがない");
+    assert!(!upper.contains(&hex(cap_id(0))), "古いヒットリストが残っている");
+    drop(c);
+}
+
 /// 届いた atom から、`bcst` の中の `chan` の子を探す。`bcst` が届かずに `limit` を過ぎたら `None`
 fn read_bcst_chan(s: &mut TcpStream, limit: Duration) -> Option<Vec<Atom>> {
     let t0 = Instant::now();
