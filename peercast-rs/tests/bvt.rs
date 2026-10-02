@@ -201,6 +201,30 @@ fn html() {
     assert_eq!(get(p, "/html/ja/play.html").code, 400);
 }
 
+/// 管理画面の応答は、ほかのサイトの枠 (iframe) に入れさせない (クリックジャッキング、#38)
+#[test]
+fn admin_not_framed() {
+    let s = Server::start(17235);
+    let p = s.port;
+    let check = |label: &str, r: &Response| {
+        assert_eq!(r.header("X-Frame-Options"), Some("DENY"), "{}", label);
+        assert_eq!(r.header("Content-Security-Policy"), Some("frame-ancestors 'none'"), "{}", label);
+    };
+    // テンプレートのページ、ログインのページ、そのままのファイル
+    for path in ["/html/ja/index.html", "/html/ja/login.html", "/html/ja/settings.html", "/html/ja/bbs.js"] {
+        let r = get(p, path);
+        assert_eq!(r.code, 200, "{}", path);
+        check(path, &r);
+    }
+    // 管理コマンドの誤りのページと、cmd=redirect のページ
+    let r = get(p, "/admin?cmd=control_rtmp&action=start&name=x&port=70000");
+    assert_eq!(r.code, 400);
+    check("error", &r);
+    let r = get(p, "/admin?cmd=redirect&url=example.com");
+    assert_eq!(r.code, 200);
+    check("redirect", &r);
+}
+
 /// broadcast.html: エンコーダーに設定する URL を、フォームの入力からサーバーが作る (もとは JavaScript)
 #[test]
 fn broadcast_urls() {
