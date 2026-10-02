@@ -711,9 +711,14 @@ fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
         let mut sock: Option<ClientSocket> = None;
         loop {
             if let Some(ps) = ch.push_sock.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                ch.st().source_host.host = ps.host;
-                sock = Some(ps);
-                break;
+                // 置いてから時間の経ったものは使わない。使ったら、次に断られるまで GIV は受け付けない
+                let until = ch.giv_until.swap(0, std::sync::atomic::Ordering::SeqCst);
+                if sys::get_time() <= until.wrapping_add(chn::GIV_WINDOW) {
+                    ch.st().source_host.host = ps.host;
+                    sock = Some(ps);
+                    break;
+                }
+                crate::log_debug!("Channel: dropped stale GIV socket from {}", ps.host.str());
             }
             {
                 let mut st = ch.st();
@@ -849,6 +854,11 @@ fn peercast_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>) {
         if let Err(e) = &r {
             ch.set_status(pc, chn::S_ERROR);
             crate::log_error!("Channel to {} {} : {}", ipstr, ty, e);
+            // 配信元に断られた (QUIT を受けた。満員の 503 のあとも QUIT が来る) なら、配信元がほかのノードに
+            // こちらへの PUSH を頼んでいることがあるので、しばらくチャンネル ID の付いた GIV を受け付ける
+            if (PCP_ERROR_QUIT..PCP_ERROR_BCST).contains(&error) {
+                ch.giv_until.store(sys::get_time().wrapping_add(chn::GIV_WINDOW), std::sync::atomic::Ordering::SeqCst);
+            }
             if !sh.tracker || (error != 503 && sh.tracker) {
                 pc.chanmgr.dead_hit(&sh);
                 retry_same = false;
