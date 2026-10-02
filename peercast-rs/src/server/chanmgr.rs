@@ -40,6 +40,9 @@ pub struct ChanMgrSettings {
 
 pub const MAX_IDLE_CHANNELS: i32 = 8;
 
+/// ヒットリストの数の上限 (YP に載るチャンネルの数より十分多く)
+pub const MAX_HIT_LISTS: usize = 1000;
+
 /// `ChanMgr`
 pub struct ChanMgr {
     channels: Mutex<Vec<Arc<Channel>>>,
@@ -357,7 +360,40 @@ impl ChanMgr {
     pub fn add_hit_list(&self, info: &ChanInfo) {
         let mut chl = ChanHitList { used: true, info: info.clone(), ..Default::default() };
         chl.info.created_time = sys::get_time();
-        self.lists().insert(0, chl);
+        self.insert_hit_list(chl, false);
+    }
+
+    /// ヒットリストを先頭に加える。`only_if_missing` なら、同じ ID のものがあれば加えない。
+    /// 数が `MAX_HIT_LISTS` に達していれば、このノードのチャンネルのものを除いて、最後にヒットが
+    /// 来たのが古いもの (同じ時刻なら後ろのもの) から消す (PCP の相手がチャンネル ID を変えていくらでも足せないように、#37)
+    fn insert_hit_list(&self, chl: ChanHitList, only_if_missing: bool) {
+        let mut l = self.lists();
+        if l.len() >= MAX_HIT_LISTS {
+            // チャンネルを見るので、ヒットリストのロックの外で調べる
+            drop(l);
+            let mine: Vec<[u8; 16]> = self.channels().iter().map(|c| c.info().id).collect();
+            l = self.lists();
+            while l.len() >= MAX_HIT_LISTS {
+                let oldest = l
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|(_, c)| !mine.contains(&c.info.id))
+                    .min_by_key(|(_, c)| c.last_hit_time.max(c.info.created_time))
+                    .map(|(i, _)| i);
+                match oldest {
+                    Some(i) => {
+                        crate::log_debug!("Too many hit lists; dropping {}", ci::id_str(&l[i].info.id));
+                        l.remove(i);
+                    }
+                    None => break,
+                }
+            }
+        }
+        if only_if_missing && l.iter().any(|c| c.used && c.info.id == chl.info.id) {
+            return;
+        }
+        l.insert(0, chl);
     }
 
     /// `clearDeadHits`: 古いヒットを消し、空になって使っていないヒットリストも消す
@@ -426,15 +462,14 @@ impl ChanMgr {
     /// `addHit(ChanHit&)`: ヒットリストがなければ作る
     pub fn add_hit(&self, pc: &Peercast, h: &ChanHit) -> Option<ChanHit> {
         let sid = pc.servmgr.session_id;
-        let mut l = self.lists();
-        if !l.iter().any(|c| c.used && c.info.id == h.chan_id) {
+        if !self.has_hitlist_by_id(&h.chan_id) {
             let mut info = ChanInfo::new();
             info.id = h.chan_id;
             let mut chl = ChanHitList { used: true, info, ..Default::default() };
             chl.info.created_time = sys::get_time();
-            l.insert(0, chl);
+            self.insert_hit_list(chl, true);
         }
-        l.iter_mut().find(|c| c.used && c.info.id == h.chan_id).and_then(|chl| chl.add_hit(h, &sid))
+        self.with_hitlist_by_id(&h.chan_id, |chl| chl.add_hit(h, &sid)).flatten()
     }
 
     /// `findAndPlayChannel`: スレッドでチャンネルを探して、見つかったらプレイヤーを起動する
@@ -512,4 +547,37 @@ pub fn ch_name(info: &ChanInfo) -> String {
 
 mod ci_const {
     pub use crate::chaninfo::T_OGM;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(n: u32) -> ChanInfo {
+        let mut i = ChanInfo::new();
+        i.id[..4].copy_from_slice(&n.to_be_bytes());
+        i
+    }
+
+    #[test]
+    fn hit_lists_capped() {
+        let cm = ChanMgr::new();
+        for n in 0..MAX_HIT_LISTS as u32 + 10 {
+            cm.add_hit_list(&info(n));
+        }
+        let ids: Vec<[u8; 16]> = cm.hitlists().iter().map(|l| l.info.id).collect();
+        assert_eq!(ids.len(), MAX_HIT_LISTS);
+        // 新しいものが残る (時刻が同じなら後ろの古いものから消える)
+        assert_eq!(ids[0], info(MAX_HIT_LISTS as u32 + 9).id);
+        assert!(!ids.contains(&info(0).id));
+        // 最後にヒットが来たのが新しいものは、後ろにあっても残す
+        let (last, next) = (ids[MAX_HIT_LISTS - 1], ids[MAX_HIT_LISTS - 2]);
+        cm.with_hitlist_by_id(&last, |l| l.last_hit_time = sys::get_time() + 100);
+        cm.add_hit_list(&info(100_000));
+        let ids: Vec<[u8; 16]> = cm.hitlists().iter().map(|l| l.info.id).collect();
+        assert_eq!(ids.len(), MAX_HIT_LISTS);
+        assert_eq!(ids[0], info(100_000).id);
+        assert!(ids.contains(&last));
+        assert!(!ids.contains(&next));
+    }
 }

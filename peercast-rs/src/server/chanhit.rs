@@ -237,6 +237,9 @@ impl Default for ChanHitSearch {
     }
 }
 
+/// 1 つのヒットリストのヒットの数の上限 (中継の木の大きなチャンネルでも足りるように)
+pub const MAX_HITS_PER_LIST: usize = 500;
+
 /// `ChanHitList`
 #[derive(Clone, Debug, Default)]
 pub struct ChanHitList {
@@ -317,6 +320,12 @@ impl ChanHitList {
                 });
                 h.chan_id = self.info.id;
                 self.hits.insert(0, h.clone());
+                // 数が上限を超えたら、いちばん古いヒット (同じ時刻なら後ろのもの) を消す
+                // (PCP の相手がアドレスを変えていくらでも足せないように、#37)
+                while self.hits.len() > MAX_HITS_PER_LIST {
+                    let oldest = (1..self.hits.len()).rev().min_by_key(|&i| self.hits[i].time).unwrap_or(self.hits.len() - 1);
+                    self.hits.remove(oldest);
+                }
                 Some(h)
             }
         }
@@ -503,6 +512,30 @@ mod tests {
         assert_eq!(l.num_hits(), 0);
         assert_eq!(l.clear_dead_hits(180, true), 0);
         assert!(l.hits.is_empty());
+    }
+
+    #[test]
+    fn hits_capped() {
+        let mut l = ChanHitList { used: true, ..Default::default() };
+        let hit_n = |n: u32| {
+            let mut h = ChanHit::new();
+            h.host = Host::v4(0x0a000000 + n, 7144);
+            h.rhost = [h.host, Host::v4(0xc0a80000 + n, 7144)];
+            h
+        };
+        for n in 0..MAX_HITS_PER_LIST as u32 + 100 {
+            assert!(l.add_hit(&hit_n(n), &[0xff; 16]).is_some());
+        }
+        assert_eq!(l.hits.len(), MAX_HITS_PER_LIST);
+        // 新しいものが残る
+        assert_eq!(l.hits[0].host, hit_n(MAX_HITS_PER_LIST as u32 + 99).host);
+        assert_eq!(l.hits[MAX_HITS_PER_LIST - 1].host, hit_n(100).host);
+        // 古いもの (時刻の小さいもの) から消す
+        l.hits[10].time = 0;
+        l.add_hit(&hit_n(100_000), &[0xff; 16]);
+        assert_eq!(l.hits.len(), MAX_HITS_PER_LIST);
+        assert_eq!(l.hits[0].host, hit_n(100_000).host);
+        assert_eq!(l.hits[MAX_HITS_PER_LIST - 1].host, hit_n(100).host);
     }
 
     #[test]
