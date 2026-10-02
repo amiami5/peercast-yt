@@ -680,13 +680,13 @@ fn local_url(ctx: &Ctx, host_header: &[u8]) -> Vec<u8> {
 
 // ---------------------------------------------------------------- 認証
 
-/// パスワードを間違えた回数 (IP アドレスごと)
+/// パスワードを間違えた回数 (IP アドレスごと、IPv6 は /64 ごと)
 static AUTH_FAILS: servhs::AuthThrottle = servhs::AuthThrottle::new();
 
 /// パスワードを何度も間違えてしばらく締め出している IP アドレスなら 429
 fn auth_lockout(pc: &Peercast, ip: &str) -> Result<()> {
     let limit = pc.servmgr.settings().auth_fail_limit;
-    if let Some(rest) = AUTH_FAILS.locked(ip.as_bytes(), sys::get_time() as u64, limit) {
+    if let Some(rest) = AUTH_FAILS.locked(&servhs::auth_key(ip), sys::get_time() as u64, limit) {
         crate::log_warn!("Too many wrong passwords from {}; locked out for {} more seconds", ip, rest);
         return Err(http_error(HTTP_SC_TOOMANYREQUESTS, 429));
     }
@@ -696,7 +696,7 @@ fn auth_lockout(pc: &Peercast, ip: &str) -> Result<()> {
 /// パスワードが合ったか間違えたかを記録する
 fn auth_record(pc: &Peercast, ip: &str, ok: bool) {
     if ok {
-        AUTH_FAILS.succeeded(ip.as_bytes());
+        AUTH_FAILS.succeeded(&servhs::auth_key(ip));
         return;
     }
     let (limit, secs) = {
@@ -704,7 +704,7 @@ fn auth_record(pc: &Peercast, ip: &str, ok: bool) {
         (s.auth_fail_limit, s.auth_lock_seconds as u64)
     };
     crate::log_warn!("Wrong password from {}", ip);
-    if let Some(secs) = AUTH_FAILS.failed(ip.as_bytes(), sys::get_time() as u64, limit, secs) {
+    if let Some(secs) = AUTH_FAILS.failed(&servhs::auth_key(ip), sys::get_time() as u64, limit, secs) {
         crate::log_warn!("Too many wrong passwords from {}; locking out for {} seconds", ip, secs);
     }
 }

@@ -356,12 +356,33 @@ const AUTH_FORGET_SECS: u64 = 24 * 3600;
 /// 覚えておく IP アドレスの数の上限
 const AUTH_MAX_ENTRIES: usize = 4096;
 
-/// パスワードの総当たりを抑える。IP アドレスごとに続けて間違えた数を数え、設定の数 (`limit`) に
+/// 締め出しを数える単位 (`AuthThrottle` のキー)。IPv6 は /64 の中でアドレスを変えて逃れられないよう、
+/// /64 ごとに数える。IPv4 (IPv4 射影アドレスを含む) と、アドレスとして読めないものはそのまま
+pub fn auth_key(ip: &str) -> Vec<u8> {
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(a)) if a.to_ipv4_mapped().is_none() => {
+            let net = std::net::Ipv6Addr::from(u128::from(a) & !((1u128 << 64) - 1));
+            format!("{}/64", net).into_bytes()
+        }
+        _ => ip.as_bytes().to_vec(),
+    }
+}
+
+/// パスワードの総当たりを抑える。キー (`auth_key`) ごとに続けて間違えた数を数え、設定の数 (`limit`) に
 /// 達したら `lock_secs` 秒締め出す。そのあとも間違えるたびに、締め出す時間を倍にしていく
 /// (最長 `AUTH_LOCK_MAX_SECS`)。正しいパスワードで入れば数え直す。`limit` が 0 なら何もしない。
+/// 覚えている数 (`AUTH_MAX_ENTRIES`) が締め出し中のもので埋まったら、覚えていないキーはまとめて
+/// 1 つとして数え、締め出す (アドレスを変えて試し続けられないように)。
 #[derive(Debug, Default)]
 pub struct AuthThrottle {
-    m: std::sync::Mutex<BTreeMap<Vec<u8>, AuthFails>>,
+    m: std::sync::Mutex<AuthTable>,
+}
+
+#[derive(Debug, Default)]
+struct AuthTable {
+    map: BTreeMap<Vec<u8>, AuthFails>,
+    /// 覚えていないキーをまとめて数える
+    rest: AuthFails,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -371,12 +392,36 @@ struct AuthFails {
     last: u64,
 }
 
-impl AuthThrottle {
-    pub const fn new() -> AuthThrottle {
-        AuthThrottle { m: std::sync::Mutex::new(BTreeMap::new()) }
+impl AuthFails {
+    /// 間違えた数を足す。これで締め出したなら、その秒数
+    fn fail(&mut self, now: u64, limit: u32, lock_secs: u64) -> Option<u64> {
+        if self.until <= now && now.saturating_sub(self.last) >= AUTH_FORGET_SECS {
+            *self = AuthFails::default();
+        }
+        self.count = self.count.saturating_add(1);
+        self.last = now;
+        if self.count < limit {
+            return None;
+        }
+        let shift = (self.count - limit).min(12);
+        let secs = lock_secs.max(1).saturating_mul(1 << shift).min(AUTH_LOCK_MAX_SECS);
+        self.until = now + secs;
+        Some(secs)
     }
 
-    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<Vec<u8>, AuthFails>> {
+    fn rest_secs(&self, now: u64) -> Option<u64> {
+        (self.until > now).then(|| self.until - now)
+    }
+}
+
+impl AuthThrottle {
+    pub const fn new() -> AuthThrottle {
+        AuthThrottle {
+            m: std::sync::Mutex::new(AuthTable { map: BTreeMap::new(), rest: AuthFails { count: 0, until: 0, last: 0 } }),
+        }
+    }
+
+    fn table(&self) -> std::sync::MutexGuard<'_, AuthTable> {
         self.m.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -385,8 +430,8 @@ impl AuthThrottle {
         if limit == 0 {
             return None;
         }
-        let f = *self.map().get(key)?;
-        (f.until > now).then(|| f.until - now)
+        let t = self.table();
+        t.map.get(key).unwrap_or(&t.rest).rest_secs(now)
     }
 
     /// 間違えた。これで締め出したなら、その秒数
@@ -394,34 +439,23 @@ impl AuthThrottle {
         if limit == 0 {
             return None;
         }
-        let mut m = self.map();
+        let mut t = self.table();
+        let m = &mut t.map;
         if m.len() >= AUTH_MAX_ENTRIES && !m.contains_key(key) {
             m.retain(|_, f| f.until > now || now.saturating_sub(f.last) < AUTH_FORGET_SECS);
             if m.len() >= AUTH_MAX_ENTRIES {
                 m.retain(|_, f| f.until > now);
             }
             if m.len() >= AUTH_MAX_ENTRIES {
-                return None;
+                return t.rest.fail(now, limit, lock_secs);
             }
         }
-        let f = m.entry(key.to_vec()).or_default();
-        if f.until <= now && now.saturating_sub(f.last) >= AUTH_FORGET_SECS {
-            *f = AuthFails::default();
-        }
-        f.count = f.count.saturating_add(1);
-        f.last = now;
-        if f.count < limit {
-            return None;
-        }
-        let shift = (f.count - limit).min(12);
-        let secs = lock_secs.max(1).saturating_mul(1 << shift).min(AUTH_LOCK_MAX_SECS);
-        f.until = now + secs;
-        Some(secs)
+        m.entry(key.to_vec()).or_default().fail(now, limit, lock_secs)
     }
 
     /// 正しいパスワードで入った
     pub fn succeeded(&self, key: &[u8]) {
-        self.map().remove(key);
+        self.table().map.remove(key);
     }
 }
 

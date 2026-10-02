@@ -119,9 +119,10 @@
   - `html::write_ok` などの応答に `X-Frame-Options` も CSP の `frame-ancestors` もない。
   - 案: 管理画面の応答に `X-Frame-Options: DENY` と `Content-Security-Policy: frame-ancestors 'none'` を付ける。
   - 済み: `html::write_ok` (テンプレートのページ、ログインのページ、`/html/` のそのままのファイル) と、管理コマンドの誤りのページ・`cmd=redirect` のページに、`X-Frame-Options: DENY` と `Content-Security-Policy: frame-ancestors 'none'` を付けた (`html::NO_FRAME_HEADERS`)。UI は自分のページも枠に入れないので、同じオリジンも断る。公開ディレクトリ (`/public/`) と `/assets/` は操作がないので付けていない。bvt の `admin_not_framed` で確かめる。直す前は失敗することも確かめた。ブラウザーで枠に入れての確認はしていない。
-- [ ] #39 パスワードの締め出しを IP アドレスの単位で数えています (軽)。
+- [x] #39 パスワードの締め出しを IP アドレスの単位で数えています (軽)。
   - IPv6 では /64 の中でアドレスを変えれば締め出しを逃れられる。覚えている数 (4096) が締め出し中の IP アドレスで埋まると、新しい IP アドレスは数えない (`servhs::AuthThrottle::failed`)。
   - 案: IPv6 は /64 ごとに数える。埋まったときは数えないのでなく、全体の数で締め出す。
+  - 済み: 締め出しは `servhs::auth_key` のキーごとに数える。IPv6 (IPv4 射影アドレスを除く) は /64 ごと、IPv4 はアドレスごと。覚えている数が締め出し中のもので埋まったら、覚えていないキーはまとめて 1 つ (`AuthTable::rest`) として数え、設定の回数で締め出す (そのあいだは、覚えていないキーからは誰も入れない)。単体テストの `auth_key_v6_per_64` と `auth_throttle_full` で確かめる。bvt では複数の IPv6 のアドレスから試せないので、動かしての確認はしていない。
 - [x] #40 `--enable-notify-send` のとき、チャンネル名やコメントをそのまま notify-send に渡しています (軽)。
   - 本文は多くの通知のデーモンでマークアップとして解釈される。
   - 案: `&` `<` `>` を実体参照にしてから渡す。

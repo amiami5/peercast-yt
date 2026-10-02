@@ -284,6 +284,41 @@ fn auth_throttle() {
 }
 
 #[test]
+fn auth_key_v6_per_64() {
+    assert_eq!(auth_key("10.0.0.1"), b"10.0.0.1");
+    assert_eq!(auth_key("::ffff:10.0.0.1"), b"::ffff:10.0.0.1");
+    assert_eq!(auth_key("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), b"2001:db8:1:2::/64");
+    assert_eq!(auth_key("2001:db8:1:2::1"), auth_key("2001:db8:1:2:ffff::"));
+    assert_ne!(auth_key("2001:db8:1:2::1"), auth_key("2001:db8:1:3::1"));
+    assert_eq!(auth_key("x"), b"x");
+}
+
+#[test]
+fn auth_throttle_full() {
+    // 締め出し中のもので埋まったら、覚えていないキーはまとめて数えて締め出す
+    let t = AuthThrottle::new();
+    for i in 0..AUTH_MAX_ENTRIES {
+        let k = format!("k{}", i);
+        assert_eq!(t.failed(k.as_bytes(), 100, 1, 60), Some(60));
+    }
+    for i in 0..4 {
+        let k = format!("new{}", i);
+        assert_eq!(t.locked(k.as_bytes(), 100, 5), None);
+        assert_eq!(t.failed(k.as_bytes(), 100, 5, 60), None);
+    }
+    assert_eq!(t.failed(b"new4", 100, 5, 60), Some(60));
+    assert_eq!(t.locked(b"another", 110, 5), Some(50));
+    // 覚えているキーはそれぞれの数のまま
+    assert_eq!(t.locked(b"k0", 110, 5), Some(50));
+    t.succeeded(b"k0");
+    assert_eq!(t.locked(b"k0", 110, 5), Some(50));
+    // 締め出しが解ければ、また 1 つずつ覚える
+    assert_eq!(t.locked(b"another", 160, 5), None);
+    assert_eq!(t.failed(b"another", 160, 5, 60), None);
+    assert_eq!(t.locked(b"k1", 160, 5), None);
+}
+
+#[test]
 fn handshake_counter() {
     static C: HandshakeCounter = HandshakeCounter::new();
     let a = C.acquire(b"1.2.3.4", 2).unwrap();
