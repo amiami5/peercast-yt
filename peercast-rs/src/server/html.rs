@@ -285,16 +285,21 @@ impl template::Host for Template<'_> {
 
 // ---------------------------------------------------------------- HTML
 
+/// 管理画面をほかのサイトの枠 (iframe) に入れさせないヘッダー (クリックジャッキング、#38)。
+/// UI は自分のページも枠に入れないので、同じオリジンも断る
+pub const NO_FRAME_HEADERS: [&str; 2] = ["X-Frame-Options: DENY", "Content-Security-Policy: frame-ancestors 'none'"];
+
 /// `HTML::writeOK`: 200 の応答のヘッダー (行の終わりは CRLF)
 pub fn write_ok(out: &mut dyn Stream, content: &str, additional: &[(&str, String)]) -> Result<()> {
     let mut h = Vec::new();
-    for l in [
+    let lines = [
         HTTP_SC_OK.to_string(),
         format!("Server: {}", PCX_AGENT),
         "Connection: close".to_string(),
         format!("Content-Type: {}", content),
         format!("Date: {}", rfc1123_time(sys::get_time() as i64)),
-    ] {
+    ];
+    for l in lines.iter().map(String::as_str).chain(NO_FRAME_HEADERS) {
         h.extend_from_slice(l.as_bytes());
         h.extend_from_slice(b"\r\n");
     }

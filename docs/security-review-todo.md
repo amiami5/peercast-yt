@@ -115,9 +115,10 @@
 - [ ] #37 ヒットリストとヒットの数に上限がありません。
   - PCP の相手は、チャンネル ID やアドレスを変えていくらでもヒットリスト (`chanmgr::add_hit_list`、`add_hit`) とヒットを足せる。足すたびに一覧を頭から探すので、メモリも CPU も使い、ロックも長く持つ。C++ 版と同じ。
   - 案: ヒットリストの数と、1 つのリストのヒットの数に上限を設ける (超えたら古いものから捨てるか、足さない)。
-- [ ] #38 管理画面をほかのサイトの枠 (iframe) に入れられます (クリックジャッキング)。
+- [x] #38 管理画面をほかのサイトの枠 (iframe) に入れられます (クリックジャッキング)。
   - `html::write_ok` などの応答に `X-Frame-Options` も CSP の `frame-ancestors` もない。
   - 案: 管理画面の応答に `X-Frame-Options: DENY` と `Content-Security-Policy: frame-ancestors 'none'` を付ける。
+  - 済み: `html::write_ok` (テンプレートのページ、ログインのページ、`/html/` のそのままのファイル) と、管理コマンドの誤りのページ・`cmd=redirect` のページに、`X-Frame-Options: DENY` と `Content-Security-Policy: frame-ancestors 'none'` を付けた (`html::NO_FRAME_HEADERS`)。UI は自分のページも枠に入れないので、同じオリジンも断る。公開ディレクトリ (`/public/`) と `/assets/` は操作がないので付けていない。bvt の `admin_not_framed` で確かめる。直す前は失敗することも確かめた。ブラウザーで枠に入れての確認はしていない。
 - [ ] #39 パスワードの締め出しを IP アドレスの単位で数えています (軽)。
   - IPv6 では /64 の中でアドレスを変えれば締め出しを逃れられる。覚えている数 (4096) が締め出し中の IP アドレスで埋まると、新しい IP アドレスは数えない (`servhs::AuthThrottle::failed`)。
   - 案: IPv6 は /64 ごとに数える。埋まったときは数えないのでなく、全体の数で締め出す。

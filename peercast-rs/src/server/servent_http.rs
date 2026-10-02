@@ -1038,6 +1038,9 @@ fn handshake_cmd(ctx: &Ctx, http: &mut Http, query: &[u8]) -> Result<()> {
             s.write_line(&e.msg)?;
             s.write_line(format!("Server: {}", PCX_AGENT))?;
             s.write_line("Content-Type: text/html; charset=utf-8")?;
+            for l in html::NO_FRAME_HEADERS {
+                s.write_line(l)?;
+            }
             s.write_line("")?;
             s.write_string([&b"<h1>ERROR - "[..], &crate::cgi::escape_html(e.msg.as_bytes()), b"</h1>\n"].concat())?;
             if !e.detail.is_empty() {
@@ -1365,6 +1368,9 @@ fn run_cmd(ctx: &Ctx, http: &mut Http, cmd: &[u8], query: &[u8], jump: &mut Vec<
                     s.write_line(HTTP_SC_OK)?;
                     s.write_line(format!("Server: {}", PCX_AGENT))?;
                     s.write_line("Content-Type: text/html")?;
+                    for l in html::NO_FRAME_HEADERS {
+                        s.write_line(l)?;
+                    }
                     s.write_line("")?;
                     s.write(&html::refresh_page(&url))
                 }
