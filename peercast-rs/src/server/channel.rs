@@ -5,6 +5,7 @@
 //! `ChanState` にまとめ、1 つのロックで守る。ロックを持ったままほかのロック (一覧や ServMgr) は
 //! 取らない。
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::chanhit::{ChanHit, ChanHitSearch};
@@ -21,6 +22,9 @@ use super::stream::{Stat, Stream};
 use super::sys;
 use super::xmlnode::XmlNode;
 use crate::pcp::write::AtomBuf;
+
+/// 中継の配信元に断られてから、チャンネル ID の付いた GIV を受け付ける秒数
+pub const GIV_WINDOW: u32 = 30;
 
 // `Channel::STATUS`
 pub const S_NONE: i32 = 0;
@@ -126,7 +130,10 @@ pub struct Channel {
     pub src_stat: Mutex<Option<Arc<Stat>>>,
     /// 配信元のソケット (ICY と HTTP Push では始めるときに渡され、GIV では `acceptGIV` で入る)
     pub sock: Mutex<Option<ClientSocket>>,
+    /// チャンネル ID の付いた GIV で届いた、中継の配信元のソケット (`accept_giv`)
     pub push_sock: Mutex<Option<ClientSocket>>,
+    /// チャンネル ID の付いた GIV を受け付ける期限 (`sys::get_time`)。中継の配信元に断られたときに開く
+    pub giv_until: AtomicU32,
     /// 配信元の PCP のストリーム (`sendPacketUp`)
     pub source_stream: Mutex<Option<Arc<sources::PcpShared>>>,
     /// スレッドが終わったこと (`waitThread`)
@@ -178,6 +185,7 @@ impl Channel {
             src_stat: Mutex::new(None),
             sock: Mutex::new(None),
             push_sock: Mutex::new(None),
+            giv_until: AtomicU32::new(0),
             source_stream: Mutex::new(None),
             done: Mutex::new(None),
         }
@@ -206,6 +214,7 @@ impl Channel {
         self.raw_data.init_accept(pb::T_HEAD | pb::T_DATA);
         *self.sock.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.push_sock.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.giv_until.store(0, Ordering::SeqCst);
         *self.source_stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.src_stat.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -441,8 +450,13 @@ impl Channel {
         }
     }
 
-    /// `acceptGIV`
+    /// `acceptGIV`: チャンネル ID の付いた GIV のソケットを、中継の配信元に置く。中継しているチャンネルで、
+    /// 配信元に断られてから `GIV_WINDOW` 秒の間でなければ断る (断った相手がほかのノードにこちらへの PUSH を
+    /// 頼むことがある。それ以外のときに受け付けると、誰でも配信元になれる。#41)
     pub fn accept_giv(&self, sock: ClientSocket) -> std::result::Result<(), ClientSocket> {
+        if self.st().src_type != SRC_PEERCAST || sys::get_time() > self.giv_until.load(Ordering::SeqCst) {
+            return Err(sock);
+        }
         let mut p = self.push_sock.lock().unwrap_or_else(|e| e.into_inner());
         if p.is_none() {
             *p = Some(sock);

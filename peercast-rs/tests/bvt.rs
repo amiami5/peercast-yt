@@ -1457,6 +1457,101 @@ fn giv_cout_only_after_quit() {
     assert!(!ok && got.contains("503"), "2 つ目の GIV を断らない: {:?}", got);
 }
 
+/// チャンネル ID の付いた GIV は、中継しているチャンネルで、配信元に断られた (503 や QUIT) あとの間だけ
+/// 受け付ける。配信しているチャンネルと、配信元から受け取っている間の中継は断る (security-review #41)
+#[test]
+fn giv_channel_only_after_refusal() {
+    let src = Server::start(17237);
+    let relay = Server::start(17238);
+    let _push = push_flv(src.port, "givchtest");
+    let cid = wait_channels(src.port, 1)[0].1.clone();
+    let tip = format!("?tip=127.0.0.1:{}", src.port);
+    let head = format!("GET /stream/{}.flv{} HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", cid, tip, relay.port);
+    check_flv("relay", &read_stream(relay.port, &head, 200000, Duration::from_secs(30)), 100000);
+
+    // `GIV /<id>` を送り、最初の 13 バイトを読む。受け付けたなら、そのソケットで配信元への要求が来る
+    let giv = |port: u16, id: &str| {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        s.write_all(format!("GIV /{}\r\n\r\n", id).as_bytes()).unwrap();
+        let mut buf = [0u8; 13];
+        let got = if s.read_exact(&mut buf).is_ok() { String::from_utf8_lossy(&buf).into_owned() } else { String::new() };
+        (got, s)
+    };
+    // 配信しているチャンネルと、配信元から受け取っている間の中継は断る
+    let (got, _s) = giv(src.port, &cid);
+    assert!(got.starts_with("HTTP/1.0 503"), "配信しているチャンネルへの GIV を断らない: {:?}", got);
+    let (got, _s) = giv(relay.port, &cid);
+    assert!(got.starts_with("HTTP/1.0 503"), "中継している間の GIV を断らない: {:?}", got);
+
+    // 満員の配信元 (トラッカー) から中継させる。503 のあと、PCP で別のホスト (つないでも応答しない) を
+    // 教えて QUIT を送る。中継はそのホストにつなぎに行って待つので、その間に GIV を送る
+    let cid2 = "0123456789ABCDEF0123456789ABCDEF";
+    let id2: Vec<u8> = (0..16).map(|i| u8::from_str_radix(&cid2[i * 2..i * 2 + 2], 16).unwrap()).collect();
+    let hang = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let hang_port = hang.local_addr().unwrap().port();
+    let full = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let full_port = full.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for c in full.incoming() {
+            let Ok(mut c) = c else { continue };
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let mut req = Vec::new();
+            let mut b = [0u8; 1];
+            while !req.ends_with(b"\r\n\r\n") && matches!(c.read(&mut b), Ok(1)) {
+                req.push(b[0]);
+            }
+            c.write_all(b"HTTP/1.0 503 Service Unavailable\r\n\r\n").unwrap();
+            assert!(matches!(read_atom(&mut c), Atom::Parent(id, _) if &id == b"helo"));
+            let mut out = AtomBuf::default();
+            out.parent(id4(b"oleh"), 2);
+            out.string(id4(b"agnt"), b"PeerCast/0.1218");
+            out.bytes(id4(b"sid"), b"fake-full-sess!!");
+            let mut ip = [0u8; 16];
+            ip[10..].copy_from_slice(&[0xff, 0xff, 127, 0, 0, 1]);
+            out.parent(id4(b"host"), 4);
+            out.bytes(id4(b"cid"), &id2);
+            out.address(id4(b"ip"), &ip);
+            out.short(id4(b"port"), hang_port as i16);
+            out.char(id4(b"flg1"), 0x12);
+            out.int(id4(b"quit"), 1003);
+            c.write_all(&out.0).unwrap();
+            let _ = c.read_to_end(&mut Vec::new());
+        }
+    });
+    let rp = relay.port;
+    std::thread::spawn(move || {
+        if let Ok(mut s) = TcpStream::connect(("127.0.0.1", rp)) {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
+            let _ = s.write_all(format!("GET /stream/{}.flv?tip=127.0.0.1:{} HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", cid2, full_port, rp).as_bytes());
+            let _ = s.read_to_end(&mut Vec::new());
+        }
+    });
+    hang.set_nonblocking(true).unwrap();
+    let t0 = Instant::now();
+    let hung = loop {
+        match hang.accept() {
+            Ok((c, _)) => break c,
+            Err(_) => {
+                assert!(t0.elapsed() < Duration::from_secs(20), "QUIT のあと、教えたホストにつなぎに来ない");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    };
+    // 断られたあとの GIV は受け付け、待っていたホストを諦めたあと、そのソケットで配信元に要求する
+    let mut g = TcpStream::connect(("127.0.0.1", rp)).unwrap();
+    g.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    g.write_all(format!("GIV /{}\r\n\r\n", cid2).as_bytes()).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    drop(hung);
+    let mut buf = [0u8; 13];
+    g.read_exact(&mut buf).expect("配信元に断られたあとの GIV を受け付けない");
+    assert_eq!(&buf, b"GET /channel/");
+    // 使ったあとは、次に断られるまで受け付けない
+    let (got, _s) = giv(relay.port, cid2);
+    assert!(got.starts_with("HTTP/1.0 503"), "2 つ目の GIV を断らない: {:?}", got);
+}
+
 // ---------------------------------------------------------------- TLS
 
 /// テストの自己署名の証明書 server.crt と鍵 server.key を `dir` に作る
