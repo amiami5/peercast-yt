@@ -14,20 +14,20 @@ use crate::pcp::*;
 use crate::pcstring;
 use crate::strutil;
 
+/// 入力の中の位置 (始まり, 長さ)
+pub type Span = (usize, usize);
+
 /// `processMp3Metadata` の解釈。`StreamTitle` と `StreamUrl` の値 (引用符は付いたまま) を
 /// 入力の中の位置 (始まり, 長さ) で返す。同じ名前が何度もあれば最後のもの。
 ///
 /// `名前=値;名前=値;...` を、名前は次の `=` まで、値は次の `;` まで (なければ終わりまで)
 /// として読む。名前には `;` が入りうる (C++ 版と同じ)。
-pub fn mp3_metadata(s: &[u8]) -> (Option<(usize, usize)>, Option<(usize, usize)>) {
+pub fn mp3_metadata(s: &[u8]) -> (Option<Span>, Option<Span>) {
     let s = &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())];
     let (mut title, mut url) = (None, None);
     let mut cmd = 0;
-    loop {
-        let eq = match s[cmd..].iter().position(|&c| c == b'=') {
-            Some(p) => cmd + p,
-            None => break,
-        };
+    while let Some(p) = s[cmd..].iter().position(|&c| c == b'=') {
+        let eq = cmd + p;
         let arg = eq + 1;
         let (arg_end, next) = match s[arg..].iter().position(|&c| c == b';') {
             Some(p) => (arg + p, Some(arg + p + 1)),

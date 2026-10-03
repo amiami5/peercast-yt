@@ -474,14 +474,14 @@ fn handshake_giv(c: &mut Conn, line: &[u8]) -> Result<()> {
         let ch = c.pc.chanmgr.find_channel_by_id(&id).ok_or_else(|| http_error(HTTP_SC_NOTFOUND, 404))?;
         let sock = c.take_sock().ok_or_else(|| Error::stream("Not connected"))?;
         if let Err(sock) = ch.accept_giv(sock) {
-            c.set_sock(sock);
+            c.set_sock(*sock);
             return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
         }
         crate::log_debug!("Accepted GIV channel {} from: {}", idstr, ipstr);
     } else {
         let sock = c.take_sock().ok_or_else(|| Error::stream("Not connected"))?;
         if let Err(sock) = c.pc.servmgr.accept_giv(sock) {
-            c.set_sock(sock);
+            c.set_sock(*sock);
             return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
         }
         crate::log_debug!("Accepted GIV PCP from: {}", ipstr);
@@ -1114,7 +1114,7 @@ fn run_cmd(ctx: &Ctx, http: &mut Http, cmd: &[u8], query: &[u8], jump: &mut Vec<
                     let info = ch.info();
                     let the_hit = pc
                         .chanmgr
-                        .with_hitlist(&info, |l| l.hits.iter().filter(|h| h.host == designation).last().cloned())
+                        .with_hitlist(&info, |l| l.hits.iter().rev().find(|h| h.host == designation).cloned())
                         .flatten();
                     let mut st = ch.st();
                     match the_hit {

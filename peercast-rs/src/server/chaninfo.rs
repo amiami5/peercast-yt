@@ -137,8 +137,7 @@ impl ChanInfo {
 
     /// `initNameID`: ID として読めればその ID、でなければ名前
     pub fn init_name_id(s: &[u8]) -> ChanInfo {
-        let mut i = ChanInfo::default();
-        i.id = crate::gnuid::from_str(s);
+        let mut i = ChanInfo { id: crate::gnuid::from_str(s), ..Default::default() };
         if !is_set(&i.id) {
             i.name.assign(s);
         }

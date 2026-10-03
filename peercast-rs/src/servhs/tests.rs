@@ -380,8 +380,8 @@ fn local_files() {
     assert_eq!(mime_type_for(b"/x/a.txt"), None);
     let f = local_file(b"html/ja/play.html?id=0123&x=1");
     assert_eq!((f.page, f.split_ok, f.id.as_slice()), (LocalPage::Play, true, &b"0123"[..]));
-    assert_eq!(local_file(b"html/ja/head.html").split_ok, false);
-    assert_eq!(local_file(b"html/ja/connections.html?id=a?b").split_ok, false);
+    assert!(!local_file(b"html/ja/head.html").split_ok);
+    assert!(!local_file(b"html/ja/connections.html?id=a?b").split_ok);
     assert_eq!(local_file(b"html/ja/index.html").page, LocalPage::Plain);
     assert_eq!(local_file_name(b"/r/", b"html/a.html"), b"/r/html/a.html");
     assert_eq!(local_file_name(b"/r/", &[b'a'; 252]), b"/r/");

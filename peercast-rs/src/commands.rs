@@ -8,10 +8,13 @@ fn until_nul(s: &[u8]) -> &[u8] {
     &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())]
 }
 
+/// `parse_options` の結果: (オプションの名前と値, 位置引数)
+pub type Options = (BTreeMap<Vec<u8>, Vec<u8>>, Vec<Vec<u8>>);
+
 /// `parse_options`: `--名前[=値]` と `-名前` のオプションと、それ以外 (位置引数) に分ける。
 /// `--` より後ろは全部位置引数。知らないオプションはエラー (`FormatException` のメッセージ)。
 #[allow(clippy::type_complexity)]
-pub fn parse_options(args: &[Vec<u8>], names: &[Vec<u8>]) -> Result<(BTreeMap<Vec<u8>, Vec<u8>>, Vec<Vec<u8>>), Vec<u8>> {
+pub fn parse_options(args: &[Vec<u8>], names: &[Vec<u8>]) -> Result<Options, Vec<u8>> {
     let mut options = BTreeMap::new();
     let mut positionals = Vec::new();
     let known = |n: &[u8]| names.iter().any(|x| x.as_slice() == n);
@@ -55,9 +58,9 @@ mod tests {
     fn options() {
         let names = v(&["--help", "-n", "--count"]);
         let (o, p) = parse_options(&v(&["a", "--count=3", "-n", "--help", "b", "--", "-x", "--y"]), &names).unwrap();
-        assert_eq!(o.get(&b"--count"[..].to_vec()), Some(&b"3".to_vec()));
-        assert_eq!(o.get(&b"-n"[..].to_vec()), Some(&vec![]));
-        assert_eq!(o.get(&b"--help"[..].to_vec()), Some(&vec![]));
+        assert_eq!(o.get(&b"--count"[..]), Some(&b"3".to_vec()));
+        assert_eq!(o.get(&b"-n"[..]), Some(&vec![]));
+        assert_eq!(o.get(&b"--help"[..]), Some(&vec![]));
         assert_eq!(p, v(&["a", "b", "-x", "--y"]));
         assert_eq!(parse_options(&v(&["--nope=1"]), &names).unwrap_err(), b"Unknown long option: --nope");
         assert_eq!(parse_options(&v(&["-z"]), &names).unwrap_err(), b"Unknown short option: -z");
@@ -65,6 +68,6 @@ mod tests {
         assert_eq!(parse_options(&v(&[""]), &names).unwrap().1, v(&[""]));
         // 値の中の '=' はそのまま
         let (o, _) = parse_options(&v(&["--count=a=b"]), &names).unwrap();
-        assert_eq!(o.get(&b"--count"[..].to_vec()), Some(&b"a=b".to_vec()));
+        assert_eq!(o.get(&b"--count"[..]), Some(&b"a=b".to_vec()));
     }
 }

@@ -102,8 +102,8 @@ impl Buffer<'_> {
         self.p.last_pos = w;
         self.p.write_pos = w.wrapping_add(1);
         let w = self.p.write_pos;
-        self.p.first_pos = if w >= MAX_PACKETS { w - MAX_PACKETS } else { 0 };
-        self.p.safe_pos = if w >= NUM_SAFEPACKETS { w - NUM_SAFEPACKETS } else { 0 };
+        self.p.first_pos = w.saturating_sub(MAX_PACKETS);
+        self.p.safe_pos = w.saturating_sub(NUM_SAFEPACKETS);
         if update_read_pos {
             self.p.read_pos = w;
         }

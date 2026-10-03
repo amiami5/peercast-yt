@@ -13,8 +13,8 @@ pub const BUFFER_LEN: usize = 100 * 1024;
 pub enum Error {
     /// 読み出しが C++ の例外で中断された
     Abort,
-    /// 通知先 (C++) で例外が起きた
-    Callback,
+    /// 通知先がタグの属性を読めなかった
+    Attr(AttrError),
     /// "Tag too long"
     TagTooLong,
     /// "Content too big"
@@ -31,22 +31,22 @@ impl From<Abort> for Error {
     }
 }
 
-/// 読んだ要素の通知先。どれも C++ 側で例外が起きたら `Err(())` を返す。
+/// 読んだ要素の通知先。タグの属性が読めなければ `Err` を返して読み取りを止める。
 pub trait Builder {
     /// 今のノードの内容 (最初の NUL の手前まで)
-    fn content(&mut self, s: &[u8]) -> Result<(), ()>;
+    fn content(&mut self, s: &[u8]) -> Result<(), AttrError>;
     /// 開きタグ (最初の NUL の手前まで)。`single` は `<x/>` の形。
-    fn start_tag(&mut self, s: &[u8], single: bool) -> Result<(), ()>;
+    fn start_tag(&mut self, s: &[u8], single: bool) -> Result<(), AttrError>;
     /// 閉じタグ
-    fn end_tag(&mut self) -> Result<(), ()>;
+    fn end_tag(&mut self) -> Result<(), AttrError>;
 }
 
 fn until_nul(s: &[u8]) -> &[u8] {
     &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())]
 }
 
-fn cb(r: Result<(), ()>) -> Result<(), Error> {
-    r.map_err(|_| Error::Callback)
+fn cb(r: Result<(), AttrError>) -> Result<(), Error> {
+    r.map_err(Error::Attr)
 }
 
 /// `XML::read`
@@ -284,15 +284,15 @@ mod tests {
     struct Log(Vec<String>);
 
     impl Builder for Log {
-        fn content(&mut self, s: &[u8]) -> Result<(), ()> {
+        fn content(&mut self, s: &[u8]) -> Result<(), AttrError> {
             self.0.push(format!("c:{}", String::from_utf8_lossy(s)));
             Ok(())
         }
-        fn start_tag(&mut self, s: &[u8], single: bool) -> Result<(), ()> {
+        fn start_tag(&mut self, s: &[u8], single: bool) -> Result<(), AttrError> {
             self.0.push(format!("{}{}", if single { "s:" } else { "t:" }, String::from_utf8_lossy(s)));
             Ok(())
         }
-        fn end_tag(&mut self) -> Result<(), ()> {
+        fn end_tag(&mut self) -> Result<(), AttrError> {
             self.0.push("e".into());
             Ok(())
         }

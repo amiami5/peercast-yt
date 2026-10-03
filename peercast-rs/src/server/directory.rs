@@ -97,7 +97,7 @@ impl ChannelEntry {
     pub fn text_to_entries(text: &[u8], feed_url: &[u8], errors: &mut Vec<Vec<u8>>) -> Vec<ChannelEntry> {
         let mut res = Vec::new();
         crate::chandir::parse_index(text, |line| match line {
-            crate::chandir::Line::Entry(e) => res.push(ChannelEntry { e, feed_url: feed_url.to_vec() }),
+            crate::chandir::Line::Entry(e) => res.push(ChannelEntry { e: *e, feed_url: feed_url.to_vec() }),
             crate::chandir::Line::Error(lineno) => errors.push(crate::chandir::parse_error_message(lineno)),
         });
         res
@@ -180,7 +180,7 @@ impl ChannelDirectory {
             crate::log_error!("Already have feed {}", String::from_utf8_lossy(url));
             return false;
         }
-        let ok = crate::url::parse_url(url).map_or(false, |u| u.scheme == b"http" || u.scheme == b"https");
+        let ok = crate::url::parse_url(url).is_ok_and(|u| u.scheme == b"http" || u.scheme == b"https");
         if !ok {
             crate::log_error!("Invalid feed URL {}", String::from_utf8_lossy(url));
             return false;
@@ -272,7 +272,7 @@ impl ChannelDirectory {
             }
         }
         // 聴取者の多い順 (同じなら元の順)
-        all.sort_by(|a, b| b.num_directs.cmp(&a.num_directs));
+        all.sort_by_key(|c| std::cmp::Reverse(c.num_directs));
         let n = all.len();
         {
             let mut g = self.lock();
@@ -507,7 +507,7 @@ fn post_random_data(addr: &[u8], port: u16, object: &[u8], size: usize, yp: Ip) 
         ]),
     );
     let mut r = sys::Random::default();
-    req.body = (0..size).map(|_| r.next() as u8).collect();
+    req.body = (0..size).map(|_| r.next_u32() as u8).collect();
     Ok(Http::new(&mut sock).send_request(&req)?.status_code)
 }
 
@@ -802,7 +802,7 @@ pub fn ipv6_port_check(session_id: &[u8; 16], port: u16) -> Result<PortCheckResu
     if crate::json::nesting_is_too_deep(&res.body, 16) {
         return Err(Error::general("portcheck: response JSON is nested too deeply"));
     }
-    let data = crate::json::parse(&res.body).map_err(|e| Error::general(String::from_utf8_lossy(&e.what()).into_owned()))?;
+    let data = crate::json::parse(&res.body).map_err(|e| Error::general(String::from_utf8_lossy(e.what()).into_owned()))?;
     let ipstr = match data.get(b"ip") {
         Some(crate::json::Value::Str(s)) => s.clone(),
         _ => return Err(Error::general("[json.exception.type_error.302] type must be string, but is null")),

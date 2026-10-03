@@ -57,7 +57,7 @@ impl FlagRegistry {
 
     /// 決まった名前の旗の値
     pub fn get(&self, name: &str) -> bool {
-        self.find(name.as_bytes()).map_or(false, |f| f.get())
+        self.find(name.as_bytes()).is_some_and(|f| f.get())
     }
 
     /// `forEachFlag`: 名前の順

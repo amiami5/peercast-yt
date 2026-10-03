@@ -46,7 +46,7 @@ fn chunked(cs: u8, ts: u32, ty: u8, sid: u32, payload: &[u8], chunk: usize) -> V
 fn publish_prefix() -> Vec<u8> {
     let mut v = vec![3];
     v.extend((0..1536).map(|i| (i % 251) as u8)); // C1
-    v.extend(std::iter::repeat(0).take(1536)); // C2
+    v.extend(std::iter::repeat_n(0, 1536)); // C2
     v.extend(chunked(3, 0, 0x14, 0, &[amf_str("connect"), amf_num(1.0), amf_null()].concat(), 128));
     v.extend(chunked(3, 0, 0x14, 0, &[amf_str("createStream"), amf_num(2.0), amf_null()].concat(), 128));
     v.extend(chunked(4, 0, 0x14, 1, &[amf_str("publish"), amf_num(3.0), amf_null(), amf_str("key")].concat(), 128));
@@ -238,7 +238,7 @@ fn drip_feeder_is_timed_out() {
     let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
     let t0 = Instant::now();
     let mut data = vec![3u8];
-    data.extend(std::iter::repeat(0).take(1536));
+    data.extend(std::iter::repeat_n(0, 1536));
     for b in data {
         if c.write_all(&[b]).is_err() {
             break;

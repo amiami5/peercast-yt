@@ -205,7 +205,7 @@ fn inet_ntop6(a: &[u8; 16]) -> String {
         out.push_str(&format!("{:x}", words[i]));
         i += 1;
     }
-    if best_base.map_or(false, |b| b + best_len == 8) {
+    if best_base.is_some_and(|b| b + best_len == 8) {
         out.push(':');
     }
     out
@@ -542,7 +542,7 @@ struct Scanf<'a> {
 
 impl Scanf<'_> {
     fn int(&mut self, width: usize) -> Option<i64> {
-        while self.s.get(self.i).map_or(false, |c| c.is_ascii_whitespace()) {
+        while self.s.get(self.i).is_some_and(|c| c.is_ascii_whitespace()) {
             self.i += 1;
         }
         let start = self.i;
@@ -555,7 +555,7 @@ impl Scanf<'_> {
         }
         let digits_start = self.i;
         let mut v: i64 = 0;
-        while w < width && self.s.get(self.i).map_or(false, |c| c.is_ascii_digit()) {
+        while w < width && self.s.get(self.i).is_some_and(|c| c.is_ascii_digit()) {
             v = v.saturating_mul(10).saturating_add((self.s[self.i] - b'0') as i64);
             self.i += 1;
             w += 1;

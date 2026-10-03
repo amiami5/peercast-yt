@@ -1,7 +1,7 @@
 //! `/cmd?q=` のコマンド (core/common/commands.cpp の `Commands`)。オプションの解釈は `crate::commands`。
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -95,7 +95,7 @@ fn find(name: &[u8]) -> Option<Command> {
     COMMANDS.iter().find(|(n, _)| n.as_bytes() == name).map(|(_, f)| *f)
 }
 
-fn parse(argv: &[Vec<u8>], names: &[&str]) -> Result<(BTreeMap<Vec<u8>, Vec<u8>>, Vec<Vec<u8>>)> {
+fn parse(argv: &[Vec<u8>], names: &[&str]) -> Result<crate::commands::Options> {
     let names: Vec<Vec<u8>> = names.iter().map(|n| n.as_bytes().to_vec()).collect();
     crate::commands::parse_options(argv, &names).map_err(|e| Error::format(String::from_utf8_lossy(&e).into_owned()))
 }

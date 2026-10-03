@@ -12,7 +12,7 @@ use super::error::{Error, Kind, Result};
 
 #[allow(non_camel_case_types)]
 type SSL_CTX = c_void;
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 type SSL = c_void;
 #[allow(non_camel_case_types)]
 type SSL_METHOD = c_void;

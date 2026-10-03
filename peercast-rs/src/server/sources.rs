@@ -524,8 +524,7 @@ fn set_src_stat(ch: &Channel, s: Option<Arc<Stat>>) {
 /// ソケットから読んでチャンネルに流す (`readStream` と、PCP の配信元の登録)
 fn run_read_stream(pc: &Arc<Peercast>, ch: &Arc<Channel>, input: &mut dyn Stream, source: &mut SourceStream) -> i32 {
     *ch.source_stream.lock().unwrap_or_else(|e| e.into_inner()) = source.pcp_shared();
-    let r = ch.read_stream(pc, ch, input, source);
-    r
+    ch.read_stream(pc, ch, input, source)
 }
 
 /// `ICYSource::stream`
@@ -1223,8 +1222,7 @@ mod tests {
 
     #[test]
     fn retry_wait_stops() {
-        let mut r = RetryDelay::default();
-        r.quick_ends = 5;
+        let mut r = RetryDelay { quick_ends: 5 };
         let t = std::time::Instant::now();
         r.wait(t, || true);
         assert!(t.elapsed().as_millis() < 1000);

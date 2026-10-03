@@ -811,17 +811,17 @@ impl ServMgr {
     }
 
     /// `acceptGIV`: COUT のサーバントに渡す
-    pub fn accept_giv(&self, sock: ClientSocket) -> std::result::Result<(), ClientSocket> {
+    pub fn accept_giv(&self, sock: ClientSocket) -> std::result::Result<(), Box<ClientSocket>> {
         let mut sock = sock;
         for sv in self.servents() {
             if sv.ty() == servent::T_COUT {
                 match sv.accept_giv(sock) {
                     Ok(()) => return Ok(()),
-                    Err(s) => sock = s,
+                    Err(s) => sock = *s,
                 }
             }
         }
-        Err(sock)
+        Err(Box::new(sock))
     }
 
     /// `procConnectArgs`: "[チャンネルID]?ip=...&tip=..." から、チャンネルの情報とヒットを作る。
@@ -883,7 +883,7 @@ impl ServMgr {
     }
 
     fn find_playing_channel(&self, pc: &Arc<Peercast>, info: &ChanInfo, relay: bool) -> Option<ChanInfo> {
-        let mut ch = pc.chanmgr.find_channel_by_name_id(&info);
+        let mut ch = pc.chanmgr.find_channel_by_name_id(info);
         match &ch {
             Some(c) => {
                 if !c.is_playing() {
@@ -894,15 +894,10 @@ impl ServMgr {
                             st.info.last_play_end = 0;
                         }
                         for _ in 0..100 {
-                            let ci = ch.as_ref().map(|c| c.info()).unwrap_or_else(ChanInfo::new);
+                            let ci = ch.as_ref().map(|c| c.info()).unwrap_or_default();
                             ch = pc.chanmgr.find_channel_by_name_id(&ci);
-                            match &ch {
-                                None => return None,
-                                Some(c) => {
-                                    if c.is_playing() {
-                                        break;
-                                    }
-                                }
+                            if ch.as_ref()?.is_playing() {
+                                break;
                             }
                             sys::sleep(100);
                         }
@@ -914,7 +909,7 @@ impl ServMgr {
             }
             None => {
                 if relay {
-                    pc.chanmgr.find_and_relay(pc, &info).map(|c| c.info())
+                    pc.chanmgr.find_and_relay(pc, info).map(|c| c.info())
                 } else {
                     None
                 }
@@ -1113,7 +1108,7 @@ impl ServMgr {
             }
         };
         let r = (|| -> std::result::Result<Vec<Cookie>, String> {
-            let arr = crate::json::parse(&data).map_err(|e| String::from_utf8_lossy(&e.what()).into_owned())?;
+            let arr = crate::json::parse(&data).map_err(|e| String::from_utf8_lossy(e.what()).into_owned())?;
             let items = match arr {
                 crate::json::Value::Array(a) => a,
                 _ => return Err("json format error: array expected".into()),

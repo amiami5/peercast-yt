@@ -152,7 +152,7 @@ pub fn format_g17(x: f64) -> String {
     let e = format!("{:.*e}", (P - 1) as usize, x);
     let (mantissa, exp) = e.split_once('e').unwrap();
     let exp: i32 = exp.parse().unwrap();
-    if exp < -4 || exp >= P {
+    if !(-4..P).contains(&exp) {
         let m = strip_zeros(mantissa);
         let sign = if exp < 0 { '-' } else { '+' };
         format!("{}e{}{:02}", m, sign, exp.abs())
