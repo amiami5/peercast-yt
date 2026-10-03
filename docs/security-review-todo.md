@@ -151,7 +151,7 @@
   - enum の大きい要素を `Box` にした (`chandir.rs` の `Line::Entry`、`server/regex.rs` の `Esc::Class`)。
   - ヒットリストの最後の一致を `rev().find()` で探すようにした (`server/servent_http.rs`)。
 - [x] 間違いにつながりうるもの
-  - `if` の両方の枝が同じ (`server/channel.rs` の `readStream` の誤り): どちらもログを書いて -1 にするだけなので、一つにまとめた。
+  - `if` の両方の枝が同じ (`server/channel.rs` の `readStream` の誤り): どちらもログを書いて -1 にするだけなので、一つにまとめた。develop-old の C++ 版は `StreamException` だけを捕まえ、ほかの例外は後始末を飛ばして外へ抜けるが、Rust 版はどの誤りも捕まえて後始末をする (動きは変えていない)。C++ 版の問題は docs/cpp-known-issues.md に書いた。
   - 引き算の下限を `saturating_sub` にした (`chanpacket.rs`)。
   - `xml::Builder` が `Result<_, ()>` を返していた: 失敗の理由は属性の読み取りの誤りだけなので `AttrError` を返すようにし、`xml::Error::Callback` を `Attr(AttrError)` にした。`uptest.rs` の誤りの横流し (`attr_error`) はなくなった。
 - [x] 書き方だけのもの

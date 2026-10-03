@@ -89,6 +89,12 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   バッファーの前に書き戻す。Rust 版はエラーにする。
 * 段階 9b: `PlayList::readSCPLS` と `readPLS` は空の行で読むのをやめる (`readLine` が 0 を返すため)。
   プレイリストの途中の空の行より後の URL は読まれない。Rust 版も同じ。
+* 段階 9b: `Channel::readStream` は `StreamException` だけを捕まえるので、配信元から届いたデータで起きる
+  ほかの例外 (`AtomStream` の "Bad atom data" の `GeneralException`、AMF0 や MKV の `std::runtime_error` など)
+  は、`S_CLOSING` にする、トラッカーへの最後の更新、`channelStop`、`readEnd` を飛ばして外へ抜ける。
+  `PeercastSource::stream` もこれを捕まえないので、下流への `PCP_QUIT`、`deadHit`、配信元のソケットを閉じる
+  処理も飛ばされ、`Channel::stream` の `catch (GeneralException&)` でログに書かれるだけになる。Rust 版は
+  どの誤りも `StreamException` と同じく `readStream` の中で捕まえて -1 を返し、後始末を行う。
 * 段階 9c: コンソールの `get` コマンドは、位置引数でなく `argv[0]` を URL として使う (`get -- URL` で "--" を
   取りに行く)。Rust 版も同じ。
 * 段階 9c: `POST /admin` に Content-Length がないと、`HTTP::getRequest` の `GeneralException` を
