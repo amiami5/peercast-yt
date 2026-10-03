@@ -807,6 +807,8 @@ impl Channel {
             }
             Ok(())
         })();
+        // C++ 版は StreamException だけを捕まえ、ほかの例外は後始末を飛ばして外へ抜けていた
+        // (docs/cpp-known-issues.md)。ここではどの誤りも同じく捕まえて -1 にする
         if let Err(e) = r {
             crate::log_error!("readStream: {}", e);
             error = -1;
