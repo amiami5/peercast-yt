@@ -453,16 +453,16 @@ impl Channel {
     /// `acceptGIV`: チャンネル ID の付いた GIV のソケットを、中継の配信元に置く。中継しているチャンネルで、
     /// 配信元に断られてから `GIV_WINDOW` 秒の間でなければ断る (断った相手がほかのノードにこちらへの PUSH を
     /// 頼むことがある。それ以外のときに受け付けると、誰でも配信元になれる。#41)
-    pub fn accept_giv(&self, sock: ClientSocket) -> std::result::Result<(), ClientSocket> {
+    pub fn accept_giv(&self, sock: ClientSocket) -> std::result::Result<(), Box<ClientSocket>> {
         if self.st().src_type != SRC_PEERCAST || sys::get_time() > self.giv_until.load(Ordering::SeqCst) {
-            return Err(sock);
+            return Err(Box::new(sock));
         }
         let mut p = self.push_sock.lock().unwrap_or_else(|e| e.into_inner());
         if p.is_none() {
             *p = Some(sock);
             Ok(())
         } else {
-            Err(sock)
+            Err(Box::new(sock))
         }
     }
 
@@ -808,13 +808,8 @@ impl Channel {
             Ok(())
         })();
         if let Err(e) = r {
-            if e.is_stream() {
-                crate::log_error!("readStream: {}", e);
-                error = -1;
-            } else {
-                crate::log_error!("readStream: {}", e);
-                error = -1;
-            }
+            crate::log_error!("readStream: {}", e);
+            error = -1;
         }
         self.set_status(pc, S_CLOSING);
         if was_broadcasting {

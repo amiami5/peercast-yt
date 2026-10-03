@@ -140,7 +140,7 @@ pub fn is_cross_origin_request(sec_fetch_site: &[u8], origin: &[u8], host: &[u8]
     // "null" など、scheme://host 形式でないものは拒否。
     match origin.windows(3).position(|w| w == b"://") {
         None => true,
-        Some(pos) => origin[pos + 3..].to_ascii_lowercase() != host.to_ascii_lowercase(),
+        Some(pos) => !origin[pos + 3..].eq_ignore_ascii_case(host),
     }
 }
 

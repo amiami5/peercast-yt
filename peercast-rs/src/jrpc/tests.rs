@@ -18,7 +18,7 @@ struct Mock {
 }
 
 impl Mock {
-    fn fail<T>(&mut self) -> HostResult<()> {
+    fn fail(&mut self) -> HostResult<()> {
         match self.fail.take() {
             Some(e) => Err(e),
             None => Ok(()),
@@ -48,7 +48,7 @@ impl Host for Mock {
         Ok(())
     }
     fn fetch(&mut self, req: &FetchRequest) -> HostResult<Option<[u8; 16]>> {
-        self.fail::<()>()?;
+        self.fail()?;
         self.calls.push(format!("fetch {} {}", String::from_utf8_lossy(&req.name), req.ipv6));
         Ok(if req.url.is_empty() { None } else { Some([0xab; 16]) })
     }
@@ -121,7 +121,7 @@ impl Host for Mock {
         Ok(self.storage.clone())
     }
     fn write_storage(&mut self, _key: &[u8], value: &[u8]) -> HostResult<()> {
-        self.fail::<()>()?;
+        self.fail()?;
         self.storage = Some(value.to_vec());
         Ok(())
     }

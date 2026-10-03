@@ -52,7 +52,7 @@ fn split_scheme(spec: &str) -> Option<(&str, &str)> {
 }
 
 pub fn parse_http(rest: &str) -> Result<HttpTarget> {
-    let end = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, after) = rest.split_at(end);
     let after = after.split('#').next().unwrap_or("");
     let (path, query) = match after.find('?') {

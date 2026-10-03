@@ -142,21 +142,22 @@
 - rtmp-server: 既定でこの PC からの接続だけを受け付ける。
 - ソケット: 要求を読み終えるまでの期限が効いている。
 
-## clippy の警告 (2026-10-01、セキュリティの見直しのあとで片付ける)
+## clippy の警告 (2026-10-01、2026-10-03 に片付けた)
 
-`cargo clippy --workspace --all-targets` (clippy 0.1.98) で、error はなく warning が 82 件。セキュリティの問題ではなく、書き方の提案と、少し性能に関わるもの。#34〜#40 が済んだら、まとめて片付けるコミットを作る。それ以降は、変更のたびに警告が増えていないことを確かめる。
+`cargo clippy --workspace --all-targets` (clippy 0.1.98) の warning 82 件を 0 件にした。これ以降は、変更のたびに警告が増えていないことを確かめる。
 
-- [ ] 性能に少し関わるもの
-  - `Err` の型が 136 バイト以上と大きい (`server/channel.rs`・`servent.rs`・`servmgr.rs`)。`Error` を `Box` にするなどを考える。
-  - enum の要素の大きさの差が大きい (`chandir.rs` 368 バイト、`server/regex.rs` 256 バイト)。
-  - `DoubleEndedIterator` に `last()` を使っていて、全部たどる (`server/servent_http.rs`)。
-- [ ] 間違いにつながりうるもの
-  - `if` の両方の枝が同じ (`server/channel.rs`)。意図したものか確かめる。
-  - 引き算の下限を手で確かめている (`chanpacket.rs` 2 件、`saturating_sub` にできる)。
-  - `Result<_, ()>` を返している (`xml.rs` 3 件)。誤りの理由が分からない。
-- [ ] 書き方だけのもの (自動で直せるものが多い。`cargo clippy --fix` も使える)
-  - `map_or` を簡単にできる (13 件: `server/host.rs`・`regex.rs`・`servent.rs`・`sys.rs`・`directory.rs`・`flag.rs`・`chanmgr.rs`・`jrpc.rs`)。
-  - 型が複雑なので `type` で名前を付ける (7 件: `server/log.rs` 4 件・`channel.rs`・`server/commands.rs`・rtmp-server-rs)。
-  - `repeat().take()` を `repeat_n` に (6 件、rtmp-server-rs の `amf0.rs` とテスト)。
-  - 不要な `to_vec` (`commands.rs` 4 件)、すぐ外す参照 (`server/servmgr.rs`・`directory.rs` 4 件)、`Default::default()` のあとのフィールドの代入 (`pcp/handshake.rs`・`server/chaninfo.rs`・`server/sources.rs`)、`Range::contains` にできる比べ方 (`json/mod.rs`・`servent.rs`・`template/value.rs`)。
-  - そのほか 1 件ずつのもの (引数が 8 つの関数 `bbs/mod.rs`、`SSL` の名前 `server/tls.rs`、`next` という名前のメソッド `server/sys.rs`、`assert_eq!` に `true`/`false` `servhs/tests.rs` など)。
+- [x] 性能に少し関わるもの
+  - `accept_giv` が断ったときに返すソケット (136 バイト) を `Box` にした (`server/channel.rs`・`servent.rs`・`servmgr.rs`)。`Error` そのものは大きくない。
+  - enum の大きい要素を `Box` にした (`chandir.rs` の `Line::Entry`、`server/regex.rs` の `Esc::Class`)。
+  - ヒットリストの最後の一致を `rev().find()` で探すようにした (`server/servent_http.rs`)。
+- [x] 間違いにつながりうるもの
+  - `if` の両方の枝が同じ (`server/channel.rs` の `readStream` の誤り): どちらもログを書いて -1 にするだけなので、一つにまとめた。
+  - 引き算の下限を `saturating_sub` にした (`chanpacket.rs`)。
+  - `xml::Builder` が `Result<_, ()>` を返していた: 失敗の理由は属性の読み取りの誤りだけなので `AttrError` を返すようにし、`xml::Error::Callback` を `Attr(AttrError)` にした。`uptest.rs` の誤りの横流し (`attr_error`) はなくなった。
+- [x] 書き方だけのもの
+  - `cargo clippy --fix` で直したもの (`map_or` → `is_some_and` など、`repeat_n`、`io::Error::other` ほか)。
+  - 型に名前を付けた (`commands::Options`、`log::Listener`・`AuxFunc`、`channel::Span`、ui-gen の `Catalog`)。
+  - `bbs::post_message` の名前・メール・本文を `Message` にまとめた (引数が 8 つ)。
+  - `sys::Random::next` を `next_u32` にした (`Iterator::next` と紛らわしい)。
+  - rtmp-server-rs の `flv::State` の要素の名前から `Expect` を外した。
+  - `server/tls.rs` の `SSL` は OpenSSL の名前に合わせているので、`clippy::upper_case_acronyms` を許した。

@@ -354,7 +354,7 @@ fn call_internal(input: &[u8], host: &mut dyn Host) -> Value {
     };
 
     let obj = match &j {
-        Value::Object(o) if o.get(&b"jsonrpc"[..]).map_or(false, |v| v.is_str(b"2.0")) => o,
+        Value::Object(o) if o.get(&b"jsonrpc"[..]).is_some_and(|v| v.is_str(b"2.0")) => o,
         _ => return error_object(INVALID_REQUEST, b"Invalid Request", Value::Null, Value::Null),
     };
 

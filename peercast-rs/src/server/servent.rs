@@ -355,16 +355,16 @@ impl Servent {
 
     /// `acceptGIV`: 引数のない GIV のソケットを COUT に置く。相手から QUIT を受けてから `GIV_WINDOW` 秒の間でなければ断る
     /// (PUSH を頼む相手は YP が決めるので、誰から来るかは分からない。頼んだかもしれないときだけにする)
-    pub fn accept_giv(&self, sock: ClientSocket) -> std::result::Result<(), ClientSocket> {
+    pub fn accept_giv(&self, sock: ClientSocket) -> std::result::Result<(), Box<ClientSocket>> {
         if sys::get_time() > self.giv_until.load(Ordering::SeqCst) {
-            return Err(sock);
+            return Err(Box::new(sock));
         }
         let mut p = self.push_sock.lock().unwrap_or_else(|e| e.into_inner());
         if p.is_none() {
             *p = Some(sock);
             Ok(())
         } else {
-            Err(sock)
+            Err(Box::new(sock))
         }
     }
 
@@ -1372,7 +1372,7 @@ fn handshake_stream(c: &mut Conn, info: &ChanInfo, req: &StreamHeaders) -> Resul
             } else {
                 break;
             }
-            if !(sv.thread.active() && c.sock.as_ref().map_or(false, |s| s.active())) {
+            if !(sv.thread.active() && c.sock.as_ref().is_some_and(|s| s.active())) {
                 break;
             }
         }
@@ -1646,7 +1646,7 @@ fn wait_for_channel_header(c: &mut Conn, info: &ChanInfo) -> bool {
         if ch.is_playing() && ch.raw_data.write_pos() > 0 {
             return true;
         }
-        if !c.sv.thread.active() || !c.sock.as_ref().map_or(false, |s| s.active()) {
+        if !c.sv.thread.active() || !c.sock.as_ref().is_some_and(|s| s.active()) {
             break;
         }
         sys::sleep(100);
@@ -1752,7 +1752,7 @@ fn send_raw_meta_channel(c: &mut Conn, interval: i32) {
         let mut last_url = PcString::default();
         let mut last_msg_time = sys::get_time();
         let mut show_msg = true;
-        if interval > 16384 || interval < 1 {
+        if !(1..=16384).contains(&interval) {
             return Err(Error::stream("Bad ICY Meta Interval value"));
         }
         let interval = interval as usize;

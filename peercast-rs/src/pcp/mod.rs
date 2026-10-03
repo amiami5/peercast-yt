@@ -644,7 +644,7 @@ impl Pcp<'_, '_> {
     fn read_broadcast_atoms(&mut self, atom: &mut MemAtom, numc: i32, depth: i32) -> Result<i32> {
         let mut ttl = 1i32;
         let mut ver = 0i32;
-        let mut ver_ex_prefix = [b'*', b'*'];
+        let mut ver_ex_prefix = *b"**";
         let mut from_id = [0u8; 16];
         let mut dest_id = [0u8; 16];
 

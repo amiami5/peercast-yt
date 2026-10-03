@@ -73,7 +73,7 @@ fn chunked(cs: u8, ts: u32, ty: u8, sid: u32, payload: &[u8], chunk: usize) -> V
 fn handshake_bytes() -> Vec<u8> {
     let mut v = vec![3];
     v.extend((0..1536).map(|i| (i % 251) as u8)); // C1
-    v.extend(std::iter::repeat(0).take(1536)); // C2
+    v.extend(std::iter::repeat_n(0, 1536)); // C2
     v
 }
 
@@ -176,7 +176,7 @@ fn partial_messages_only_use_what_actually_arrived() {
     let mut input = handshake_bytes();
     for cs in 2u8..=63 {
         input.extend([cs, 0, 0, 0, 0xff, 0xff, 0xff, 0x08, 1, 0, 0, 0]);
-        input.extend(std::iter::repeat(0).take(128));
+        input.extend(std::iter::repeat_n(0, 128));
     }
     let (r, _, _) = run(input);
     assert!(matches!(r, Err(Error::Eof)));
@@ -190,7 +190,7 @@ fn buffer_cap_is_enforced() {
     input.extend(chunked(2, 0, 0x01, 0, &(4u32 * 1024 * 1024).to_be_bytes(), 128));
     for cs in 5u8..=30 {
         input.extend([cs, 0, 0, 0, 0xff, 0xff, 0xff, 0x08, 1, 0, 0, 0]);
-        input.extend(std::iter::repeat(0).take(4 * 1024 * 1024));
+        input.extend(std::iter::repeat_n(0, 4 * 1024 * 1024));
     }
     let (r, _, _) = run(input);
     match r {

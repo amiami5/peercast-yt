@@ -158,7 +158,7 @@ impl<'a> Parser<'a> {
                         return Err(RegexError("error_badbrace"));
                     }
                 }
-                if min > MAX_REPEAT || max.map_or(false, |m| m > MAX_REPEAT) {
+                if min > MAX_REPEAT || max.is_some_and(|m| m > MAX_REPEAT) {
                     return Err(RegexError("error_complexity"));
                 }
                 (min, max)
@@ -214,7 +214,7 @@ impl<'a> Parser<'a> {
             b'[' => self.bracket(),
             b'\\' => self.escape(false).map(|e| match e {
                 Esc::Byte(b) => Node::Byte(b),
-                Esc::Class(t) => Node::Class(Box::new(t)),
+                Esc::Class(t) => Node::Class(t),
                 Esc::Boundary(b) => Node::WordBoundary(b),
                 Esc::BackRef(n) => Node::BackRef(n),
             }),
@@ -227,12 +227,12 @@ impl<'a> Parser<'a> {
         let c = self.peek().ok_or(RegexError("error_escape"))?;
         self.i += 1;
         Ok(match c {
-            b'd' => Esc::Class(class_of(|c| c.is_ascii_digit())),
-            b'D' => Esc::Class(class_of(|c| !c.is_ascii_digit())),
-            b'w' => Esc::Class(class_of(is_word)),
-            b'W' => Esc::Class(class_of(|c| !is_word(c))),
-            b's' => Esc::Class(class_of(is_space)),
-            b'S' => Esc::Class(class_of(|c| !is_space(c))),
+            b'd' => Esc::Class(Box::new(class_of(|c| c.is_ascii_digit()))),
+            b'D' => Esc::Class(Box::new(class_of(|c| !c.is_ascii_digit()))),
+            b'w' => Esc::Class(Box::new(class_of(is_word))),
+            b'W' => Esc::Class(Box::new(class_of(|c| !is_word(c)))),
+            b's' => Esc::Class(Box::new(class_of(is_space))),
+            b'S' => Esc::Class(Box::new(class_of(|c| !is_space(c)))),
             b't' => Esc::Byte(b'\t'),
             b'n' => Esc::Byte(b'\n'),
             b'r' => Esc::Byte(b'\r'),
@@ -282,7 +282,7 @@ impl<'a> Parser<'a> {
             }
             let lo = self.class_atom()?;
             // 範囲
-            if self.peek() == Some(b'-') && self.s.get(self.i + 1).map_or(false, |&n| n != b']') {
+            if self.peek() == Some(b'-') && self.s.get(self.i + 1).is_some_and(|&n| n != b']') {
                 self.i += 1;
                 match (lo, self.class_atom()?) {
                     (ClassAtom::Byte(a), ClassAtom::Byte(b)) => {
@@ -344,7 +344,7 @@ impl<'a> Parser<'a> {
         if c == b'\\' {
             match self.escape(true)? {
                 Esc::Byte(b) => Ok(ClassAtom::Byte(b)),
-                Esc::Class(t) => Ok(ClassAtom::Set(Box::new(t))),
+                Esc::Class(t) => Ok(ClassAtom::Set(t)),
                 _ => Err(RegexError("error_escape")),
             }
         } else {
@@ -379,7 +379,7 @@ fn hex(c: u8) -> Option<u8> {
 
 enum Esc {
     Byte(u8),
-    Class([bool; 256]),
+    Class(Box<[bool; 256]>),
     Boundary(bool),
     BackRef(usize),
 }

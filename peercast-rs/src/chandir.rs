@@ -91,7 +91,7 @@ fn lines(text: &[u8]) -> impl Iterator<Item = &[u8]> {
 /// 1 行の結果
 #[derive(Debug, PartialEq, Eq)]
 pub enum Line {
-    Entry(Entry),
+    Entry(Box<Entry>),
     /// 欄の数が 19 でない行 (1 から数えた行番号)
     Error(i32),
 }
@@ -105,7 +105,7 @@ pub fn parse_index(text: &[u8], mut f: impl FnMut(Line)) {
         if fields.len() != NUM_FIELDS {
             f(Line::Error(lineno));
         } else {
-            f(Line::Entry(Entry::from_fields(&fields).expect("19 fields")));
+            f(Line::Entry(Box::new(Entry::from_fields(&fields).expect("19 fields"))));
         }
     }
 }

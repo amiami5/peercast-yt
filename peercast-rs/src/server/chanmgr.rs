@@ -421,7 +421,7 @@ impl ChanMgr {
 
     /// `isBroadcasting(id)`
     pub fn is_broadcasting_id(&self, id: &[u8; 16]) -> bool {
-        self.find_channel_by_id(id).map_or(false, |c| c.is_broadcasting())
+        self.find_channel_by_id(id).is_some_and(|c| c.is_broadcasting())
     }
 
     /// `isBroadcasting()`

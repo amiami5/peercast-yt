@@ -10,9 +10,9 @@ const TT_SCRIPT: u8 = 18;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
-    ExpectFileHeader,
-    ExpectScriptTag,
-    ExpectDataTag,
+    FileHeader,
+    ScriptTag,
+    DataTag,
 }
 
 pub struct FlvWriter<W: Write> {
@@ -23,7 +23,7 @@ pub struct FlvWriter<W: Write> {
 
 impl<W: Write> FlvWriter<W> {
     pub fn new(out: W) -> FlvWriter<W> {
-        FlvWriter { out, state: State::ExpectFileHeader, previous_tag_size: 0 }
+        FlvWriter { out, state: State::FileHeader, previous_tag_size: 0 }
     }
 
     pub fn into_inner(self) -> W {
@@ -31,7 +31,7 @@ impl<W: Write> FlvWriter<W> {
     }
 
     pub fn write_file_header(&mut self, audio: bool, video: bool) -> Result<()> {
-        if self.state != State::ExpectFileHeader {
+        if self.state != State::FileHeader {
             return Err(Error::protocol("writeFileHeader: invalid operation"));
         }
         let flags = ((audio as u8) << 2) | (video as u8);
@@ -41,28 +41,28 @@ impl<W: Write> FlvWriter<W> {
         h.push(flags);
         h.extend_from_slice(&9u32.to_be_bytes());
         self.out.write_all(&h)?;
-        self.state = State::ExpectScriptTag;
+        self.state = State::ScriptTag;
         Ok(())
     }
 
     pub fn write_script_tag(&mut self, timestamp: u32, data: &[u8]) -> Result<()> {
-        if self.state != State::ExpectScriptTag {
+        if self.state != State::ScriptTag {
             return Err(Error::protocol("writeScriptTag: invalid operation"));
         }
         self.write_tag(TT_SCRIPT, timestamp, data)?;
-        self.state = State::ExpectDataTag;
+        self.state = State::DataTag;
         Ok(())
     }
 
     pub fn write_video_tag(&mut self, timestamp: u32, data: &[u8]) -> Result<()> {
-        if self.state != State::ExpectDataTag {
+        if self.state != State::DataTag {
             return Err(Error::protocol("writeVideoTag: invalid operation"));
         }
         self.write_tag(TT_VIDEO, timestamp, data)
     }
 
     pub fn write_audio_tag(&mut self, timestamp: u32, data: &[u8]) -> Result<()> {
-        if self.state != State::ExpectDataTag {
+        if self.state != State::DataTag {
             return Err(Error::protocol("writeAudioTag: invalid operation"));
         }
         self.write_tag(TT_AUDIO, timestamp, data)

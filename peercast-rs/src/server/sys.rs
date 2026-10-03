@@ -77,7 +77,7 @@ impl Random {
     }
 
     /// `next`: `RAND(a, b)` を `unsigned long` で計算して `unsigned int` にする
-    pub fn next(&mut self) -> u32 {
+    pub fn next_u32(&mut self) -> u32 {
         let [a, b] = &mut self.a;
         *a = 36969u64.wrapping_mul(*a & 65535).wrapping_add(*a >> 16);
         *b = 18000u64.wrapping_mul(*b & 65535).wrapping_add(*b >> 16);
@@ -101,7 +101,7 @@ fn rnd_gen() -> &'static Mutex<Random> {
         match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)) {
             Ok(()) => r.set_seed(i32::from_ne_bytes(b)),
             Err(_) => {
-                let v = r.next().wrapping_add(std::process::id());
+                let v = r.next_u32().wrapping_add(std::process::id());
                 r.set_seed(v as i32);
             }
         }
@@ -111,7 +111,7 @@ fn rnd_gen() -> &'static Mutex<Random> {
 
 /// `Sys::rnd`
 pub fn rnd() -> u32 {
-    rnd_gen().lock().unwrap_or_else(|e| e.into_inner()).next()
+    rnd_gen().lock().unwrap_or_else(|e| e.into_inner()).next_u32()
 }
 
 /// 推測されてはいけない値 (ログインの Cookie、セッション ID、放送 ID など) のための乱数。
@@ -209,7 +209,7 @@ pub fn all_ip_addresses() -> Vec<Vec<u8>> {
         }
     }
     let mut buf = out.stdout;
-    while buf.last().map_or(false, |c| c.is_ascii_whitespace()) {
+    while buf.last().is_some_and(|c| c.is_ascii_whitespace()) {
         buf.pop();
     }
     crate::strutil::split(&buf, b" ")
@@ -245,7 +245,7 @@ pub fn dirname(path: &[u8]) -> Vec<u8> {
     if normal.len() > 1 && normal.last() == Some(&b'/') {
         normal.pop();
     }
-    while normal.last().map_or(false, |&c| c != b'/') {
+    while normal.last().is_some_and(|&c| c != b'/') {
         normal.pop();
     }
     if normal.is_empty() {
@@ -322,9 +322,9 @@ mod tests {
         let mut r = Random::default();
         let a = 36969u64 * (0x14235465 & 65535) + (0x14235465 >> 16);
         let b = 18000u64 * (0x14235465 & 65535) + (0x14235465 >> 16);
-        assert_eq!(r.next(), ((a << 16) + b) as u32);
+        assert_eq!(r.next_u32(), ((a << 16) + b) as u32);
         let mut r = Random::new(-1);
-        r.next();
+        r.next_u32();
     }
 
     #[test]

@@ -315,7 +315,7 @@ mod tests {
     fn value_budget_is_enforced() {
         // 1 バイトで 1 値を作れる。宣言長 2^31-1 でも上限で止まること。
         let mut b = vec![AMF_STRICTARRAY, 0x7f, 0xff, 0xff, 0xff];
-        b.extend(std::iter::repeat(AMF_NULL).take(200_000));
+        b.extend(std::iter::repeat_n(AMF_NULL, 200_000));
         match Reader::new(&b).read_value() {
             Err(Error::Protocol(m)) => assert!(m.contains("too many")),
             other => panic!("unexpected: {:?}", other),

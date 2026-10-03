@@ -31,8 +31,11 @@ pub fn run(ui: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 翻訳のカタログ (キー → 訳。JSON で null のものは `None`)
+pub type Catalog = BTreeMap<String, Option<String>>;
+
 /// `catalogs/*.json` の言語とカタログ (名前の順)
-fn languages(ui: &Path) -> Result<Vec<(String, BTreeMap<String, Option<String>>)>> {
+fn languages(ui: &Path) -> Result<Vec<(String, Catalog)>> {
     let dir = ui.join("catalogs");
     let mut res = Vec::new();
     for e in read_dir_sorted(&dir)? {
@@ -51,7 +54,7 @@ fn languages(ui: &Path) -> Result<Vec<(String, BTreeMap<String, Option<String>>)
 }
 
 /// `src` の下を `dest` の下に作る。`lang_suffix` があれば HTML の名前の後ろに `.<言語>` を付ける
-fn generate(ui: &Path, src: &Path, dest: &Path, catalog: &BTreeMap<String, Option<String>>, lang_suffix: Option<&str>) -> Result<()> {
+fn generate(ui: &Path, src: &Path, dest: &Path, catalog: &Catalog, lang_suffix: Option<&str>) -> Result<()> {
     mkdir_p(dest)?;
     for path in read_dir_sorted(src)? {
         let name = file_name(&path);
@@ -76,7 +79,7 @@ fn generate(ui: &Path, src: &Path, dest: &Path, catalog: &BTreeMap<String, Optio
 }
 
 /// HTML 1 つ分: マクロの展開 → メッセージの差し込み → コメントと空白の削除
-pub fn process_html(ui: &Path, text: &str, catalog: &BTreeMap<String, Option<String>>) -> Result<String> {
+pub fn process_html(ui: &Path, text: &str, catalog: &Catalog) -> Result<String> {
     let expanded = macros::expand_page(&ui.join("Templates"), text)?;
     let interpolated = catalog::interpolate(&expanded, catalog);
     Ok(clean_lines(&interpolated))

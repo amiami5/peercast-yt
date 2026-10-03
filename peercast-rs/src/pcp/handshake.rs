@@ -161,8 +161,7 @@ mod tests {
         let mut buf = Vec::new();
         ser(a, &mut buf);
         let mut atom = AtomStream::new(StreamIo { r: SliceReader { data: &buf, pos: 0 } });
-        let mut out = Hello::default();
-        out.ping_sid_init = [9; 16];
+        let mut out = Hello { ping_sid_init: [9; 16], ..Default::default() };
         let mut logs = Vec::new();
         let r = read_hello(&mut atom, kind, &sid, &mut |m| logs.push(String::from_utf8_lossy(m).into_owned()), &mut out);
         (r, out, logs)

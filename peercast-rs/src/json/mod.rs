@@ -159,7 +159,7 @@ impl Value {
 /// x86-64 の `static_cast<int>(double)` (cvttsd2si)。NaN と範囲外は `INT_MIN`。
 pub fn f64_to_i32(f: f64) -> i32 {
     let t = f.trunc();
-    if t >= -2147483648.0 && t <= 2147483647.0 {
+    if (-2147483648.0..=2147483647.0).contains(&t) {
         t as i32
     } else {
         i32::MIN
@@ -172,7 +172,7 @@ pub fn f64_to_u64(f: f64) -> u64 {
     const TWO63: f64 = 9223372036854775808.0;
     fn cvt(f: f64) -> u64 {
         let t = f.trunc();
-        if t >= -TWO63 && t < TWO63 {
+        if (-TWO63..TWO63).contains(&t) {
             t as i64 as u64
         } else {
             0x8000_0000_0000_0000

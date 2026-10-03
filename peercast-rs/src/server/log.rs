@@ -43,22 +43,21 @@ impl Level {
     }
 }
 
+/// `LogBuffer` にログを渡す先 (行の番号, 水準, 内容)
+pub type Listener = Box<dyn FnMut(u32, Level, &[u8]) + Send>;
+
 /// `LogBuffer`: 最後の 1000 行を、1 行 99 バイトまでに分けて持つ
+#[derive(Default)]
 pub struct LogBuffer {
     lines: Vec<(u32, Level, Vec<u8>)>,
     curr: u32,
     listener_id: u32,
-    listeners: BTreeMap<u32, Box<dyn FnMut(u32, Level, &[u8]) + Send>>,
+    listeners: BTreeMap<u32, Listener>,
 }
 
 const MAX_LINES: u32 = 1000;
 const LINE_LEN: usize = 100;
 
-impl Default for LogBuffer {
-    fn default() -> Self {
-        LogBuffer { lines: Vec::new(), curr: 0, listener_id: 0, listeners: BTreeMap::new() }
-    }
-}
 
 /// `LogBuffer::copy_utf8`: 文字の途中で切らずに、`buflen` バイトまで写す
 fn copy_utf8(src: &[u8], buflen: usize) -> usize {
@@ -130,7 +129,7 @@ impl LogBuffer {
         self.curr = 0;
     }
 
-    pub fn add_listener(&mut self, f: Box<dyn FnMut(u32, Level, &[u8]) + Send>) -> u32 {
+    pub fn add_listener(&mut self, f: Listener) -> u32 {
         let id = self.listener_id;
         self.listener_id = self.listener_id.wrapping_add(1);
         self.listeners.insert(id, f);
@@ -187,15 +186,18 @@ fn logger() -> &'static Logger {
     })
 }
 
+/// このスレッドのログを受け取る関数
+pub type AuxFunc = Box<dyn FnMut(Level, &[u8])>;
+
 /// `AUX_LOG_FUNC_VECTOR` の 1 つ
 enum AuxSink {
     Collect(Vec<(Level, Vec<u8>)>),
-    Func(Box<dyn FnMut(Level, &[u8])>),
+    Func(AuxFunc),
 }
 
 thread_local! {
     /// `AUX_LOG_FUNC_VECTOR`: ログの水準によらず、このスレッドのログを受け取るもの
-    static AUX: RefCell<Vec<AuxSink>> = RefCell::new(Vec::new());
+    static AUX: RefCell<Vec<AuxSink>> = const { RefCell::new(Vec::new()) };
 }
 
 /// `ServMgr::logLevel()`
@@ -302,7 +304,7 @@ pub fn capture<R>(body: impl FnOnce() -> R) -> (R, Vec<(Level, Vec<u8>)>) {
 }
 
 /// `body` を実行する間にこのスレッドで書かれたログを、水準によらず `f` に渡す
-pub fn with_aux<R>(f: Box<dyn FnMut(Level, &[u8])>, body: impl FnOnce() -> R) -> R {
+pub fn with_aux<R>(f: AuxFunc, body: impl FnOnce() -> R) -> R {
     AUX.with(|a| a.borrow_mut().push(AuxSink::Func(f)));
     struct Pop;
     impl Drop for Pop {

@@ -380,8 +380,15 @@ pub enum PostResult {
     Error(u16),
 }
 
+/// 書き込む内容
+pub struct Message<'a> {
+    pub name: &'a str,
+    pub mail: &'a str,
+    pub body: &'a str,
+}
+
 /// `post.cgi`: 書き込む
-pub fn post_message(f: &mut dyn Fetch, fqdn: &str, category: &str, board_num: &str, thread_id: &str, name: &str, mail: &str, body: &str) -> Result<PostResult> {
+pub fn post_message(f: &mut dyn Fetch, fqdn: &str, category: &str, board_num: &str, thread_id: &str, msg: &Message) -> Result<PostResult> {
     if fqdn.contains("shitaraba") {
         let url = format!("https://{}/bbs/write.cgi/{}/{}/{}/", fqdn, category, board_num, thread_id);
         let referer = format!("https://{}/bbs/read.cgi/{}/{}/{}/", fqdn, category, board_num, thread_id);
@@ -390,9 +397,9 @@ pub fn post_message(f: &mut dyn Fetch, fqdn: &str, category: &str, board_num: &s
             ("BBS", board_num.as_bytes().to_vec()),
             ("KEY", thread_id.as_bytes().to_vec()),
             ("DIR", category.as_bytes().to_vec()),
-            ("NAME", e(name)),
-            ("MAIL", e(mail)),
-            ("MESSAGE", e(body)),
+            ("NAME", e(msg.name)),
+            ("MAIL", e(msg.mail)),
+            ("MESSAGE", e(msg.body)),
         ]);
         match f.post(&url, &data, &referer)? {
             Fetched::Ok(_) => Ok(PostResult::Ok),
@@ -404,9 +411,9 @@ pub fn post_message(f: &mut dyn Fetch, fqdn: &str, category: &str, board_num: &s
         let referer = format!("http://{}/{}/", fqdn, category);
         let e = |s: &str| codec::encode_xmlcharref(Codec::ShiftJis, s);
         let data = urlencode(&[
-            ("FROM", e(name)),
-            ("mail", e(mail)),
-            ("MESSAGE", e(body)),
+            ("FROM", e(msg.name)),
+            ("mail", e(msg.mail)),
+            ("MESSAGE", e(msg.body)),
             ("bbs", category.as_bytes().to_vec()),
             ("key", thread_id.as_bytes().to_vec()),
             ("submit", e("書き込む")),
@@ -649,7 +656,8 @@ pub fn handle(script: &str, query: &[u8], f: &mut dyn Fetch) -> Result<Reply> {
             if let Some(e) = check_params(fqdn, category, board_num, Some(id)) {
                 return Ok(bad_request(e));
             }
-            let r = post_message(f, fqdn, category, board_num, id, get("name").unwrap_or(""), get("mail").unwrap_or(""), body)?;
+            let msg = Message { name: get("name").unwrap_or(""), mail: get("mail").unwrap_or(""), body };
+            let r = post_message(f, fqdn, category, board_num, id, &msg)?;
             Ok(json_reply(post_json(&r)))
         }
         _ => err("no such script"),

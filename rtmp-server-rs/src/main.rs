@@ -96,7 +96,7 @@ impl LazySinks {
                     Ok(s) => sinks.push(s),
                     Err(e) => {
                         log!("Error: cannot open {}: {}", url, e);
-                        return Err(io::Error::new(io::ErrorKind::Other, format!("cannot open {}", url)));
+                        return Err(io::Error::other(format!("cannot open {}", url)));
                     }
                 }
             }

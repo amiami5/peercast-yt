@@ -25,7 +25,7 @@ pub type Info = [Vec<u8>; 14];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadError {
-    /// `XML::read` の失敗 (`Callback` にはならない)
+    /// `XML::read` の失敗 (`Attr` にはならない)
     Xml(xml::Error),
     /// タグの属性が読めない ("Too many attributes" か "Bad tag value")
     Attr(AttrError),
@@ -69,20 +69,19 @@ struct Tree {
     nodes: Vec<Node>,
     root: Option<usize>,
     curr: Option<usize>,
-    attr_error: Option<AttrError>,
 }
 
 /// `XML::Node::Node("%s", tag)` の書き込み先の大きさ
 const NODE_TMP_LEN: usize = 8192;
 
 impl xml::Builder for Tree {
-    fn content(&mut self, _s: &[u8]) -> Result<(), ()> {
+    fn content(&mut self, _s: &[u8]) -> Result<(), AttrError> {
         Ok(())
     }
 
-    fn start_tag(&mut self, s: &[u8], single: bool) -> Result<(), ()> {
+    fn start_tag(&mut self, s: &[u8], single: bool) -> Result<(), AttrError> {
         let tag = &s[..s.len().min(NODE_TMP_LEN - 1)];
-        let attrs = xml::parse_attributes(tag).map_err(|e| self.attr_error = Some(e))?;
+        let attrs = xml::parse_attributes(tag)?;
         let i = self.nodes.len();
         self.nodes.push(Node { attrs, children: Vec::new(), parent: self.curr });
         match self.curr {
@@ -95,7 +94,7 @@ impl xml::Builder for Tree {
         Ok(())
     }
 
-    fn end_tag(&mut self) -> Result<(), ()> {
+    fn end_tag(&mut self) -> Result<(), AttrError> {
         // Rust の xml::read は開いているノードがあるときだけ呼ぶ
         self.curr = self.curr.and_then(|c| self.nodes[c].parent);
         Ok(())
@@ -123,8 +122,8 @@ pub fn read_info(body: &[u8]) -> Result<Info, ReadError> {
     let mut tree = Tree::default();
     let mut r = SliceReader { data: body, pos: 0 };
     if let Err(e) = xml::read(&mut r, &mut tree) {
-        return Err(match (e, tree.attr_error) {
-            (xml::Error::Callback, Some(a)) => ReadError::Attr(a),
+        return Err(match e {
+            xml::Error::Attr(a) => ReadError::Attr(a),
             _ => ReadError::Xml(e),
         });
     }
