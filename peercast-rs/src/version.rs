@@ -1,12 +1,12 @@
 //! バージョン (C++ 版の core/common/version2.h)。バージョンを上げるときはこのファイルだけを直す。
 //!
 //! 文字列の `0.1218` と `YT50` は、下の数と同じにしておく (テストで確かめる)。
-//! `-rs4` は Rust 版の版で、PCP で送る数には入らない。
+//! `-rs5` は Rust 版の版で、PCP で送る数には入らない。
 
 /// `PCX_AGENT`: HTTP の Server・User-Agent と、PCP の helo の agnt
-pub const PCX_AGENT: &str = "PeerCast/0.1218 (YT50-rs4)";
+pub const PCX_AGENT: &str = "PeerCast/0.1218 (YT50-rs5)";
 /// `PCX_VERSTRING`: `peercast --version` などに出す
-pub const PCX_VERSTRING: &str = "v0.1218 YT50-rs4";
+pub const PCX_VERSTRING: &str = "v0.1218 YT50-rs5";
 
 /// `PCP_CLIENT_VERSION`
 pub const PCP_CLIENT_VERSION: u32 = 1218;
