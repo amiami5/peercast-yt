@@ -179,12 +179,14 @@ pub fn source_protocol(url: &[u8]) -> (SourceProtocol, usize) {
 }
 
 /// ネットワークから受け取った入力元の URL (中継元のリダイレクト先や、HTTP で取ったプレイリストの
-/// 中身) として使ってよいか。`http://`、`pcp://`、`rtmp://` で始まるものだけ。`pipe:` (外部の
+/// 中身) として使ってよいか。`http://`、`pcp://` で始まるものだけ。`pipe:` (外部の
 /// プログラムを起こす) と、ファイル (`file://` やスキームのないもの) は、管理者が入力した URL に限る。
+/// `rtmp://` も管理者が入力した URL に限る。librtmp は URL の空白の後ろをオプション (`socks=`・`swfUrl=`
+/// など、こちらで宛先を確かめずにつなぐもの) として読み、名前も自分で引くため。
 pub fn is_remote_safe_source(url: &[u8]) -> bool {
     let url = until_nul(url);
     let (proto, n) = source_protocol(url);
-    n > 0 && matches!(proto, SourceProtocol::Http | SourceProtocol::Pcp | SourceProtocol::Rtmp)
+    n > 0 && matches!(proto, SourceProtocol::Http | SourceProtocol::Pcp)
 }
 
 /// `http://` または `https://` で始まるか (スキームの大文字小文字は区別しない)。
@@ -276,7 +278,7 @@ mod tests {
 
     #[test]
     fn remote_safe_sources() {
-        for u in [&b"http://host/x"[..], b"HTTP://host", b"pcp://host:7144/id", b"rtmp://host/app"] {
+        for u in [&b"http://host/x"[..], b"HTTP://host", b"pcp://host:7144/id"] {
             assert!(is_remote_safe_source(u), "{}", String::from_utf8_lossy(u));
         }
         for u in [
@@ -288,6 +290,8 @@ mod tests {
             b"",
             b"https://host/x", // 入力元としては未対応 (ファイル扱いになる)
             b"mms://host/x",
+            b"rtmp://host/app",
+            b"RTMP://host/app socks=127.0.0.1:1080",
             b"\0http://host/",
         ] {
             assert!(!is_remote_safe_source(u), "{}", String::from_utf8_lossy(u));

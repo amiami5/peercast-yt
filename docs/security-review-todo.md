@@ -268,12 +268,13 @@
 
 4 回止まったので、「どう攻めるか」を順に追う読み方をやめ、(1) 入口の種類ごとに、これまでに入れた守り (`trust_private`・`trust_localhost`・締め出し・`ct_eq`・`allowed_untrusted_ip`・`strip_controls` など) が同じように付いているかを grep で突き合わせ、(2) `unsafe` と FFI、(3) 依存するクレートを、一覧にして確かめた。コードと librtmp の説明書き (`man 3 librtmp`) とヘッダーを読んで判断したもので、動かしての確認はしていない。この見直しでは止まらなかった。
 
-- [ ] #53 未確認の URL (配信元のリダイレクト先、HTTP で取ったプレイリストの中身) の `rtmp://` を、librtmp のオプションごと渡しています (中〜重。`rtmp` の機能つきのビルド (Makefile の既定) で、URL の配信元を使うとき)。
+- [x] #53 未確認の URL (配信元のリダイレクト先、HTTP で取ったプレイリストの中身) の `rtmp://` を、librtmp のオプションごと渡しています (中〜重。`rtmp` の機能つきのビルド (Makefile の既定) で、URL の配信元を使うとき)。
   - `url::is_remote_safe_source` は `rtmp://` を通し、`sources.rs` の `stream_url` は、#33 の宛先の確かめ (`allowed_untrusted_ip`) をせずに URL (255 バイトまで) をそのまま `RtmpStream::open` → `RTMP_SetupURL` に渡す。`Location:` の値も、プレイリストの行も、途中の空白を残している。
   - librtmp は URL の空白の後ろをオプションとして読む。説明書きにあるものだけでも、`socks=ホスト:ポート` (そこを通してつなぐ) と `swfUrl=… swfVfy=1` (その URL から SWF を HTTP で取り、`$HOME/.swfinfo` に書く) があり、どちらの宛先も #33 の確かめを通らない。`rtmp://` のホスト自身も確かめていない。librtmp は 2015 年のスナップショットのまま保守されていない C のライブラリで、中継元が選んだ RTMP のサーバーの応答をそのまま解釈することにもなる。
   - #33 では「`rtmp://` は HTTP の要求にならないので管理画面には届かない」としていたが、オプションで HTTP の取得をさせられるので、この前提は成り立たない。
   - C++ 版も同じ (リダイレクト先を区別せず、URL をそのまま librtmp に渡す)。
   - 案: 未確認の URL では `rtmp://` を受け付けない (`is_remote_safe_source` から外す。リダイレクトで RTMP に移る配信元はまれなので)。受け付けるなら、空白とタブを含まないことと、名前を引いたアドレスが `allowed_untrusted_ip` であることを確かめ、librtmp が引き直さないように IP アドレスの URL にして渡す。単体テスト (`is_remote_safe_source` に `rtmp://` を渡すと false) と、bvt (偽の配信元が `Location: rtmp://…` を返したら、つなぎに行かずにログに残すこと) で確かめる。
+  - 済み: `is_remote_safe_source` から `rtmp://` を外し、未確認の URL の `rtmp://` は「Refusing a non-network URL given by the source」でつながない。管理者が入力した `rtmp://` は今までどおり。単体テスト `remote_safe_sources` と、bvt の `no_fetch_into_internal` (`Location: rtmp://127.0.0.2:…` を返す配信元。`--features rtmp` で回す) で確かめる。直す前は bvt が失敗することも確かめた。
 - [ ] #54 ICY の放送 (`SOURCE`) は、localhost からならパスワードなしで受け付け、そのときに Host ヘッダーとほかのサイトからの要求かを見ていません (中)。
   - `handshake_icy` の localhost の判定は、ソケットの相手のアドレス (`is_localhost`) だけ。#34 で HTTP Push (`POST /`) には `trust_private` (Host が手元の名前で、ほかのサイトのページから送らされたものでない) を、`/admin.cgi` には `trust_localhost` とほかのサイトからの要求の判定を入れたが、`SOURCE` の行 (`handshake_source` → `handshake_icy`) には入っていない。
   - 影響は HTTP Push と同じ形 (利用者の IP で配信を始め、既定の rootHost の YP に載る。同じ ID の放送があれば止める)。ShoutCast の形 (1 行目がパスワード) はパスワードが要るので対象外。ブラウザーから `SOURCE` の要求を送れるか (DNS リバインディングで同じオリジンになったときなど) は確かめていない。
@@ -282,9 +283,10 @@
 - [ ] #55 要求を読み終えていない接続の IP ごとの上限 (`servent.rs` の `HANDSHAKES`、`maxHandshakesPerIp`) を、IPv6 でもアドレスごとに数えています (軽)。
   - パスワードの締め出しは #39 で IPv6 を /64 ごとにしたが、こちらは `cs.host.ip.str()` をそのままキーにしている。/64 を持つ相手はアドレスを変えて上限を越え、受け付ける接続の数 (`maxServIn`) を `handshakeTimeout` の間埋められる (ループバックからの接続は数えないので管理画面は開ける)。IPv6 で待ち受けているときだけ。C++ 版にはこの上限自体がない。
   - 案: キーを `servhs::auth_key` (IPv6 は /64) にそろえる。単体テストで、同じ /64 の別のアドレスが同じキーになることを確かめる。
-- [ ] #56 `RtmpStream::open` が、librtmp が書き込む URL の文字列を `CString::as_ptr()` (書き込まない前提のポインタ) で渡しています (軽。Rust 版だけ)。
+- [x] #56 `RtmpStream::open` が、librtmp が書き込む URL の文字列を `CString::as_ptr()` (書き込まない前提のポインタ) で渡しています (軽。Rust 版だけ)。
   - librtmp の `RTMP_SetupURL(RTMP *r, char *url)` は、`RTMP_ParseURL` (`const char *`) と違って `char *` を取り、空白などに NUL を書き込んでオプションを切り分ける。共有の参照から得たポインタを通して書くのは Rust の決まりの外 (いまのコンパイラーで困ることはないと思われる)。
   - 案: NUL で終わる `Vec<u8>` を持ち、`as_mut_ptr()` を渡す (`CString::into_raw` は、中に NUL を書かれると `from_raw` で長さが変わって解放を誤るので使わない)。#53 を直すときに一緒に直せる。
+  - 済み: URL は NUL で終わる `Vec<u8>` で持ち、`as_mut_ptr()` を渡す。中に NUL を含む URL は今までどおり断る。`--features rtmp` のビルドと clippy で確かめた (librtmp につなぐ動かしての確認はしていない)。
 - [ ] #57 PCP の相手が送るエージェント名 (`agnt`) と `mesg` の文字列を、改行などを除かずにデバッグのログに書きます (軽)。
   - `log::add_log` は正しい UTF-8 ならそのまま書くので、ログのファイルや標準出力に偽の行を作れる (管理画面のログの表示はエスケープしている)。#21 で `chan_info_string` には `strip_controls` を入れたが、ほかの PCP の文字列は通っていない。C++ 版と同じ。
   - 案: `add_log` で、改行を含む制御文字を `[0A]` のように書き換える (`log_escape` と同じ形)。

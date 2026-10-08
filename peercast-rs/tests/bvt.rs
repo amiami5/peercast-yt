@@ -1105,6 +1105,12 @@ fn no_fetch_into_internal() {
     let pls = fixed_httpd(format!("HTTP/1.0 200 OK\r\nContent-Type: audio/x-mpegurl\r\nContent-Length: {}\r\n\r\n{}", body.len(), body));
     fetch(pls);
     not_reached("プレイリストの中身");
+    // リダイレクト先の rtmp:// は、宛先を確かめられないので追わない (security-review #53。
+    // librtmp を使うのは rtmp の機能つきのビルドだけなので、`--features rtmp` で確かめる)
+    let rtmp_url = internal_url.replacen("http://", "rtmp://", 1);
+    let rtmp_redirect = fixed_httpd(format!("HTTP/1.0 302 Found\r\nLocation: {}\r\nContent-Length: 0\r\n\r\n", rtmp_url));
+    fetch(rtmp_redirect);
+    not_reached("rtmp:// へのリダイレクト");
 }
 
 /// このノード自身が送った要求 (User-Agent が PeerCast) は、localhost からでも認証を省かない (security-review #33)
