@@ -1740,6 +1740,10 @@ fn relay_channel_section(pc: &Peercast, c: &super::channel::Channel) -> Section 
     sec
 }
 
+/// 起動時に自分のグローバル IP を YP に問い合わせる回数の上限と、その間隔 (秒)
+const STARTUP_IP_MAX_TRIES: u32 = 5;
+const STARTUP_IP_INTERVAL: u32 = 30;
+
 /// `idleProc`
 fn idle_proc(pc: &Arc<Peercast>) {
     let sm = &pc.servmgr;
@@ -1747,6 +1751,9 @@ fn idle_proc(pc: &Arc<Peercast>) {
     let mut last_root_broadcast = 0u32;
     let mut last_force_ip_check = 0u32;
     let mut last_self_ip_check = sys::get_time();
+    let mut last_startup_ip_check = 0u32;
+    let mut startup_ip_tries = 0u32;
+    let startup_ip_running = Arc::new(AtomicBool::new(false));
     while sm.idle_thread.active() {
         super::stats::update();
         let ctime = sys::get_time();
@@ -1754,6 +1761,35 @@ fn idle_proc(pc: &Arc<Peercast>) {
         if self_ip_interval != 0 && ctime.wrapping_sub(last_self_ip_check) >= self_ip_interval {
             servent::refresh_self_ip_in_background();
             last_self_ip_check = ctime;
+        }
+        // 初回起動でも情報画面にグローバル IP が出るよう、YP に問い合わせて自分のアドレスを知る。
+        // 30 秒まで待つので別のスレッドで行い、だめなら間を空けて数回だけやり直す
+        if startup_ip_tries < STARTUP_IP_MAX_TRIES
+            && ctime.wrapping_sub(last_startup_ip_check) >= STARTUP_IP_INTERVAL
+            && !startup_ip_running.load(Ordering::Acquire)
+        {
+            let need = {
+                let s = sm.settings();
+                s.force_ip.is_empty() && !s.root_host.is_empty() && !s.server_host.ip.is_global()
+            };
+            if need {
+                startup_ip_tries += 1;
+                last_startup_ip_check = ctime;
+                startup_ip_running.store(true, Ordering::Release);
+                let p = pc.clone();
+                let running = startup_ip_running.clone();
+                let r = std::thread::Builder::new().name("STARTIP".into()).spawn(move || {
+                    if let Err(e) = p.servmgr.check_firewall(&p) {
+                        crate::log_debug!("Startup IP check: {}", e);
+                    }
+                    running.store(false, Ordering::Release);
+                });
+                if r.is_err() {
+                    startup_ip_running.store(false, Ordering::Release);
+                }
+            } else {
+                startup_ip_tries = STARTUP_IP_MAX_TRIES;
+            }
         }
         if !sm.settings().force_ip.is_empty() && ctime.wrapping_sub(last_force_ip_check) > 60 {
             if sm.check_force_ip() {
