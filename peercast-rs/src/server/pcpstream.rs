@@ -408,6 +408,11 @@ impl pcp::Host for PcpHost<'_> {
         hit.chan_id = h.chan_id;
         hit.num_hops = h.num_hops as u32;
         if add {
+            // 宛先はヒットを送った誰かが決めるので、LAN の中や自分へは、届けた相手も LAN の中のときだけ (#51)
+            if !super::servent::hit_dest_allowed(&hit.rhost, &self.peer) {
+                crate::log_debug!("Hit to {} from {} refused", hit.rhost[0].str(), self.peer.str());
+                return Ok(());
+            }
             self.pc.chanmgr.add_hit(self.pc, &hit);
         } else {
             self.pc.chanmgr.del_hit(&hit);

@@ -554,6 +554,22 @@ pub fn giv_dest_allowed(dest: &Host, from: &Host) -> bool {
     !lan(dest) || (from.ip.is_set() && lan(from))
 }
 
+/// PCP のヒットの宛先 `rhost` (0 が WAN 側、1 が LAN 側) を、中継元を探すときにつなぐ先として受け付けてよいか。
+/// `from` はヒットを届けた接続の相手。`giv_dest_allowed` と同じく、`from` が LAN の中でなければ、WAN 側が
+/// ループバック・プライベート・リンクローカル・自分のアドレスのものは断る。LAN 側は、WAN 側がこちらのグローバル IP と
+/// 同じとき (同じ NAT の中のノード) に使われるので、プライベートのアドレスは受け付け、ループバックと自分のアドレスは断る
+/// (C++ 版は確かめなかった。security-review #51)
+pub fn hit_dest_allowed(rhost: &[Host; 2], from: &Host) -> bool {
+    let lan = |h: &Host| h.ip.is_lan() || is_localhost(h);
+    if from.ip.is_set() && lan(from) {
+        return true;
+    }
+    if rhost[0].ip.is_set() && lan(&rhost[0]) {
+        return false;
+    }
+    !(rhost[1].ip.is_set() && is_localhost(&rhost[1]))
+}
+
 /// `initGIV`: 相手につないで GIV を送り、要求を受け付ける。つなぐのはスレッドの中で行う
 /// (PUSH を受け取った PCP の接続を待たせない)。`slot` は相手の要求を読み終えるまで持つ
 pub fn init_giv(pc: &Arc<Peercast>, sv: &Arc<Servent>, h: Host, id: [u8; 16], slot: GivSlot) {
@@ -2004,6 +2020,31 @@ mod tests {
             assert!(!giv_dest_allowed(&h(d), &lan), "{}", d);
         }
         assert!(!giv_dest_allowed(&Host { port: 0, ..h("198.51.100.1") }, &global));
+    }
+
+    /// ヒットの宛先 (security-review #51)
+    #[test]
+    fn hit_dest() {
+        let h = |s: &str| Host { ip: Ip::parse(s.as_bytes()).unwrap(), port: 7144 };
+        let none = Host::none();
+        let global = h("203.0.113.5");
+        let lan = h("192.168.0.5");
+        // ふつうのヒット: WAN 側がグローバル、LAN 側がプライベートか空
+        assert!(hit_dest_allowed(&[h("198.51.100.1"), h("192.168.1.10")], &global));
+        assert!(hit_dest_allowed(&[h("198.51.100.1"), none], &global));
+        assert!(hit_dest_allowed(&[h("2001:db8::1"), none], &global));
+        // WAN 側がループバックや LAN のものは、LAN の中から届いたときだけ
+        for d in ["127.0.0.1", "10.0.0.1", "169.254.169.254", "::1", "fe80::1", "fd00::1"] {
+            assert!(!hit_dest_allowed(&[h(d), none], &global), "{}", d);
+            assert!(!hit_dest_allowed(&[h(d), none], &none), "{}", d);
+            assert!(hit_dest_allowed(&[h(d), none], &lan), "{}", d);
+            assert!(hit_dest_allowed(&[h(d), none], &h("127.0.0.1")), "{}", d);
+        }
+        // LAN 側がループバックのものも、LAN の中から届いたときだけ
+        assert!(!hit_dest_allowed(&[h("198.51.100.1"), h("127.0.0.1")], &global));
+        assert!(hit_dest_allowed(&[h("198.51.100.1"), h("127.0.0.1")], &lan));
+        // 消すとき (del_hit) には使わないので、空のヒットは通す
+        assert!(hit_dest_allowed(&[none, none], &global));
     }
 
     #[test]
