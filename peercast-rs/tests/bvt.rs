@@ -602,6 +602,22 @@ fn stream_header_injection() {
     }
 }
 
+/// `randomizeBroadcastingChannelID` がオフのとき、名前などから作ったチャンネル ID から放送 ID に戻せない
+/// (security-review #43)。C++ 版の作り方 (放送 ID に名前などを XOR) なら、同じ計算をもう一度すると戻る
+#[test]
+fn channel_id_hides_broadcast_id() {
+    let s = Server::start_with(17239, |ini| {
+        ini.replacen("[Privacy]", "[Flags]\r\nrandomizeBroadcastingChannelID = No\r\n[End]\r\n\r\n[Privacy]", 1)
+    });
+    let _push = push_flv(s.port, "bcidtest");
+    let cid = peercast_rs::gnuid::from_str(wait_channels(s.port, 1)[0].1.as_bytes());
+    let bcid = peercast_rs::gnuid::from_str(b"00D67218FD425A17786B476C25E22A34"); // tests/peercast.ini
+    let mut back = cid;
+    peercast_rs::gnuid::encode(&mut back, None, b"bcidtest", b"", 500u32 as u8);
+    assert_ne!(back, bcid);
+    assert_eq!(cid, peercast_rs::channel::derived_channel_id(&bcid, b"bcidtest", b"", 500u32 as u8));
+}
+
 /// リレー一覧のリンクの拡張子に、ほかから届いた `sext` をそのまま使わない (security-review #22)
 #[test]
 fn relays_stream_ext() {

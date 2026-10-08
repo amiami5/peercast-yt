@@ -163,6 +163,25 @@ pub fn auth_token(broadcast_id: &[u8; 16], id: &[u8; 16]) -> Vec<u8> {
     md5::hexdigest(&auth_secret(broadcast_id, id))
 }
 
+/// 配信のチャンネル ID を、乱数にしないとき (`randomizeBroadcastingChannelID` がオフ) に放送 ID と
+/// 名前などから作る。同じ放送 ID と名前などなら同じ ID になる。
+/// C++ 版は放送 ID に名前などを XOR する (`GnuID::encode`) だけで、名前などは公開されているので
+/// チャンネル ID から放送 ID に戻せた (security-review #43)。ここではハッシュにして戻せないようにする。
+pub fn derived_channel_id(broadcast_id: &[u8; 16], name: &[u8], salt: &[u8], bitrate: u8) -> [u8; 16] {
+    let mut input = b"PeerCast-YT broadcasting channel ID\0".to_vec();
+    input.extend_from_slice(broadcast_id);
+    for s in [name, salt] {
+        input.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        input.extend_from_slice(s);
+    }
+    input.push(bitrate);
+    let mut id = md5::digest(&input);
+    if id.iter().all(|&b| b == 0) {
+        id[15] = 1;
+    }
+    id
+}
+
 /// `ChanMgr::closeOldestIdle` で止めるチャンネル。`idle` はアイドルで止められるものか
 /// (動いていて、スレッドがあり、状態が S_IDLE)、`last_idle_time` はアイドルになった時刻。
 /// 時刻が 0xffffffff のものは選ばない (C++ 版と同じ)。
@@ -265,5 +284,25 @@ mod tests {
         assert_eq!(oldest_idle(&[true, false, true, true], &[5, 1, 3, 3]), Some(2));
         assert_eq!(oldest_idle(&[true], &[u32::MAX]), None);
         assert_eq!(auth_token(&[0; 16], &[0; 16]).len(), 32);
+    }
+
+    #[test]
+    fn derived_channel_id_is_one_way() {
+        let bc = [0x5a; 16];
+        let id = derived_channel_id(&bc, b"name", b"genre", 200);
+        // 同じ入力なら同じ ID
+        assert_eq!(id, derived_channel_id(&bc, b"name", b"genre", 200));
+        // どれかが違えば違う ID (名前とジャンルの切れ目もずらせない)
+        for other in [
+            derived_channel_id(&[0x5b; 16], b"name", b"genre", 200),
+            derived_channel_id(&bc, b"nam", b"egenre", 200),
+            derived_channel_id(&bc, b"name", b"genre", 201),
+        ] {
+            assert_ne!(id, other);
+        }
+        // C++ 版の作り方 (XOR) と違い、同じ計算をもう一度しても放送 ID に戻らない
+        let mut back = id;
+        gnuid::encode(&mut back, None, b"name", b"genre", 200);
+        assert_ne!(back, bc);
     }
 }

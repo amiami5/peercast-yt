@@ -171,10 +171,11 @@
   - 確かめたこと: キーを `secret` にした rtmp-server に、publish を送らずにメタデータと映像を送ると、出力先に `POST /?name=t` と FLV のヘッダー・映像が届いた。既存のテスト (`wrong_stream_key_is_rejected`) は publish の名前が違う場合だけを見ている。
   - 案: publish を受け付けるまでは、メタデータと音声・映像のメッセージは捨てる (か誤りにして切る)。キーを設定していないときも同じにする。robustness に「publish なしのデータは出力先に届かない」テストを足す。
   - 済み: publish を受け付けるまでに届いたメタデータ (0x12) と音声・映像 (0x08・0x09) は、出力先に書かずに誤り (`media before publish`) にして切る。キーを設定していないときも同じ。OBS や ffmpeg は publish の応答を待ってから送るので影響はない。session のテスト `media_before_publish_is_rejected` と robustness の `data_without_publish_does_not_reach_sink` で確かめる。直す前は robustness のテストが失敗することも確かめた。
-- [ ] #43 `randomizeBroadcastingChannelID` がオフのとき、チャンネル ID から放送 ID (BCID) を戻せます (中)。
+- [x] #43 `randomizeBroadcastingChannelID` がオフのとき、チャンネル ID から放送 ID (BCID) を戻せます (中)。
   - チャンネル ID は、放送 ID に名前・ジャンル (ICY はマウント)・ビットレートを XOR しただけのもの (`gnuid::encode`、`set_broadcast_id_channel_id`、`handshake_icy`)。これらの値は YP の一覧や PCP で公開されているので、同じ計算をもう一度すれば放送 ID になる。放送 ID があれば、どのチャンネル ID についても `?auth=` のトークンを作れる (#36 と同じ影響)。既定はオン (ランダム) なので、オフにした人だけ。C++ 版と同じ。
   - 確かめたこと: 単体の一時的なテストで、`encode` を同じ値でもう一度かけると放送 ID に戻ることを確かめた。
   - 案: オフのときのチャンネル ID を一方向の関数 (放送 ID と名前などをまとめたもののハッシュ) で作る (同じ名前なら同じ ID になるのは保てる。ID は今と変わる)。あわせて、`auth` のトークンを放送 ID とは別の秘密から作ることも考える。
+  - 済み: オフのときのチャンネル ID は、放送 ID・名前・ジャンル (ICY はマウント)・ビットレートを長さつきでつないだものの MD5 にした (`channel::derived_channel_id`。HTTP Push・管理画面・JSON-RPC の配信と ICY の両方)。同じ名前などなら同じ ID になるのは今までどおりで、ID の値は前と変わる。放送 ID が戻せなくなったので、`auth` のトークンはそのままにした。単体テスト `derived_channel_id_is_one_way` と bvt の `channel_id_hides_broadcast_id` で確かめる。直す前は bvt が失敗することも確かめた。
 - [ ] #44 `/cgi-bin/flv.cgi` (トランスコード) が、ほかのサイトのページから送らされた要求と DNS リバインディングを断っていません (中。トランスコードを有効にしたときだけ)。
   - private (localhost を含む) からならトークンなしで受け付け、Sec-Fetch-Site・Origin と Host を見ていない (#34 で `/stream/` などに入れた `trust_private` を通っていない)。localhost からは同時に動かす数の上限 (`maxTranscodes`) も掛からない。さらに ffmpeg が `/stream/` を localhost から取るので、#34 で断ったほかのサイトからの中継の開始が、ここを通ると起きる。
   - 案: トークンでなく private で通すときは `trust_private` を通す。localhost からも上限に数える (か別の上限を設ける)。あわせて、ffmpeg に入力の形式 (`-f`) を種類から決めて渡し、使うプロトコルを絞ることも考える。

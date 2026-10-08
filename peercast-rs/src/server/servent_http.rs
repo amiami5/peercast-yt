@@ -513,9 +513,7 @@ pub fn set_broadcast_id_channel_id(pc: &Peercast, info: &mut ChanInfo, broadcast
     if pc.servmgr.flags.get("randomizeBroadcastingChannelID") {
         info.id = super::chanmgr::random_id();
     } else {
-        let mut id = *broadcast_id;
-        crate::gnuid::encode(&mut id, None, &info.name.data, &info.genre.data, info.bitrate as u8);
-        info.id = id;
+        info.id = crate::channel::derived_channel_id(broadcast_id, &info.name.data, &info.genre.data, info.bitrate as u8);
     }
 }
 
@@ -614,9 +612,8 @@ fn handshake_icy(c: &mut Conn, src_type: i32, is_http: bool) -> Result<()> {
     if pc.servmgr.flags.get("randomizeBroadcastingChannelID") {
         info.id = super::chanmgr::random_id();
     } else {
-        let mut id = pc.chanmgr.broadcast_id();
-        crate::gnuid::encode(&mut id, None, &info.name.data, &mount.data, info.bitrate as u8);
-        info.id = id;
+        let bc_id = pc.chanmgr.broadcast_id();
+        info.id = crate::channel::derived_channel_id(&bc_id, &info.name.data, &mount.data, info.bitrate as u8);
     }
     crate::log_debug!("Incoming source: {} : {}", b(&info.name.data), b(&info.content_type.data));
     {
