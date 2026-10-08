@@ -84,6 +84,11 @@ impl std::ops::Deref for ChannelEntry {
     }
 }
 
+/// 1 つのフィード (index.txt) から読むチャンネルの数の上限
+pub const MAX_FEED_CHANNELS: usize = 10_000;
+/// 1 つのフィードで、文言を書く誤りの行の数の上限
+pub const MAX_REPORTED_PARSE_ERRORS: usize = 10;
+
 impl ChannelEntry {
     pub fn chat_url(&self) -> Vec<u8> {
         crate::chandir::chat_url(&self.feed_url, &self.e.encoded_name)
@@ -93,13 +98,33 @@ impl ChannelEntry {
         crate::chandir::stats_url(&self.feed_url, &self.e.encoded_name)
     }
 
-    /// `ChannelEntry::textToChannelEntries`
+    /// `ChannelEntry::textToChannelEntries`。チャンネルは `MAX_FEED_CHANNELS` 個まで、誤りの行の文言は
+    /// `MAX_REPORTED_PARSE_ERRORS` 個までにし、残りは数だけを書く (C++ 版には上限がなく、YP や通り道の者が
+    /// 1 回の取得で数 GB のメモリを使わせられた。security-review #50)
     pub fn text_to_entries(text: &[u8], feed_url: &[u8], errors: &mut Vec<Vec<u8>>) -> Vec<ChannelEntry> {
         let mut res = Vec::new();
+        let (mut num_errors, mut num_dropped) = (0usize, 0usize);
         crate::chandir::parse_index(text, |line| match line {
-            crate::chandir::Line::Entry(e) => res.push(ChannelEntry { e: *e, feed_url: feed_url.to_vec() }),
-            crate::chandir::Line::Error(lineno) => errors.push(crate::chandir::parse_error_message(lineno)),
+            crate::chandir::Line::Entry(e) => {
+                if res.len() < MAX_FEED_CHANNELS {
+                    res.push(ChannelEntry { e: *e, feed_url: feed_url.to_vec() });
+                } else {
+                    num_dropped += 1;
+                }
+            }
+            crate::chandir::Line::Error(lineno) => {
+                num_errors += 1;
+                if num_errors <= MAX_REPORTED_PARSE_ERRORS {
+                    errors.push(crate::chandir::parse_error_message(lineno));
+                }
+            }
         });
+        if num_errors > MAX_REPORTED_PARSE_ERRORS {
+            errors.push(format!("{} more parse errors.", num_errors - MAX_REPORTED_PARSE_ERRORS).into_bytes());
+        }
+        if num_dropped > 0 {
+            errors.push(format!("Too many channels: ignored {} after the first {}.", num_dropped, MAX_FEED_CHANNELS).into_bytes());
+        }
         res
     }
 }
@@ -839,5 +864,32 @@ mod tests {
         assert!(ok(lan, 80, lan));
         assert!(!ok(v4(192, 168, 1, 2), 80, lan));
         assert!(!ok(v4(127, 0, 0, 2), 80, v4(127, 0, 0, 1)));
+    }
+
+    /// 一覧のチャンネルの数と、誤りの行の文言の数に上限がある (security-review #50)
+    #[test]
+    fn feed_limits() {
+        let entry = "<>".repeat(18);
+        let text = format!("{}\n", entry).repeat(MAX_FEED_CHANNELS + 5) + &"\n".repeat(1000);
+        let mut errors = Vec::new();
+        let chs = ChannelEntry::text_to_entries(text.as_bytes(), b"http://yp/index.txt", &mut errors);
+        assert_eq!(chs.len(), MAX_FEED_CHANNELS);
+        assert_eq!(errors.len(), MAX_REPORTED_PARSE_ERRORS + 2);
+        assert_eq!(errors[MAX_REPORTED_PARSE_ERRORS], b"990 more parse errors.");
+        assert_eq!(errors[MAX_REPORTED_PARSE_ERRORS + 1], b"Too many channels: ignored 5 after the first 10000.");
+        // 上限より少なければ今までどおり
+        let mut errors = Vec::new();
+        let chs = ChannelEntry::text_to_entries(format!("{}\nx\n", entry).as_bytes(), b"", &mut errors);
+        assert_eq!((chs.len(), errors), (1, vec![b"Parse error at line 2.".to_vec()]));
+    }
+
+    #[test]
+    fn capture_is_bounded() {
+        let ((), lines) = super::super::log::capture(|| {
+            for i in 0..super::super::log::MAX_CAPTURED_LINES + 10 {
+                crate::log_error!("line {}", i);
+            }
+        });
+        assert_eq!(lines.len(), super::super::log::MAX_CAPTURED_LINES);
     }
 }

@@ -259,7 +259,11 @@ pub fn add_log(ty: Level, msg: &[u8]) {
     let mut sinks = sinks;
     for v in sinks.iter_mut() {
         match v {
-            AuxSink::Collect(v) => v.push((ty, tmp.clone())),
+            AuxSink::Collect(v) => {
+                if v.len() < MAX_CAPTURED_LINES {
+                    v.push((ty, tmp.clone()));
+                }
+            }
             AuxSink::Func(f) => f(ty, &tmp),
         }
     }
@@ -281,8 +285,11 @@ pub fn add_log(ty: Level, msg: &[u8]) {
     }
 }
 
+/// `capture` が集めるログの行の数の上限 (それより後ろは集めない。#50)
+pub const MAX_CAPTURED_LINES: usize = 1000;
+
 /// `body` を実行する間にこのスレッドで書かれたログを、水準によらず集める
-/// (`AUX_LOG_FUNC_VECTOR` に関数を足すのと同じ)
+/// (`AUX_LOG_FUNC_VECTOR` に関数を足すのと同じ)。`MAX_CAPTURED_LINES` 行まで
 pub fn capture<R>(body: impl FnOnce() -> R) -> (R, Vec<(Level, Vec<u8>)>) {
     AUX.with(|a| a.borrow_mut().push(AuxSink::Collect(Vec::new())));
     struct Pop;
