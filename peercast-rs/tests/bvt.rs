@@ -1228,6 +1228,24 @@ fn cross_site_cannot_start_relay() {
     }
 }
 
+/// flv.cgi (トランスコード) も、ほかのサイトのページから送らされた要求と DNS リバインディングは、localhost からでも
+/// トークンなしでは受け付けない (security-review #44)。ffmpeg がなければ 500 になるので、403 かどうかだけを見る
+#[test]
+fn flv_cgi_cross_site() {
+    let s = Server::start_with(17240, |ini| ini.replacen("transcodingEnabled = No", "transcodingEnabled = Yes", 1));
+    let p = s.port;
+    let code = |host: &str, extra: &str| {
+        let path = format!("/cgi-bin/flv.cgi?id={:032x}&type=MKV&bitrate=500&preset=veryfast&audio_codec=mp3", 0xf1);
+        request(p, &format!("GET {} HTTP/1.0\r\nHost: {}\r\n{}\r\n", path, host, extra), b"").code
+    };
+    let lo = format!("127.0.0.1:{}", p);
+    assert_eq!(code(&lo, "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\n"), 403);
+    assert_eq!(code(&lo, "Origin: http://evil.example.com\r\n"), 403);
+    assert_eq!(code("evil.example.com", ""), 403);
+    assert_ne!(code(&lo, ""), 403);
+    assert_ne!(code(&lo, "Sec-Fetch-Site: same-origin\r\n"), 403);
+}
+
 /// PCP のストリームのデータ (`pkt`) とチャンネルの情報の更新は、そのチャンネルの上流からのものだけ使う
 /// (security-review #35)。配信しているノードへの CIN と、中継しているノードの下流 (中継先) から送ってみる
 #[test]

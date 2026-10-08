@@ -402,19 +402,27 @@ fn jrpc() {
 fn flv() {
     let id = "0123456789abcdef0123456789ABCDEF";
     let args = flv_ffmpeg_args(format!("id={}&preset=ultrafast&audio_codec=aac&type=FLV&bitrate=1200", id).as_bytes(), 7144).unwrap();
-    assert_eq!(args[5], format!("http://127.0.0.1:7144/stream/{}", id));
-    assert_eq!((args[9].as_str(), args[17].as_str(), args[19].as_str()), ("aac", "bitrate=1200:vbv-maxrate=1200:vbv-bufsize=2400", "ultrafast"));
+    assert_eq!((args[4].as_str(), args[5].as_str(), args[6].as_str()), ("-f", "flv", "-i"));
+    assert_eq!(args[7], format!("http://127.0.0.1:7144/stream/{}", id));
+    assert_eq!((args[11].as_str(), args[19].as_str(), args[21].as_str()), ("aac", "bitrate=1200:vbv-maxrate=1200:vbv-bufsize=2400", "ultrafast"));
     for bitrate in ["", "&bitrate=0", "&bitrate=100001", "&bitrate=x"] {
-        let q = format!("id={}&preset=p&audio_codec=a&type=t{}", id, bitrate);
-        assert_eq!(flv_ffmpeg_args(q.as_bytes(), 1).unwrap()[17], "bitrate=500:vbv-maxrate=500:vbv-bufsize=1000");
+        let q = format!("id={}&preset=p&audio_codec=a&type=MKV{}", id, bitrate);
+        assert_eq!(flv_ffmpeg_args(q.as_bytes(), 1).unwrap()[19], "bitrate=500:vbv-maxrate=500:vbv-bufsize=1000");
+    }
+    // 入力の形式は種類から決める (security-review #44)
+    for (ty, f) in [("MKV", "matroska"), ("webm", "matroska"), ("MP3", "mp3"), ("OGG", "ogg")] {
+        let q = format!("id={}&preset=p&audio_codec=a&type={}", id, ty);
+        assert_eq!(flv_ffmpeg_args(q.as_bytes(), 1).unwrap()[5], f, "{}", ty);
     }
     for q in [
-        "preset=p&audio_codec=a&type=t".to_string(),
+        "preset=p&audio_codec=a&type=MKV".to_string(),
         format!("id={}&preset=p&audio_codec=a", id),
-        format!("id={}x&preset=p&audio_codec=a&type=t", id),
-        format!("id={}&preset=-i&audio_codec=a&type=t", id),
-        format!("id={}&preset=p&audio_codec=a%20b&type=t", id),
-        format!("id={}&preset={}&audio_codec=a&type=t", id, "p".repeat(33)),
+        format!("id={}x&preset=p&audio_codec=a&type=MKV", id),
+        format!("id={}&preset=-i&audio_codec=a&type=MKV", id),
+        format!("id={}&preset=p&audio_codec=a%20b&type=MKV", id),
+        format!("id={}&preset={}&audio_codec=a&type=MKV", id, "p".repeat(33)),
+        format!("id={}&preset=p&audio_codec=a&type=t", id),
+        format!("id={}&preset=p&audio_codec=a&type=UNKNOWN", id),
     ] {
         assert_eq!(flv_ffmpeg_args(q.as_bytes(), 7144), None, "{}", q);
     }

@@ -176,9 +176,10 @@
   - 確かめたこと: 単体の一時的なテストで、`encode` を同じ値でもう一度かけると放送 ID に戻ることを確かめた。
   - 案: オフのときのチャンネル ID を一方向の関数 (放送 ID と名前などをまとめたもののハッシュ) で作る (同じ名前なら同じ ID になるのは保てる。ID は今と変わる)。あわせて、`auth` のトークンを放送 ID とは別の秘密から作ることも考える。
   - 済み: オフのときのチャンネル ID は、放送 ID・名前・ジャンル (ICY はマウント)・ビットレートを長さつきでつないだものの MD5 にした (`channel::derived_channel_id`。HTTP Push・管理画面・JSON-RPC の配信と ICY の両方)。同じ名前などなら同じ ID になるのは今までどおりで、ID の値は前と変わる。放送 ID が戻せなくなったので、`auth` のトークンはそのままにした。単体テスト `derived_channel_id_is_one_way` と bvt の `channel_id_hides_broadcast_id` で確かめる。直す前は bvt が失敗することも確かめた。
-- [ ] #44 `/cgi-bin/flv.cgi` (トランスコード) が、ほかのサイトのページから送らされた要求と DNS リバインディングを断っていません (中。トランスコードを有効にしたときだけ)。
+- [x] #44 `/cgi-bin/flv.cgi` (トランスコード) が、ほかのサイトのページから送らされた要求と DNS リバインディングを断っていません (中。トランスコードを有効にしたときだけ)。
   - private (localhost を含む) からならトークンなしで受け付け、Sec-Fetch-Site・Origin と Host を見ていない (#34 で `/stream/` などに入れた `trust_private` を通っていない)。localhost からは同時に動かす数の上限 (`maxTranscodes`) も掛からない。さらに ffmpeg が `/stream/` を localhost から取るので、#34 で断ったほかのサイトからの中継の開始が、ここを通ると起きる。
   - 案: トークンでなく private で通すときは `trust_private` を通す。localhost からも上限に数える (か別の上限を設ける)。あわせて、ffmpeg に入力の形式 (`-f`) を種類から決めて渡し、使うプロトコルを絞ることも考える。
+  - 済み: トークンがないときは `is_private` でなく `trust_private` で通す (`/stream/` と同じく、利用者がリンクを押して開いたものは通す)。localhost からは `maxTranscodes` とは別に、同時に 4 つまで (`MAX_LOCAL_TRANSCODES`。設定の説明「localhost は数えない」はそのまま)。ffmpeg には `type` から決めた入力の形式を `-f` で渡し (MKV・WEBM は matroska、ほかに FLV・MP3・OGG)、知らない種類は 400 にする。bvt の `flv_cgi_cross_site` (ffmpeg がない環境では 403 かどうかだけを見る) と単体テスト `flv` で確かめる。直す前は bvt が失敗することも確かめた。localhost の上限は ffmpeg がないので動かして確かめていない。
 - [ ] #45 IDLE スレッドが、外部の HTTP の応答を期限なしに待ちます (中〜軽)。
   - 速度測定の yp4g.xml の取得 (`UptestRegistry::update` → `download`) は IDLE スレッドの中で行い、チャンネルフィードの取得 (`ChannelDirectory::update`) は IDLE スレッドがスレッドの終わりを待つ。読むたびの待ち時間 (30 秒) はあるが全体の期限がないので、少しずつ返す相手に止められる。既定の登録先 (`http://bayonet.ddo.jp/sp/yp4g.xml`、`http://yp.pcgw.pgw.jp/index.txt`) は平文の HTTP。
   - 止まると、配信を YP に載せる COUT (`connect_broadcaster` でしか始めない)、ヒットの掃除、rtmp-server の再起動、`cmd=shutdown`、フィードの更新なども止まる。

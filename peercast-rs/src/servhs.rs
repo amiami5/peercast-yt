@@ -996,11 +996,18 @@ pub fn push_settings(server: &[u8], q: &Query) -> PushSettings {
 /// `/cgi-bin/flv.cgi` (もとは Python の CGI スクリプト) の ffmpeg の引数。引数が足りないか不正なら `None`
 /// (400)。認証なしで (LAN 内から) 呼べるので、値を厳密に確かめる: `id` は 32 桁の 16 進数
 /// (チャンネル ID)、`preset` と `audio_codec` は英数字と '_' だけ。PeerCast 自身へは常にループバックで
-/// 接続する。
+/// 接続する。入力の形式は `type` から決めて `-f` で渡し、中継元が送る中身で ffmpeg に形式を推測させない
+/// (推測させると、プレイリストなどの形式として読み、ほかの URL やファイルを開きうる。security-review #44)。
 pub fn flv_ffmpeg_args(query: &[u8], server_port: u16) -> Option<Vec<String>> {
     let form = crate::bbs::Form::parse(query);
     let (id, preset, audio_codec) = (form.get("id")?, form.get("preset")?, form.get("audio_codec")?);
-    form.get("type")?;
+    let input_format = match form.get("type")?.to_ascii_uppercase().as_str() {
+        "MKV" | "WEBM" => "matroska",
+        "FLV" => "flv",
+        "MP3" => "mp3",
+        "OGG" | "OGM" => "ogg",
+        _ => return None,
+    };
     let word = |s: &str| !s.is_empty() && s.len() <= 32 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_');
     if !(id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()) && word(preset) && word(audio_codec)) {
         return None;
@@ -1015,6 +1022,8 @@ pub fn flv_ffmpeg_args(query: &[u8], server_port: u16) -> Option<Vec<String>> {
         "-v".into(),
         "-8".into(), // quiet
         "-y".into(), // confirm overwriting
+        "-f".into(),
+        input_format.into(),
         "-i".into(),
         format!("http://127.0.0.1:{}/stream/{}", server_port, id),
         "-strict".into(),

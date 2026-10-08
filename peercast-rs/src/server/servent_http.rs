@@ -338,11 +338,14 @@ fn handshake_get(c: &mut Conn, line: &[u8]) -> Result<()> {
                 return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
             }
             if kind == K::CgiBinFlv {
-                let authorized = ctx.sv.is_private(ctx.pc) || servhs::flv_valid_auth_token(fn_, &ctx.pc.chanmgr.broadcast_id());
+                http.read_headers()?;
+                // ffmpeg がこのノードの /stream/ を localhost から取る (中継も始める) ので、/stream/ と
+                // 同じく、ほかのサイトのページから送らされた要求と DNS リバインディングは private として信じない (#44)
+                let authorized = trust_private(ctx.pc, ctx.sv, &http.headers, true)
+                    || servhs::flv_valid_auth_token(fn_, &ctx.pc.chanmgr.broadcast_id());
                 if !authorized || !ctx.filtered(sf::F_DIRECT) {
                     return Err(http_error(HTTP_SC_FORBIDDEN, 403));
                 }
-                http.read_headers()?;
                 handshake_flv(ctx, http)
             } else if handshake_auth(ctx, http, query, true)? {
                 // 掲示板ビューワーは管理画面からしか呼ばれない。post.cgi はこの PeerCast の IP から
@@ -945,10 +948,15 @@ fn handshake_bbs(http: &mut Http) -> Result<()> {
 
 /// flv.cgi が動かしている ffmpeg の数 (localhost からのものは数えない)
 static TRANSCODES: servhs::TranscodeLimiter = servhs::TranscodeLimiter::new();
+/// localhost からの flv.cgi が動かしている ffmpeg の数
+static LOCAL_TRANSCODES: servhs::TranscodeLimiter = servhs::TranscodeLimiter::new();
+/// localhost から同時に動かす ffmpeg の数の上限 (設定の `maxTranscodes` とは別。#44)
+const MAX_LOCAL_TRANSCODES: u32 = 4;
 
 /// `/cgi-bin/flv.cgi`: チャンネルのストリームを ffmpeg で FLV (H.264) にして送る。接続が切れたら
 /// ffmpeg を止める。設定のトランスコードが無効なら断る (C++ 版は設定を見ずに動かしていた)。
-/// localhost 以外からは、同時に動かす数を設定の `maxTranscodes` までにする。
+/// 同時に動かす数は、localhost 以外からは設定の `maxTranscodes` まで、localhost からは
+/// `MAX_LOCAL_TRANSCODES` までにする。
 fn handshake_flv(ctx: &Ctx, http: &mut Http) -> Result<()> {
     let req = http.get_request().map_err(|_| http_error(HTTP_SC_BADREQUEST, 400))?;
     if req.path != b"/cgi-bin/flv.cgi" {
@@ -966,15 +974,12 @@ fn handshake_flv(ctx: &Ctx, http: &mut Http) -> Result<()> {
         Some(a) => a,
         None => return Err(http_error(HTTP_SC_BADREQUEST, 400)),
     };
-    let _slot = if is_localhost(&ctx.host()) {
-        None
-    } else {
-        match TRANSCODES.acquire(max) {
-            Some(slot) => Some(slot),
-            None => {
-                crate::log_warn!("flv.cgi: too many transcodes ({} running, max {})", TRANSCODES.running(), max);
-                return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
-            }
+    let (limiter, max) = if is_localhost(&ctx.host()) { (&LOCAL_TRANSCODES, MAX_LOCAL_TRANSCODES) } else { (&TRANSCODES, max) };
+    let _slot = match limiter.acquire(max) {
+        Some(slot) => slot,
+        None => {
+            crate::log_warn!("flv.cgi: too many transcodes ({} running, max {})", limiter.running(), max);
+            return Err(http_error(HTTP_SC_UNAVAILABLE, 503));
         }
     };
     let mut child = match std::process::Command::new("ffmpeg")
