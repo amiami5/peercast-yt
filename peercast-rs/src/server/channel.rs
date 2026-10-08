@@ -26,6 +26,9 @@ use crate::pcp::write::AtomBuf;
 /// 中継の配信元に断られてから、チャンネル ID の付いた GIV を受け付ける秒数
 pub const GIV_WINDOW: u32 = 30;
 
+/// コメントが変わったことを、同じチャンネルで続けて通知しない秒数
+pub const COMMENT_NOTIFY_INTERVAL: u32 = 10;
+
 // `Channel::STATUS`
 pub const S_NONE: i32 = 0;
 pub const S_WAIT: i32 = 1;
@@ -86,6 +89,8 @@ pub struct ChanState {
     pub status: i32,
     pub last_tracker_update: u32,
     pub last_meta_update: u32,
+    /// コメントが変わったことを最後に通知した時刻 (Rust 版で足した。#46)
+    pub last_comment_notify: u32,
     pub start_time: f64,
     pub ip_version: i32,
     pub root_host: Vec<u8>,
@@ -115,6 +120,7 @@ impl ChanState {
         self.source = None;
         self.last_tracker_update = 0;
         self.last_meta_update = 0;
+        self.last_comment_notify = 0;
         self.src_type = SRC_NONE;
         self.start_time = 0.0;
         self.ip_version = IP_V4;
@@ -169,6 +175,7 @@ impl Channel {
             status: S_NONE,
             last_tracker_update: 0,
             last_meta_update: 0,
+            last_comment_notify: 0,
             start_time: 0.0,
             ip_version: IP_V4,
             root_host: Vec::new(),
@@ -563,15 +570,22 @@ impl Channel {
 
     /// `updateInfo`: 情報が変われば true
     pub fn update_info(&self, pc: &Peercast, new_info: &ChanInfo) -> bool {
-        let (old_comment, info) = {
+        let (notify_comment, info) = {
             let mut st = self.st();
             let old = st.info.comment.clone();
             if !st.info.update(new_info) {
                 return false;
             }
-            (old, st.info.clone())
+            // コメントが変わった通知は、チャンネルごとに間を空ける (中継元がコメントを変え続けても
+            // 通知であふれないように。C++ 版は変わるたびに通知した。security-review #46)
+            let now = sys::get_time();
+            let due = old.data != st.info.comment.data && now.wrapping_sub(st.last_comment_notify) >= COMMENT_NOTIFY_INTERVAL;
+            if due {
+                st.last_comment_notify = now;
+            }
+            (due, st.info.clone())
         };
-        if old_comment.data != info.comment.data {
+        if notify_comment {
             let c = info.comment.converted(StrType::Unicode);
             let mut msg = info.name.data.clone();
             msg.extend_from_slice("「".as_bytes());
@@ -922,6 +936,7 @@ impl Clone for ChanState {
             status: self.status,
             last_tracker_update: self.last_tracker_update,
             last_meta_update: self.last_meta_update,
+            last_comment_notify: self.last_comment_notify,
             start_time: self.start_time,
             ip_version: self.ip_version,
             root_host: self.root_host.clone(),

@@ -42,10 +42,19 @@ impl App {
         ])
     }
 
-    /// `notifyMessage`
+    /// `notifyMessage`。notify-send は同時に 1 つ、`NOTIFY_SEND_INTERVAL` に 1 回までにし、その間の
+    /// 通知は (ログと通知の一覧には残して) notify-send を起こさない (C++ 版は通知ごとに起こした。#46)
     pub fn notify_message(&self, ty: u32, message: &[u8]) {
         crate::log_info!("Notification: {}", String::from_utf8_lossy(message));
         if self.enable_notify_send {
+            static GATE: NotifyGate = NotifyGate::new();
+            let ticket = match GATE.try_start(std::time::Instant::now()) {
+                Some(t) => t,
+                None => {
+                    crate::log_debug!("notifyMessage: skipping notify-send (too frequent)");
+                    return;
+                }
+            };
             let icon = [&self.html_path[..], b"assets/images/small-logo.png"].concat();
             let args: Vec<std::ffi::OsString> =
                 vec![b"-i".to_vec(), icon, b"--".to_vec(), notif::type_str(ty).as_bytes().to_vec(), markup_escape(message)].into_iter().map(os_string).collect();
@@ -55,11 +64,55 @@ impl App {
                     std::thread::spawn(move || {
                         let r = child.wait();
                         crate::log_debug!("notifyMessage: notify-send = {:?}", r.map(|s| s.code()));
+                        drop(ticket);
                     });
                 }
                 Err(e) => crate::log_debug!("notifyMessage: notify-send: {}", e),
             }
         }
+    }
+}
+
+/// notify-send を続けて起こさない間隔
+pub const NOTIFY_SEND_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// notify-send を同時に 1 つ、`NOTIFY_SEND_INTERVAL` に 1 回までにする
+pub struct NotifyGate {
+    running: std::sync::atomic::AtomicBool,
+    last: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+/// `NotifyGate::try_start` で得たもの。捨てると次を起こせる
+pub struct NotifyTicket<'a>(&'a NotifyGate);
+
+impl Drop for NotifyTicket<'_> {
+    fn drop(&mut self) {
+        self.0.running.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl NotifyGate {
+    pub const fn new() -> NotifyGate {
+        NotifyGate { running: std::sync::atomic::AtomicBool::new(false), last: std::sync::Mutex::new(None) }
+    }
+
+    /// 起こしてよければ `Some`。動いているものがあるか、前に起こしてから間がなければ `None`
+    pub fn try_start(&self, now: std::time::Instant) -> Option<NotifyTicket<'_>> {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(*last, Some(t) if now.saturating_duration_since(t) < NOTIFY_SEND_INTERVAL) {
+            return None;
+        }
+        if self.running.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        *last = Some(now);
+        Some(NotifyTicket(self))
+    }
+}
+
+impl Default for NotifyGate {
+    fn default() -> Self {
+        NotifyGate::new()
     }
 }
 
@@ -132,5 +185,20 @@ mod tests {
     fn markup_escape_tags() {
         assert_eq!(markup_escape(b"<a href=\"x\">A&B</a> 'q'"), b"&lt;a href=\"x\"&gt;A&amp;B&lt;/a&gt; 'q'".to_vec());
         assert_eq!(markup_escape("日本語".as_bytes()), "日本語".as_bytes().to_vec());
+    }
+
+    /// notify-send は同時に 1 つ、間を空けてしか起こさない (security-review #46)
+    #[test]
+    fn notify_gate() {
+        let g = NotifyGate::new();
+        let t0 = std::time::Instant::now();
+        let t = g.try_start(t0).expect("first");
+        // 動いている間と、間を空けないうちは起こさない
+        assert!(g.try_start(t0 + NOTIFY_SEND_INTERVAL).is_none());
+        drop(t);
+        assert!(g.try_start(t0 + NOTIFY_SEND_INTERVAL / 2).is_none());
+        let t = g.try_start(t0 + NOTIFY_SEND_INTERVAL).expect("after interval");
+        drop(t);
+        assert!(g.try_start(t0 + NOTIFY_SEND_INTERVAL * 2).is_some());
     }
 }

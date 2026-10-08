@@ -645,6 +645,28 @@ fn stream_header_injection() {
     }
 }
 
+/// コメントを続けて変えても、同じチャンネルの「コメントが変わった」通知は間を空ける (security-review #46)
+#[test]
+fn comment_notifications_throttled() {
+    let s = Server::start(17244);
+    let _push = push_flv(s.port, "notifytest");
+    let cid = wait_channels(s.port, 1)[0].1.clone();
+    for i in 0..5 {
+        let params = format!(
+            r#"{{"channelId": "{}", "info": {{"name": "notifytest", "desc": "", "genre": "", "url": "", "comment": "c{}"}}, "track": {{"url": "", "name": "", "creator": "", "album": "", "genre": ""}}}}"#,
+            cid, i
+        );
+        jrpc_call(s.port, "setChannelInfo", &params);
+    }
+    let st = jrpc_call(s.port, "getState", r#"{"objectNames": ["notificationBuffer"]}"#);
+    let list = match st.get(b"notificationBuffer").and_then(|b| b.get(b"notifications")) {
+        Some(peercast_rs::json::Value::Array(a)) => a.clone(),
+        _ => panic!("notifications がない"),
+    };
+    let n = list.iter().filter(|m| String::from_utf8_lossy(str_at(m, "message")).starts_with("notifytest「")).count();
+    assert_eq!(n, 1);
+}
+
 /// `randomizeBroadcastingChannelID` がオフのとき、名前などから作ったチャンネル ID から放送 ID に戻せない
 /// (security-review #43)。C++ 版の作り方 (放送 ID に名前などを XOR) なら、同じ計算をもう一度すると戻る
 #[test]

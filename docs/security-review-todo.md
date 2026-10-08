@@ -185,9 +185,10 @@
   - 止まると、配信を YP に載せる COUT (`connect_broadcaster` でしか始めない)、ヒットの掃除、rtmp-server の再起動、`cmd=shutdown`、フィードの更新なども止まる。
   - 案: 外向きの HTTP (`http::get`、uptest の `download`) に全体の期限を設ける。uptest の取得も別のスレッドで行い、IDLE スレッドは待たない。
   - 済み: チャンネルフィードと速度測定の yp4g.xml の取得を、IDLE から新しい FEEDS のスレッド (`servmgr::feed_proc`) に移した。`ClientSocket` に書いても外れない全体の期限 (`set_total_timeout`) を足し、`http::get` と速度測定の `download` は 1 回の要求を 60 秒まで (`http::FETCH_TIMEOUT_MS`) にした。bvt の `slow_feed_does_not_block_idle` (フィードの相手が 1 秒に 1 バイト返す間に `cmd=shutdown` で終わる) と単体テスト `total_timeout` で確かめる。直す前は bvt が失敗することも確かめた。
-- [ ] #46 通知に間隔の制限がなく、`--enable-notify-send` のときは通知ごとに notify-send を起動します (軽)。
+- [x] #46 通知に間隔の制限がなく、`--enable-notify-send` のときは通知ごとに notify-send を起動します (軽)。
   - 中継しているチャンネルのコメントが変わるたびに通知する (`Channel::update_info`) ので、中継元がコメントを変え続けると、1 秒に数十回 notify-send を起こす (通知のデーモンがない環境では 1 つが数十秒残る)。
   - 案: notify-send は同時に 1 つ (か数秒に 1 回) までにし、間の通知はまとめるか捨てる。コメントの変更の通知もチャンネルごとに間隔を空ける。
+  - 済み: コメントが変わった通知は、同じチャンネルでは 10 秒に 1 回まで (`COMMENT_NOTIFY_INTERVAL`)。notify-send は同時に 1 つ、3 秒に 1 回まで (`app::NotifyGate`) にし、その間の通知はログと通知の一覧にだけ残す。bvt の `comment_notifications_throttled` (JSON-RPC の `setChannelInfo` でコメントを 5 回変える) と単体テスト `notify_gate` で確かめる。直す前は bvt が失敗する (通知が 5 つ) ことも確かめた。
 - [ ] #47 フィルターの `.` で始まる名前は、逆引き (PTR) の結果だけで判定しています (軽)。
   - `ServFilter::matches` の `Suffix` は `dnscache::name_of` の名前の終わりを見るだけで、その名前を正引きして相手のアドレスに戻るかを確かめていない。PTR は相手のアドレスの持ち主が決められるので、private や許可に使うと、その扱いを受けられる。C++ 版と同じ。
   - 案: 逆引きした名前を正引きし、相手のアドレスが含まれるときだけ使う (forward-confirmed reverse DNS)。
