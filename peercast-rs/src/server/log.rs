@@ -244,6 +244,24 @@ pub fn log_escape(s: &[u8]) -> Vec<u8> {
     out
 }
 
+/// 正しい UTF-8 の行の、改行などの制御文字 (タブを除く) を `log_escape` と同じ `[XX]` にする。
+/// ほかのノードや要求から届いた文字列 (PCP のエージェント名や `mesg` など) で、ログのファイルや
+/// 標準出力に偽の行を作られないように (C++ 版はそのまま書いた。security-review #57)
+fn escape_controls(s: &[u8]) -> Vec<u8> {
+    if !s.iter().any(|&c| (c < 0x20 && c != b'\t') || c == 0x7f) {
+        return s.to_vec();
+    }
+    let mut out = Vec::with_capacity(s.len() + 8);
+    for &c in s {
+        if (c < 0x20 && c != b'\t') || c == 0x7f {
+            out.extend(format!("[{:02X}]", c).into_bytes());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// `ADDLOG`
 pub fn add_log(ty: Level, msg: &[u8]) {
     let l = logger();
@@ -251,7 +269,7 @@ pub fn add_log(ty: Level, msg: &[u8]) {
         return;
     }
     const MAX_LINELEN: usize = 1024;
-    let tmp = if crate::utf8::validate(msg) { msg.to_vec() } else { log_escape(msg) };
+    let tmp = if crate::utf8::validate(msg) { escape_controls(msg) } else { log_escape(msg) };
     let tmp = crate::utf8::truncate(&tmp, MAX_LINELEN).unwrap_or(tmp);
 
     // 受け取る関数の中でログを書いても、ここには戻らない
@@ -346,6 +364,17 @@ pub fn b(s: &[u8]) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 届いた文字列の改行などで偽の行を作られない (security-review #57)
+    #[test]
+    fn controls_are_escaped() {
+        assert_eq!(escape_controls(b"agent\nThu Oct  8 [INFO] fake"), b"agent[0A]Thu Oct  8 [INFO] fake".to_vec());
+        assert_eq!(escape_controls(b"a\r\x1b[31m\x7fb"), b"a[0D][1B][31m[7F]b".to_vec());
+        assert_eq!(escape_controls("日本語\tタブ".as_bytes()), "日本語\tタブ".as_bytes().to_vec());
+        // add_log を通しても同じ
+        let ((), lines) = capture(|| add_log(Level::Info, b"x\ny"));
+        assert_eq!(lines, vec![(Level::Info, b"x[0A]y".to_vec())]);
+    }
 
     #[test]
     fn buffer_lines() {

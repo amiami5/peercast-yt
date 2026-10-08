@@ -299,9 +299,10 @@
   - librtmp の `RTMP_SetupURL(RTMP *r, char *url)` は、`RTMP_ParseURL` (`const char *`) と違って `char *` を取り、空白などに NUL を書き込んでオプションを切り分ける。共有の参照から得たポインタを通して書くのは Rust の決まりの外 (いまのコンパイラーで困ることはないと思われる)。
   - 案: NUL で終わる `Vec<u8>` を持ち、`as_mut_ptr()` を渡す (`CString::into_raw` は、中に NUL を書かれると `from_raw` で長さが変わって解放を誤るので使わない)。#53 を直すときに一緒に直せる。
   - 済み: URL は NUL で終わる `Vec<u8>` で持ち、`as_mut_ptr()` を渡す。中に NUL を含む URL は今までどおり断る。`--features rtmp` のビルドと clippy で確かめた (librtmp につなぐ動かしての確認はしていない)。
-- [ ] #57 PCP の相手が送るエージェント名 (`agnt`) と `mesg` の文字列を、改行などを除かずにデバッグのログに書きます (軽)。
+- [x] #57 PCP の相手が送るエージェント名 (`agnt`) と `mesg` の文字列を、改行などを除かずにデバッグのログに書きます (軽)。
   - `log::add_log` は正しい UTF-8 ならそのまま書くので、ログのファイルや標準出力に偽の行を作れる (管理画面のログの表示はエスケープしている)。#21 で `chan_info_string` には `strip_controls` を入れたが、ほかの PCP の文字列は通っていない。C++ 版と同じ。
   - 案: `add_log` で、改行を含む制御文字を `[0A]` のように書き換える (`log_escape` と同じ形)。
+  - 済み: `add_log` で、正しい UTF-8 の行も、改行などの制御文字 (タブを除く) と DEL を `[0A]` の形にする (`log::escape_controls`)。PCP の文字列に限らず、すべてのログに効く (JSON-RPC の要求の本体の改行なども `[0A]` になる)。単体テスト `controls_are_escaped` で確かめる。
 
 見て、問題がなかったもの:
 
