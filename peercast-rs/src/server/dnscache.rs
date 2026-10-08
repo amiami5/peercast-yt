@@ -146,7 +146,21 @@ impl DnsCache {
 fn resolve(q: &Query) -> Answer {
     match q {
         Query::Name(n) => Answer::Ip(get_ip(n)),
-        Query::Addr(ip) => Answer::Name(super::sys::hostname_by_address(ip)),
+        Query::Addr(ip) => {
+            Answer::Name(super::sys::hostname_by_address(ip).and_then(|n| forward_confirmed(ip, n, &super::host::resolve_all)))
+        }
+    }
+}
+
+/// 逆引きで得た名前 `name` を正引きし、そのアドレスに `ip` が含まれるときだけ名前を返す
+/// (forward-confirmed reverse DNS)。PTR はアドレスの持ち主が好きな名前にできるので、そのままでは
+/// フィルターの `.` で始まる名前に一致させられる (C++ 版は逆引きだけで判定した。security-review #47)
+fn forward_confirmed(ip: &Ip, name: Vec<u8>, resolve_all: &dyn Fn(&[u8]) -> Vec<Ip>) -> Option<Vec<u8>> {
+    if resolve_all(&name).contains(ip) {
+        Some(name)
+    } else {
+        crate::log_debug!("Reverse DNS name {} of {} does not resolve back to it", String::from_utf8_lossy(&name), ip.str());
+        None
     }
 }
 
@@ -252,6 +266,26 @@ mod tests {
         assert!(t.elapsed() < Duration::from_millis(50));
         c.set_limits(Duration::from_secs(60), Duration::from_secs(2));
         assert_eq!(c.lookup(&name("b")), Some(Answer::Ip(7)));
+    }
+
+    /// 逆引きの名前は、正引きして元のアドレスに戻るときだけ使う (security-review #47)
+    #[test]
+    fn reverse_name_is_forward_confirmed() {
+        let ip = Ip::from_v4(0xcb00_7105); // 203.0.113.5
+        let other = Ip::from_v4(0xcb00_7106);
+        let v6 = Ip::parse(b"2001:db8::5").unwrap();
+        let fake = |n: &[u8]| -> Vec<Ip> {
+            match n {
+                b"host.example.jp" => vec![v6, Ip::from_v4(0xcb00_7105)],
+                b"lies.example.jp" => vec![Ip::from_v4(0xcb00_7106)],
+                _ => Vec::new(),
+            }
+        };
+        assert_eq!(forward_confirmed(&ip, b"host.example.jp".to_vec(), &fake), Some(b"host.example.jp".to_vec()));
+        assert_eq!(forward_confirmed(&v6, b"host.example.jp".to_vec(), &fake), Some(b"host.example.jp".to_vec()));
+        assert_eq!(forward_confirmed(&ip, b"lies.example.jp".to_vec(), &fake), None);
+        assert_eq!(forward_confirmed(&other, b"host.example.jp".to_vec(), &fake), None);
+        assert_eq!(forward_confirmed(&ip, b"nx.example.jp".to_vec(), &fake), None);
     }
 
     #[test]
