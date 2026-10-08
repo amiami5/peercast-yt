@@ -256,3 +256,14 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   `system("notify-send … &")` を起こし、コメントが変わるたびに通知する。index.txt の行数と誤りの行の数に上限が
   なく、誤りは 1 行ずつログに書き、`runProcess` がログを全部溜める。PCP のヒットの宛先 (ループバック・LAN・自分)
   を確かめずに中継元としてつなぐ。`chanLog` を設定していると、どの相手からの `chan` の atom でも記録を書き足す。
+* 同じ見直しの続き (2026-10-08。#53・#54・#57): `URLSource::streamURL` は、リダイレクト先や HTTP で取った
+  プレイリストの中の `rtmp://` の URL を、空白の後ろの librtmp のオプション (`socks=`、`swfUrl=` と `swfVfy=1`
+  など。ほかの宛先へつないだり HTTP で取りに行ったりする) ごと `RTMP_SetupURL` に渡す。`handshakeICY` は、
+  localhost からの `SOURCE` を、Host ヘッダーやほかのサイトのページから送らされた要求かを見ずに受け付ける。
+  PCP の相手が送るエージェント名や `mesg` の文字列を、改行を除かずにログに書く。
+* 同じ見直しで気づいたこと: `URLSource::streamURL` の `url` は `const char *` なので、`rs->open(url)` は
+  一時的な `std::string` を作って `RTMPClientStream::open(const std::string&)` に渡し、`open` から戻ると
+  解放する。librtmp の `RTMP_SetupURL` は、その文字列に NUL を書き込み (`c_str()` の `const` を外している)、
+  ホスト名・app・オプションの値などをその中を指したまま持つので、`open` のあと (`RTMP_Read` の中の
+  パケットの処理など) にそれらを読むと、解放したメモリを読む。どの値が `open` のあとで読まれるかは
+  確かめていない。Rust 版は URL を `RtmpStream` に持たせ、閉じるまで解放しない (書き込ませ方は #56)。
