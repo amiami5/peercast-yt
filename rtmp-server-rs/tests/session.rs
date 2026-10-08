@@ -290,3 +290,39 @@ fn publish_deadline() {
     assert!(flv.starts_with(b"FLV"));
     assert_eq!(*called.lock().unwrap(), 1);
 }
+
+#[test]
+fn media_before_publish_is_rejected() {
+    // publish を送らずに、メタデータ・音声・映像を送っても出力先には何も書かない
+    let mut pre = handshake_bytes();
+    pre.extend(chunked(3, 0, 0x14, 0, &cmd(&[amf_str("connect"), amf_num(1.0), amf_null()]), 128));
+    pre.extend(chunked(3, 0, 0x14, 0, &cmd(&[amf_str("createStream"), amf_num(2.0), amf_null()]), 128));
+    let mut with_meta = pre.clone();
+    with_meta.extend(metadata(true));
+    let mut with_video = pre.clone();
+    with_video.extend(chunked(6, 0, 0x09, 1, &[0x17, 1, 0, 0, 0], 128));
+    let mut with_audio = pre;
+    with_audio.extend(chunked(5, 0, 0x08, 1, &[0xaf, 1, 9, 9], 128));
+    for (input, key) in [(with_meta, None), (with_video, None), (with_audio, None)]
+        .into_iter()
+        .chain([(full_publish_without_publish(), Some(&b"key"[..]))])
+    {
+        let (r, _, flv) = run_with(input, |s| {
+            if let Some(k) = key {
+                s.set_stream_key(k)
+            }
+        });
+        assert!(matches!(r, Err(Error::Protocol(ref m)) if m == "media before publish"), "{:?}", r);
+        assert!(flv.is_empty());
+    }
+}
+
+/// full_publish() から publish のコマンドだけを抜いたもの
+fn full_publish_without_publish() -> Vec<u8> {
+    let mut input = handshake_bytes();
+    input.extend(chunked(3, 0, 0x14, 0, &cmd(&[amf_str("connect"), amf_num(1.0), amf_null()]), 128));
+    input.extend(chunked(3, 0, 0x14, 0, &cmd(&[amf_str("createStream"), amf_num(3.0), amf_null()]), 128));
+    input.extend(metadata(true));
+    input.extend(chunked(5, 40, 0x08, 1, &[0xaf, 1, 9, 9], 128));
+    input
+}

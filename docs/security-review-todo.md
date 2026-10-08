@@ -166,10 +166,11 @@
 
 #42 と #43 は一時的なテスト (コミットしていない) で動かして確かめた。ほかはコードを読んで判断したもの。
 
-- [ ] #42 rtmp-server が、publish を受け付ける前のメタデータと音声・映像も出力先 (PeerCast) に流します (重)。
+- [x] #42 rtmp-server が、publish を受け付ける前のメタデータと音声・映像も出力先 (PeerCast) に流します (重)。
   - `session.rs` の `on_message` は、publish を受け付けたかを見ずに 0x12・0x08・0x09 を `FlvWriter` に書き、そこで出力先を開く。このため、ストリームキー (`rtmpStreamKey`) を設定していても、publish を送らない接続はキーを確かめられずに配信できる (配信開始までの期限で切れるが、つなぎ直せば続く)。C++ 版にはキーがないので Rust 版だけの問題。
   - 確かめたこと: キーを `secret` にした rtmp-server に、publish を送らずにメタデータと映像を送ると、出力先に `POST /?name=t` と FLV のヘッダー・映像が届いた。既存のテスト (`wrong_stream_key_is_rejected`) は publish の名前が違う場合だけを見ている。
   - 案: publish を受け付けるまでは、メタデータと音声・映像のメッセージは捨てる (か誤りにして切る)。キーを設定していないときも同じにする。robustness に「publish なしのデータは出力先に届かない」テストを足す。
+  - 済み: publish を受け付けるまでに届いたメタデータ (0x12) と音声・映像 (0x08・0x09) は、出力先に書かずに誤り (`media before publish`) にして切る。キーを設定していないときも同じ。OBS や ffmpeg は publish の応答を待ってから送るので影響はない。session のテスト `media_before_publish_is_rejected` と robustness の `data_without_publish_does_not_reach_sink` で確かめる。直す前は robustness のテストが失敗することも確かめた。
 - [ ] #43 `randomizeBroadcastingChannelID` がオフのとき、チャンネル ID から放送 ID (BCID) を戻せます (中)。
   - チャンネル ID は、放送 ID に名前・ジャンル (ICY はマウント)・ビットレートを XOR しただけのもの (`gnuid::encode`、`set_broadcast_id_channel_id`、`handshake_icy`)。これらの値は YP の一覧や PCP で公開されているので、同じ計算をもう一度すれば放送 ID になる。放送 ID があれば、どのチャンネル ID についても `?auth=` のトークンを作れる (#36 と同じ影響)。既定はオン (ランダム) なので、オフにした人だけ。C++ 版と同じ。
   - 確かめたこと: 単体の一時的なテストで、`encode` を同じ値でもう一度かけると放送 ID に戻ることを確かめた。

@@ -274,3 +274,24 @@ fn wrong_stream_key_is_rejected() {
     let flv = conns.lock().unwrap().iter().filter(|c| c.windows(3).any(|w| w == b"FLV")).count();
     assert_eq!(flv, 1);
 }
+
+#[test]
+fn data_without_publish_does_not_reach_sink() {
+    // publish を送らずにメタデータと映像を送っても、出力先にはつながない (キーの有無によらない)
+    // publish_prefix() の publish (3 つ目のコマンド) を抜いたもの
+    let publish = chunked(4, 0, 0x14, 1, &[amf_str("publish"), amf_num(3.0), amf_null(), amf_str("key")].concat(), 128);
+    let mut v = publish_prefix();
+    let at = v.windows(publish.len()).position(|w| w == publish).expect("publish");
+    v.drain(at..at + publish.len());
+    v.extend(chunked(6, 40, 0x09, 1, &[vec![0x17, 1, 0, 0, 0], vec![0xaa; 1000]].concat(), 4096));
+    let (sport, conns) = sink();
+    let url = format!("http://127.0.0.1:{}/?name=t", sport);
+    for key in [Some("secret"), None] {
+        let port = free_port();
+        let mut srv = Server::start_with(port, &url, &[], key);
+        send_all(port, &v, Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(srv.alive());
+        assert_eq!(conns.lock().unwrap().len(), 0, "key {:?}", key);
+    }
+}

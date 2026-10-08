@@ -7,6 +7,8 @@
 //!  - 送信側で 1 チャンクに収まらないメッセージの 2 個目以降のチャンクが正しく作られる
 //!    (C++ 版は先頭チャンクのヘッダーも fmt 3 になっていた。現在の応答は全て 1 チャンクに収まるので実害なし)。
 //!  - 配信 (publish) が始まるまでの期限と、ストリームキーの確認を足した (どちらも使う側が設定したときだけ)。
+//!  - publish を受け付ける前のメタデータと音声・映像は、出力先に書かずに誤りにして切る
+//!    (C++ 版は publish を待たずに書くので、ストリームキーを確かめずに配信できてしまう)。
 
 use crate::amf0::{Reader, Value};
 use crate::flv::FlvWriter;
@@ -52,6 +54,8 @@ pub struct Session<C: Read + Write, W: Write> {
     max_incoming_chunk_size: usize,
     max_outgoing_chunk_size: usize,
     quitting: bool,
+    /// publish を受け付けたか。受け付けるまでは出力先に何も書かない
+    publishing: bool,
     /// この時刻までに publish が来なければ切る。publish を受け付けたら None
     deadline: Option<Instant>,
     /// Some なら、publish の名前 (ストリームキー) がこれと一致するときだけ受け付ける
@@ -96,6 +100,7 @@ impl<C: Read + Write, W: Write> Session<C, W> {
             max_incoming_chunk_size: 128,
             max_outgoing_chunk_size: 128,
             quitting: false,
+            publishing: false,
             deadline: None,
             stream_key: None,
             on_publish_start: None,
@@ -358,6 +363,7 @@ impl<C: Read + Write, W: Write> Session<C, W> {
                 return Err(Error::protocol("wrong stream key"));
             }
         }
+        self.publishing = true;
         self.deadline = None;
         if let Some(mut f) = self.on_publish_start.take() {
             f();
@@ -452,6 +458,10 @@ impl<C: Read + Write, W: Write> Session<C, W> {
     }
 
     fn on_message(&mut self, msg: &Message) -> Result<()> {
+        // 出力先に書くもの (出力先を開くもの) は、publish でストリームキーを確かめたあとだけ
+        if matches!(msg.type_id, 0x12 | 0x08 | 0x09) && !self.publishing {
+            return Err(Error::protocol("media before publish"));
+        }
         match msg.type_id {
             0x14 => self.on_command(msg),
             0x12 => self.on_metadata(msg),
