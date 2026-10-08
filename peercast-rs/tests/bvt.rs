@@ -1376,6 +1376,47 @@ fn icy_source_cross_site() {
     assert!(r.contains("200"), "{}", r);
 }
 
+/// `chanLog` を設定していても、同じチャンネルの `chan` の atom を続けて送られたぶんだけ記録を書き足さない
+/// (security-review #52)
+#[test]
+fn chan_log_throttled() {
+    let s = Server::start_with(17246, |ini| ini.replacen("chanLog = \r\n", "chanLog = chan.log\r\n", 1));
+    let p = s.port;
+    // 配信していないと CIN を受け付けない
+    let _push = push_flv(p, "chanlogtest");
+    wait_channels(p, 1);
+    let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut out = AtomBuf::default();
+    out.int(*b"pcp\n", 1);
+    out.parent(id4(b"helo"), 3);
+    out.string(id4(b"agnt"), b"PeerCast/0.1218 (YT50)");
+    out.int(id4(b"ver"), 1218);
+    out.bytes(id4(b"sid"), b"chanlog-test-ses");
+    c.write_all(&out.0).unwrap();
+    let mut got = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !got.windows(4).any(|w| w == b"oleh") {
+        let n = c.read(&mut buf).unwrap();
+        assert!(n > 0, "oleh が届かない");
+        got.extend_from_slice(&buf[..n]);
+    }
+    let mut drain = c.try_clone().unwrap();
+    std::thread::spawn(move || while matches!(drain.read(&mut buf), Ok(n) if n > 0) {});
+    let mut atoms = AtomBuf::default();
+    for i in 0..20 {
+        atoms.parent(id4(b"chan"), 2);
+        atoms.bytes(id4(b"id"), &[0x4c; 16]);
+        atoms.parent(id4(b"info"), 1);
+        atoms.string(id4(b"name"), format!("logtest{}", i).as_bytes());
+    }
+    c.write_all(&atoms.0).unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    let log = std::fs::read_to_string(s.dir.join("chan.log")).unwrap_or_default();
+    assert_eq!(log.matches("<update").count(), 1, "{}", log);
+    drop(c);
+}
+
 /// PCP のストリームのデータ (`pkt`) とチャンネルの情報の更新は、そのチャンネルの上流からのものだけ使う
 /// (security-review #35)。配信しているノードへの CIN と、中継しているノードの下流 (中継先) から送ってみる
 #[test]

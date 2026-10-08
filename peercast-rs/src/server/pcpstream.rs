@@ -22,6 +22,24 @@ use crate::reader::Abort;
 const MIN_UPDATE_INTERVAL: i32 = 30;
 const MAX_UPDATE_INTERVAL: i32 = 3600;
 
+/// チャンネルの記録 (`chanLog`) に同じチャンネルを続けて書かない秒数
+pub const CHAN_LOG_INTERVAL: u32 = 10;
+/// チャンネルの記録の大きさの上限。これを超えたら書き足さない
+pub const MAX_CHAN_LOG_SIZE: u64 = 64 * 1024 * 1024;
+
+/// チャンネルの記録に書き足してよいか (大きさが上限に達していないか)。達していれば一度だけ警告する
+fn chan_log_has_room(path: &[u8]) -> bool {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let len = std::fs::metadata(String::from_utf8_lossy(path).as_ref()).map(|m| m.len()).unwrap_or(0);
+    if len < MAX_CHAN_LOG_SIZE {
+        return true;
+    }
+    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        crate::log_warn!("Channel log {} is too large; not appending", String::from_utf8_lossy(path));
+    }
+    false
+}
+
 /// ほかのスレッドから使う部分 (送るパケット、経路の ID、相手の ID)
 pub struct PcpShared {
     pub out_data: PacketBuffer,
@@ -549,12 +567,20 @@ impl pcp::Host for PcpHost<'_> {
             self.has_chl = true;
         }
         let new_info = self.new_info.clone();
+        let chan_log = pc.servmgr.settings().chan_log.data.clone();
+        // チャンネルの記録は、どの相手からでも chan の atom を送るたびに書き足させられるので、
+        // チャンネルごとに間を空け、記録の大きさにも上限を設ける (C++ 版にはなかった。security-review #52)
+        let now = sys::get_time();
         let log_info = pc.chanmgr.with_hitlist_by_id(&id, |chl| {
             chl.info.update(&new_info);
-            chl.clone()
+            let due = !chan_log.is_empty() && now.wrapping_sub(chl.last_log_time) >= CHAN_LOG_INTERVAL;
+            if due {
+                chl.last_log_time = now;
+            }
+            due.then(|| chl.clone())
         });
-        let chan_log = pc.servmgr.settings().chan_log.data.clone();
-        if let (Some(chl), false) = (log_info, chan_log.is_empty()) {
+        let log_info = log_info.flatten().filter(|_| chan_log_has_room(&chan_log));
+        if let Some(chl) = log_info {
             let mut rn = super::xmlnode::XmlNode::new("update").attr("time", sys::get_time().to_string());
             let mut n = chl.info.channel_xml(pc.chanmgr.max_uptime());
             n.add(chl.xml(false));
@@ -616,3 +642,24 @@ pub fn read_version(io: &mut dyn Stream) -> Result<i32> {
     Ok(ver)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// チャンネルの記録は大きさの上限まで (security-review #52)
+    #[test]
+    fn chan_log_size_cap() {
+        let dir = std::env::temp_dir().join(format!("pcyt-chanlog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chan.log");
+        let p = path.to_string_lossy().into_owned().into_bytes();
+        assert!(chan_log_has_room(&p)); // まだない
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(MAX_CHAN_LOG_SIZE - 1).unwrap();
+        assert!(chan_log_has_room(&p));
+        f.set_len(MAX_CHAN_LOG_SIZE).unwrap();
+        assert!(!chan_log_has_room(&p));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -248,6 +248,8 @@ pub struct ChanHitList {
     /// 新しいものが前
     pub hits: Vec<ChanHit>,
     pub last_hit_time: u32,
+    /// チャンネルの記録 (`chanLog`) に最後に書いた時刻 (Rust 版で足した。#52)
+    pub last_log_time: u32,
 }
 
 impl ChanHitList {
