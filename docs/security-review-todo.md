@@ -291,9 +291,10 @@
   - C++ 版は、パスワードが空 (既定) ならどこからでも受け付ける (前に書いたもの)。パスワードがあっても、localhost からの要求の Host などは見ない。
   - 案: localhost からパスワードなしで受け付けるときは、HTTP の形の行 (`is_http`) なら `trust_private` と同じく、Host がループバックか LAN の名前 (ないものは今までどおり受け付ける) で、ほかのサイトからの要求でないことを確かめる。HTTP の形でない古い ICY の行 (ICE/1.0 など) はヘッダーを付けないので今までどおり。bvt (`cross_site_cannot_start_relay` と同じ形で、`SOURCE` の要求に Sec-Fetch-Site・Origin・Host を付けたものは 403、付けないものは受け付ける) で確かめる。
   - 済み: `handshake_icy` で、localhost から HTTP の形の行でパスワードなし (空の Basic 認証を含む) のときは、`trust_private` (HTTP Push と同じく、利用者がリンクを押したものも通さない) を通らなければ 403 にする。パスワードを送ったものと、HTTP の形でない古い行は今までどおり。ブラウザーの `fetch` は `SOURCE` のメソッドと `Authorization: Basic source:` を送れるので、パスワードなしの形も実際に作れる。bvt の `icy_source_cross_site` で確かめる。直す前は bvt が失敗する (ほかのサイトからの要求に 200 を返す) ことも確かめた。
-- [ ] #55 要求を読み終えていない接続の IP ごとの上限 (`servent.rs` の `HANDSHAKES`、`maxHandshakesPerIp`) を、IPv6 でもアドレスごとに数えています (軽)。
+- [x] #55 要求を読み終えていない接続の IP ごとの上限 (`servent.rs` の `HANDSHAKES`、`maxHandshakesPerIp`) を、IPv6 でもアドレスごとに数えています (軽)。
   - パスワードの締め出しは #39 で IPv6 を /64 ごとにしたが、こちらは `cs.host.ip.str()` をそのままキーにしている。/64 を持つ相手はアドレスを変えて上限を越え、受け付ける接続の数 (`maxServIn`) を `handshakeTimeout` の間埋められる (ループバックからの接続は数えないので管理画面は開ける)。IPv6 で待ち受けているときだけ。C++ 版にはこの上限自体がない。
   - 案: キーを `servhs::auth_key` (IPv6 は /64) にそろえる。単体テストで、同じ /64 の別のアドレスが同じキーになることを確かめる。
+  - 済み: `HANDSHAKES` のキーを `servhs::auth_key` にした。単体テスト `handshake_counter_v6_per_64` (同じ /64 の別のアドレスが同じ上限に数えられる) で確かめる。IPv6 での待ち受けを動かしての確認はしていない。
 - [x] #56 `RtmpStream::open` が、librtmp が書き込む URL の文字列を `CString::as_ptr()` (書き込まない前提のポインタ) で渡しています (軽。Rust 版だけ)。
   - librtmp の `RTMP_SetupURL(RTMP *r, char *url)` は、`RTMP_ParseURL` (`const char *`) と違って `char *` を取り、空白などに NUL を書き込んでオプションを切り分ける。共有の参照から得たポインタを通して書くのは Rust の決まりの外 (いまのコンパイラーで困ることはないと思われる)。
   - 案: NUL で終わる `Vec<u8>` を持ち、`as_mut_ptr()` を渡す (`CString::into_raw` は、中に NUL を書かれると `from_raw` で長さが変わって解放を誤るので使わない)。#53 を直すときに一緒に直せる。

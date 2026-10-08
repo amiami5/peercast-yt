@@ -298,6 +298,18 @@ fn auth_key_v6_per_64() {
     assert_eq!(auth_key("x"), b"x");
 }
 
+/// 要求を読み終えていない接続の数も、IPv6 は /64 ごとに数える (security-review #55。servent.rs の HANDSHAKES と同じ使い方)
+#[test]
+fn handshake_counter_v6_per_64() {
+    static C: HandshakeCounter = HandshakeCounter::new();
+    let a = C.acquire(&auth_key("2001:db8:7:7::1"), 2).expect("1");
+    let b = C.acquire(&auth_key("2001:db8:7:7::2"), 2).expect("2");
+    assert!(C.acquire(&auth_key("2001:db8:7:7:ffff::3"), 2).is_none());
+    assert!(C.acquire(&auth_key("2001:db8:7:8::1"), 2).is_some());
+    drop((a, b));
+    assert!(C.acquire(&auth_key("2001:db8:7:7::3"), 2).is_some());
+}
+
 #[test]
 fn auth_throttle_full() {
     // 締め出し中のもので埋まったら、覚えていないキーはまとめて数えて締め出す

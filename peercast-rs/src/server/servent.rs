@@ -1196,7 +1196,7 @@ fn incoming_proc(c: &mut Conn) {
     }
 }
 
-/// IP アドレスごとの、要求を読み終えていない接続の数
+/// IP アドレス (IPv6 は /64) ごとの、要求を読み終えていない接続の数
 static HANDSHAKES: crate::servhs::HandshakeCounter = crate::servhs::HandshakeCounter::new();
 
 /// `serverProc`: 接続を受け付けてサーバントに渡す
@@ -1228,11 +1228,12 @@ fn server_proc(pc: &Arc<Peercast>, sv: &Arc<Servent>, listener: ServerSocket) {
             crate::log_debug!("Server full, closing connection from {}", cs.host.str());
             continue;
         }
-        // 要求を読み終えていない接続は、IP アドレスごとに数を抑える (ループバックは数えない)
+        // 要求を読み終えていない接続は、IP アドレスごとに数を抑える (ループバックは数えない)。
+        // IPv6 は、締め出しと同じく /64 ごとに数える (アドレスを変えて上限を逃れられないように。#55)
         let slot = if loopback {
             None
         } else {
-            match HANDSHAKES.acquire(cs.host.ip.str().as_bytes(), max_hs) {
+            match HANDSHAKES.acquire(&crate::servhs::auth_key(&cs.host.ip.str()), max_hs) {
                 Some(s) => Some(Box::new(s) as Box<dyn std::any::Any + Send>),
                 None => {
                     crate::log_debug!("Too many unfinished requests from {}", cs.host.ip.str());
