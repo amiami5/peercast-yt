@@ -1038,6 +1038,9 @@ pub fn flv_ffmpeg_args(query: &[u8], server_port: u16) -> Option<Vec<String>> {
         "44100".into(),
         "-vcodec".into(),
         "libx264".into(),
+        // ブラウザー (flv.js、MSE) は 4:2:0 の H.264 しか再生できないので、入力が 4:4:4 などでも 4:2:0 にする
+        "-pix_fmt".into(),
+        "yuv420p".into(),
         "-x264-params".into(),
         format!("bitrate={0}:vbv-maxrate={0}:vbv-bufsize={1}", r, 2 * r),
         "-preset".into(),

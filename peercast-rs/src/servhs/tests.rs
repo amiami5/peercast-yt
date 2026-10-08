@@ -421,10 +421,11 @@ fn flv() {
     let args = flv_ffmpeg_args(format!("id={}&preset=ultrafast&audio_codec=aac&type=FLV&bitrate=1200", id).as_bytes(), 7144).unwrap();
     assert_eq!((args[4].as_str(), args[5].as_str(), args[6].as_str()), ("-f", "flv", "-i"));
     assert_eq!(args[7], format!("http://127.0.0.1:7144/stream/{}", id));
-    assert_eq!((args[11].as_str(), args[19].as_str(), args[21].as_str()), ("aac", "bitrate=1200:vbv-maxrate=1200:vbv-bufsize=2400", "ultrafast"));
+    assert_eq!((args[11].as_str(), args[21].as_str(), args[23].as_str()), ("aac", "bitrate=1200:vbv-maxrate=1200:vbv-bufsize=2400", "ultrafast"));
+    assert_eq!((args[18].as_str(), args[19].as_str()), ("-pix_fmt", "yuv420p"));
     for bitrate in ["", "&bitrate=0", "&bitrate=100001", "&bitrate=x"] {
         let q = format!("id={}&preset=p&audio_codec=a&type=MKV{}", id, bitrate);
-        assert_eq!(flv_ffmpeg_args(q.as_bytes(), 1).unwrap()[19], "bitrate=500:vbv-maxrate=500:vbv-bufsize=1000");
+        assert_eq!(flv_ffmpeg_args(q.as_bytes(), 1).unwrap()[21], "bitrate=500:vbv-maxrate=500:vbv-bufsize=1000");
     }
     // 入力の形式は種類から決める (security-review #44)
     for (ty, f) in [("MKV", "matroska"), ("webm", "matroska"), ("MP3", "mp3"), ("OGG", "ogg")] {
