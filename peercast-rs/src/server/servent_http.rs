@@ -588,16 +588,22 @@ fn handshake_icy(c: &mut Conn, src_type: i32, is_http: bool) -> Result<()> {
         info.content_type.assign(ci::T_MP3);
     }
     let mut pwd = c.sv.st().login_password.clone();
-    {
+    let headers = {
         let mut http = Http::new(c.sock()?);
         while http.next_header()? {
             crate::log_debug!("ICY {}", b(&servhs::redact_icy_header(&http.cmd_line)));
             svt::read_icy_header(&http, &mut info, Some(&mut pwd));
         }
-    }
+        http.headers.clone()
+    };
     c.sv.st().login_password = pwd.clone();
     let password = pc.servmgr.settings().password.clone();
     let localhost = is_localhost(&c.sv.host());
+    // localhost からパスワードなしで受け付けるのは、HTTP Push と同じく、ほかのサイトのページから送らされたものと
+    // DNS リバインディングでないときだけ (#54)。HTTP の形でない古い行はヘッダーを付けないので今までどおり
+    if localhost && is_http && pwd.data.is_empty() && !trust_private(pc, c.sv, &headers, false) {
+        return Err(http_error(HTTP_SC_FORBIDDEN, 403));
+    }
     let ip = c.sv.host().ip.str();
     if !localhost {
         auth_lockout(pc, &ip)?;

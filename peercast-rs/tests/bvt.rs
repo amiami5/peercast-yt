@@ -1246,6 +1246,38 @@ fn flv_cgi_cross_site() {
     assert_ne!(code(&lo, "Sec-Fetch-Site: same-origin\r\n"), 403);
 }
 
+/// Icecast の放送 (`SOURCE`) も、localhost からパスワードなしで受け付けるのは、ほかのサイトのページから送らされた
+/// ものと DNS リバインディングでないときだけ (security-review #54)。パスワードが空の Basic 認証 (`source:`) で送る
+#[test]
+fn icy_source_cross_site() {
+    let s = Server::start(17241);
+    let p = s.port;
+    let first_line = |host: &str, extra: &str| -> String {
+        let mut c = TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let head = format!(
+            "SOURCE /mnt HTTP/1.1\r\nHost: {}\r\nAuthorization: Basic c291cmNlOg==\r\ncontent-type: audio/mpeg\r\nice-name: icytest\r\n{}\r\n",
+            host, extra
+        );
+        c.write_all(head.as_bytes()).unwrap();
+        let mut buf = [0u8; 256];
+        let n = c.read(&mut buf).unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or("").to_string()
+    };
+    let lo = format!("127.0.0.1:{}", p);
+    for (label, host, extra) in [
+        ("cross-site", lo.as_str(), "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\n"),
+        ("Origin", lo.as_str(), "Origin: http://evil.example.com\r\n"),
+        ("rebinding", "evil.example.com", ""),
+    ] {
+        let r = first_line(host, extra);
+        assert!(r.contains("403"), "{}: {}", label, r);
+    }
+    // 配信ソフト (ヘッダーなし) からはこれまでどおり
+    let r = first_line(&lo, "");
+    assert!(r.contains("200"), "{}", r);
+}
+
 /// PCP のストリームのデータ (`pkt`) とチャンネルの情報の更新は、そのチャンネルの上流からのものだけ使う
 /// (security-review #35)。配信しているノードへの CIN と、中継しているノードの下流 (中継先) から送ってみる
 #[test]

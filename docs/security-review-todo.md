@@ -278,11 +278,12 @@
   - C++ 版も同じ (リダイレクト先を区別せず、URL をそのまま librtmp に渡す)。
   - 案: 未確認の URL では `rtmp://` を受け付けない (`is_remote_safe_source` から外す。リダイレクトで RTMP に移る配信元はまれなので)。受け付けるなら、空白とタブを含まないことと、名前を引いたアドレスが `allowed_untrusted_ip` であることを確かめ、librtmp が引き直さないように IP アドレスの URL にして渡す。単体テスト (`is_remote_safe_source` に `rtmp://` を渡すと false) と、bvt (偽の配信元が `Location: rtmp://…` を返したら、つなぎに行かずにログに残すこと) で確かめる。
   - 済み: `is_remote_safe_source` から `rtmp://` を外し、未確認の URL の `rtmp://` は「Refusing a non-network URL given by the source」でつながない。管理者が入力した `rtmp://` は今までどおり。単体テスト `remote_safe_sources` と、bvt の `no_fetch_into_internal` (`Location: rtmp://127.0.0.2:…` を返す配信元。`--features rtmp` で回す) で確かめる。直す前は bvt が失敗することも確かめた。
-- [ ] #54 ICY の放送 (`SOURCE`) は、localhost からならパスワードなしで受け付け、そのときに Host ヘッダーとほかのサイトからの要求かを見ていません (中)。
+- [x] #54 ICY の放送 (`SOURCE`) は、localhost からならパスワードなしで受け付け、そのときに Host ヘッダーとほかのサイトからの要求かを見ていません (中)。
   - `handshake_icy` の localhost の判定は、ソケットの相手のアドレス (`is_localhost`) だけ。#34 で HTTP Push (`POST /`) には `trust_private` (Host が手元の名前で、ほかのサイトのページから送らされたものでない) を、`/admin.cgi` には `trust_localhost` とほかのサイトからの要求の判定を入れたが、`SOURCE` の行 (`handshake_source` → `handshake_icy`) には入っていない。
   - 影響は HTTP Push と同じ形 (利用者の IP で配信を始め、既定の rootHost の YP に載る。同じ ID の放送があれば止める)。ShoutCast の形 (1 行目がパスワード) はパスワードが要るので対象外。ブラウザーから `SOURCE` の要求を送れるか (DNS リバインディングで同じオリジンになったときなど) は確かめていない。
   - C++ 版は、パスワードが空 (既定) ならどこからでも受け付ける (前に書いたもの)。パスワードがあっても、localhost からの要求の Host などは見ない。
   - 案: localhost からパスワードなしで受け付けるときは、HTTP の形の行 (`is_http`) なら `trust_private` と同じく、Host がループバックか LAN の名前 (ないものは今までどおり受け付ける) で、ほかのサイトからの要求でないことを確かめる。HTTP の形でない古い ICY の行 (ICE/1.0 など) はヘッダーを付けないので今までどおり。bvt (`cross_site_cannot_start_relay` と同じ形で、`SOURCE` の要求に Sec-Fetch-Site・Origin・Host を付けたものは 403、付けないものは受け付ける) で確かめる。
+  - 済み: `handshake_icy` で、localhost から HTTP の形の行でパスワードなし (空の Basic 認証を含む) のときは、`trust_private` (HTTP Push と同じく、利用者がリンクを押したものも通さない) を通らなければ 403 にする。パスワードを送ったものと、HTTP の形でない古い行は今までどおり。ブラウザーの `fetch` は `SOURCE` のメソッドと `Authorization: Basic source:` を送れるので、パスワードなしの形も実際に作れる。bvt の `icy_source_cross_site` で確かめる。直す前は bvt が失敗する (ほかのサイトからの要求に 200 を返す) ことも確かめた。
 - [ ] #55 要求を読み終えていない接続の IP ごとの上限 (`servent.rs` の `HANDSHAKES`、`maxHandshakesPerIp`) を、IPv6 でもアドレスごとに数えています (軽)。
   - パスワードの締め出しは #39 で IPv6 を /64 ごとにしたが、こちらは `cs.host.ip.str()` をそのままキーにしている。/64 を持つ相手はアドレスを変えて上限を越え、受け付ける接続の数 (`maxServIn`) を `handshakeTimeout` の間埋められる (ループバックからの接続は数えないので管理画面は開ける)。IPv6 で待ち受けているときだけ。C++ 版にはこの上限自体がない。
   - 案: キーを `servhs::auth_key` (IPv6 は /64) にそろえる。単体テストで、同じ /64 の別のアドレスが同じキーになることを確かめる。
