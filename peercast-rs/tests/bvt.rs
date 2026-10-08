@@ -408,6 +408,39 @@ fn helo() {
     assert!(child(&children, b"port").is_some(), "port");
 }
 
+/// 管理パスワードと RTMP のストリームキーは、設定のページにも JSON-RPC の getState にも平文で出さない。
+/// 設定のページを空の欄のまま保存しても変わらず、消すのはチェックボックスで (security-review #48・#49)
+#[test]
+fn secrets_not_in_pages() {
+    let s = Server::start_with(17245, |ini| {
+        ini.replacen("password = \r\n", "password = Pa55word\r\n", 1).replacen("[Privacy]", "[Server]\r\nrtmpStreamKey = St4eamKey\r\n\r\n[Privacy]", 1)
+    });
+    let p = s.port;
+    // localhost からは認証なしで開ける
+    for page in ["/html/en/settings.html", "/html/en/rtmp.html"] {
+        let r = get(p, page);
+        assert_eq!(r.code, 200, "{}", page);
+        let body = String::from_utf8_lossy(&r.body);
+        assert!(!body.contains("Pa55word") && !body.contains("St4eamKey"), "{}", page);
+        assert!(body.contains(r#"placeholder="********""#), "{}", page);
+    }
+    let rtmp = String::from_utf8_lossy(&get(p, "/html/en/rtmp.html").body).into_owned();
+    assert!(rtmp.contains(r#"<form action="/admin" method="post">"#));
+    let st = jrpc_call(p, "getState", r#"{"objectNames": ["servMgr"]}"#);
+    let text = String::from_utf8_lossy(&peercast_rs::json::dump(&st).unwrap()).into_owned();
+    assert!(!text.contains("Pa55word") && !text.contains("St4eamKey"), "{}", text);
+    assert!(text.contains(r#""hasPassword":"1""#) || text.contains(r#""hasPassword": "1""#), "{}", text);
+
+    // 空の欄のまま保存してもパスワードは変わらない
+    let ini = || std::fs::read_to_string(s.dir.join("peercast.ini")).unwrap();
+    assert_eq!(post(p, "/admin", "cmd=apply&passnew=&allowHTML1=1").code, 302);
+    let has_line = |l: &str| ini().lines().any(|x| x.trim_end() == l);
+    assert!(has_line("password = Pa55word"), "{}", ini());
+    // チェックボックスで消す
+    assert_eq!(post(p, "/admin", "cmd=apply&passnew=&clear_pass=1&allowHTML1=1").code, 302);
+    assert!(has_line("password ="), "{}", ini());
+}
+
 /// 1〜65535 の外のポート番号は、16 ビットに切り詰めずに受け付けない
 #[test]
 fn port_out_of_range() {

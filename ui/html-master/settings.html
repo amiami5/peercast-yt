@@ -17,7 +17,9 @@
     <tr>
       <th class="left-heading">{#Password}</th>
       <td>
-        <input name="passnew" type="password" size="10" maxlength="32" value="{$servMgr.password}" style="width: 100%">
+        <input name="passnew" type="password" size="10" maxlength="32" value="" placeholder="{@if servMgr.hasPassword}********{@end}" autocomplete="new-password" style="width: 100%">
+        <br><label><input type="checkbox" name="clear_pass" value="1"> {#Remove the password}</label>
+        <br><small>{#Leave it empty to keep the current password.}</small>
       </td>
     </tr>
     <tr>

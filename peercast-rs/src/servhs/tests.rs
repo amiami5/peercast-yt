@@ -237,6 +237,11 @@ fn redact() {
     assert_eq!(redact_request_line(b"GET /admin?cmd=login&pass=secret HTTP/1.1", pw), b"GET /admin?cmd=login&pass=*** HTTP/1.1");
     assert_eq!(redact_request_line(b"GET /html/ja/index.html?pass=x&a=1", pw), b"GET /html/ja/index.html?pass=***&a=1");
     assert_eq!(redact_request_line(b"GET /admin?cmd=apply&passnew=new&bypass=1", pw), b"GET /admin?cmd=apply&passnew=***&bypass=1");
+    // RTMP のストリームキー (security-review #48)
+    assert_eq!(
+        redact_request_line(b"GET /admin?cmd=control_rtmp&streamkey=k3y&name=x HTTP/1.1", pw),
+        b"GET /admin?cmd=control_rtmp&streamkey=***&name=x HTTP/1.1"
+    );
     // 名前の一部が同じだけの引数はそのまま
     assert_eq!(redact_request_line(b"GET /x?bypass=1&password=2", pw), b"GET /x?bypass=1&password=2");
     assert_eq!(redact_request_line(b"secret", pw), b"***");

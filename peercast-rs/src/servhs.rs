@@ -303,7 +303,7 @@ pub fn icy_password_ok(sent: &[u8], password: &[u8], localhost: bool) -> bool {
 
 /// ログに書く要求の行から、パスワードを `***` に置き換えたもの。ShoutCast の放送は行がパスワード
 /// そのもの、Icecast の放送 (`SOURCE パスワード /マウント`) は 2 つ目の語、それ以外は URL の
-/// `pass=` と `passnew=` の値。
+/// `pass=`・`passnew=`・`streamkey=` (RTMP のストリームキー) の値。
 pub fn redact_request_line(line: &[u8], password: &[u8]) -> Vec<u8> {
     match request_kind(line, password) {
         RequestKind::Shoutcast => b"***".to_vec(),
@@ -311,7 +311,7 @@ pub fn redact_request_line(line: &[u8], password: &[u8]) -> Vec<u8> {
             Some(p) if !p.is_empty() => [&line[..7], b"***", &line[7 + p.len()..]].concat(),
             _ => line.to_vec(),
         },
-        _ => redact_query(line, &[b"pass", b"passnew"]),
+        _ => redact_query(line, &[b"pass", b"passnew", b"streamkey"]),
     }
 }
 
@@ -695,6 +695,7 @@ pub enum ApplyKey {
     HandshakeTimeout = 47, // 秒 (Rust 版で足した。負の数は 0)
     MaxHandshakesPerIp = 48, // 数 (Rust 版で足した。負の数は 0)
     SelfIpCheckInterval = 49, // 秒 (Rust 版で足した。負の数は 0)
+    ClearPass = 50,     // 真偽値 (Rust 版で足した。パスワードの欄は空で出すので、消すときはこれで)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -785,6 +786,7 @@ pub fn apply_ops(cmd: &[u8]) -> Vec<ApplyOp> {
             b"handshake_timeout" => op(HandshakeTimeout, n.max(0), Vec::new()),
             b"max_handshakes_per_ip" => op(MaxHandshakesPerIp, n.max(0), Vec::new()),
             b"self_ip_check_interval" => op(SelfIpCheckInterval, n.max(0), Vec::new()),
+            b"clear_pass" => op(ClearPass, b, Vec::new()),
             b"preferredTheme" => op(PreferredTheme, 0, arg.clone()),
             b"accentColor" => op(AccentColor, 0, arg.clone()),
             _ => None,

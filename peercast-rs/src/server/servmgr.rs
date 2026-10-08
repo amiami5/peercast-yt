@@ -1563,7 +1563,8 @@ impl ServMgr {
             ("serverIP", super::state::s(s.server_host.ip_str())),
             ("serverIPv6", super::state::s(s.server_host_ipv6.ip_str())),
             ("ypAddress", super::state::s(&s.root_host.data)),
-            ("password", super::state::s(&s.password)),
+            // パスワードとストリームキーそのものは、ページにも JSON-RPC にも出さない (#49)
+            ("hasPassword", flag(!s.password.is_empty())),
             ("isFirewalled", flag(fw4 == FW_ON)),
             ("firewallKnown", flag(fw4 != FW_UNKNOWN)),
             ("isFirewalledIPv6", flag(fw6 == FW_ON)),
@@ -1627,7 +1628,7 @@ impl ServMgr {
             ("rtmpServerMonitor", self.rtmp_monitor.state()),
             ("rtmpPort", ts(s.rtmp_port as u32)),
             ("rtmpLocalOnly", flag(s.rtmp_local_only)),
-            ("rtmpStreamKey", super::state::s(&s.rtmp_stream_key)),
+            ("hasRtmpStreamKey", flag(!s.rtmp_stream_key.is_empty())),
             ("hasUnsafeFilterSettings", flag(self.has_unsafe_filter_settings())),
             ("chat", flag(s.chat)),
             ("randomizeBroadcastingChannelID", flag(self.flags.get("randomizeBroadcastingChannelID"))),

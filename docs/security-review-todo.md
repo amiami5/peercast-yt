@@ -193,13 +193,15 @@
   - `ServFilter::matches` の `Suffix` は `dnscache::name_of` の名前の終わりを見るだけで、その名前を正引きして相手のアドレスに戻るかを確かめていない。PTR は相手のアドレスの持ち主が決められるので、private や許可に使うと、その扱いを受けられる。C++ 版と同じ。
   - 案: 逆引きした名前を正引きし、相手のアドレスが含まれるときだけ使う (forward-confirmed reverse DNS)。
   - 済み: `dnscache` の逆引きで、得た名前を正引きし (IPv4 と IPv6 の全部)、相手のアドレスに戻るときだけ名前を返す (`forward_confirmed`)。戻らない名前は「わからない」と同じ扱いで、`.` で始まるフィルターに一致しない。結果は今までどおり覚えておく。単体テスト `reverse_name_is_forward_confirmed` で確かめる (実際の DNS での確認はしていない)。
-- [ ] #48 RTMP の設定 (rtmp.html) は GET で送るので、ストリームキーが URL に入ります (軽)。
+- [x] #48 RTMP の設定 (rtmp.html) は GET で送るので、ストリームキーが URL に入ります (軽)。
   - ブラウザーの履歴に残り、ログの伏せ字 (`redact_query`) も `pass`・`passnew` だけなので、デバッグのログにも残る。rtmp-server でキーをコマンドラインやログに出さないようにしたのと合わない。
   - 案: フォームを POST にし、`streamkey` も伏せる。
-- [ ] #49 設定のページと JSON-RPC の `getState` に、管理パスワードが平文で入ります (軽)。
+  - 済み: rtmp.html のフォームを POST にし、ログの伏せ字に `streamkey` を足した (GET で送るものも受け付けるが、ログには残さない)。単体テスト `redact` と bvt の `secrets_not_in_pages` で確かめる。
+- [x] #49 設定のページと JSON-RPC の `getState` に、管理パスワードが平文で入ります (軽)。
   - settings.html はパスワードの欄の `value` に `servMgr.password` を入れ、`servMgr` の状態にも `password` がある。管理画面に XSS があると読めるので、Cookie を HttpOnly にした (#16) 意図と合わない。
   - RTMP のストリームキーも同じ形 (2026-10-08 の続きで見つけた): rtmp.html の欄の `value` に `servMgr.rtmpStreamKey` を入れ、`servMgr` の状態 (`servmgr.rs` の `state`) にも `rtmpStreamKey` がある。
   - 案: 欄は空で出し、空のまま保存したら変えない。状態からは除く。ストリームキーも一緒に直す。
+  - 済み: settings.html と rtmp.html の欄は空で出し (設定されていれば `********` を薄く出す)、空のまま保存したら変えない。消すときはチェックボックス (`clear_pass`・`clear_streamkey`)。`servMgr` の状態 (テンプレートと JSON-RPC の `getState`) からは `password` と `rtmpStreamKey` を除き、設定されているかだけを `hasPassword`・`hasRtmpStreamKey` で出す。`cmd=apply` に `passnew=` を空で送っても消えなくなった (消すのは `clear_pass=1`)。日本語の訳も足した。bvt の `secrets_not_in_pages` で確かめる。直す前は bvt が失敗することも確かめた。ブラウザーでの見た目は確かめていない。
 
 見て、問題がなかったもの:
 

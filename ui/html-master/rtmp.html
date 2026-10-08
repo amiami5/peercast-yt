@@ -3,7 +3,7 @@
 {#RTMP Server} - {#PeerCast on} {^SERVER_NAME}
 {^end}
 
-<form action="/admin" method="get">
+<form action="/admin" method="post">
   <input type="hidden" value="control_rtmp" name="cmd">
 
   <table class="table-panel" width="100%" border="0">
@@ -63,9 +63,10 @@
     <tr>
       <th class="left-heading">{#Stream Key}</th>
       <td>
-        <input type="password" name="streamkey" value="{$servMgr.rtmpStreamKey}" maxlength="255" autocomplete="off" style="width: 100%"
+        <input type="password" name="streamkey" value="" placeholder="{@if servMgr.hasRtmpStreamKey}********{@end}" maxlength="255" autocomplete="off" style="width: 100%"
                {@if servMgr.rtmpServerMonitor.status == "UP"}disabled{@end}>
-        <br><small>{#If set, only encoders that send the same stream key can broadcast. Enter it in the Stream Key field of OBS. Leave it empty to accept any key.}</small>
+        <br><label><input type="checkbox" name="clear_streamkey" value="1" {@if servMgr.rtmpServerMonitor.status == "UP"}disabled{@end}> {#Remove the stream key (accept any key)}</label>
+        <br><small>{#If set, only encoders that send the same stream key can broadcast. Enter it in the Stream Key field of OBS. Leave it empty to keep the current key.}</small>
       </td>
     </tr>
     <tr align="center">

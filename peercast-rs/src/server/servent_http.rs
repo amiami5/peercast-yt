@@ -1196,8 +1196,13 @@ fn run_cmd(ctx: &Ctx, http: &mut Http, cmd: &[u8], query: &[u8], jump: &mut Vec<
                     s.rtmp_port = port;
                     // チェックボックスは、外すと送られてこない
                     s.rtmp_local_only = q.get(b"localonly") == b"1";
+                    // ページはキーを空の欄で出すので、空なら変えない (消すのは clear_streamkey。#49)
                     let key = q.get(b"streamkey");
-                    s.rtmp_stream_key = key[..key.len().min(255)].to_vec();
+                    if q.get(b"clear_streamkey") == b"1" {
+                        s.rtmp_stream_key.clear();
+                    } else if !key.is_empty() {
+                        s.rtmp_stream_key = key[..key.len().min(255)].to_vec();
+                    }
                     let info = &mut s.default_channel_info;
                     info.name = utf8_field(&q.get(b"name"));
                     info.genre = utf8_field(&q.get(b"genre"));
@@ -1530,7 +1535,17 @@ fn cmd_apply(ctx: &Ctx, http: &mut Http, query: &[u8], jump: &mut Vec<u8>) -> Re
                 None => crate::log_warn!("Ignoring invalid port {}", v),
             },
             K::IcyMeta => pc.chanmgr.settings().icy_meta_interval = v,
-            K::PassNew => sm.settings().password = op.str[..op.str.len().min(63)].to_vec(),
+            // 設定のページはパスワードを空の欄で出すので、空なら変えない (消すのは clear_pass。#49)
+            K::PassNew => {
+                if !op.str.is_empty() {
+                    sm.settings().password = op.str[..op.str.len().min(63)].to_vec();
+                }
+            }
+            K::ClearPass => {
+                if v != 0 {
+                    sm.settings().password.clear();
+                }
+            }
             K::Root => sm.set_root(v != 0),
             K::BrRoot => br_root = v != 0,
             K::GetUpd => get_upd = v != 0,
