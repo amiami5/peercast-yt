@@ -251,3 +251,8 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   は、`randomizeBroadcastingChannelID` がオフのとき、チャンネル ID を放送 ID に名前・ジャンル・ビットレートを XOR
   しただけのもの (`GnuID::encode`) にするので、公開されている値から放送 ID に戻せる。`ServFilter` の `T_SUFFIX` は
   逆引き (`getHostnameByAddress`) の名前の終わりだけを見て、正引きで確かめない。
+* 同じ見直しの続き (2026-10-08。#45・#46・#50〜#52): IDLE スレッドの中で `channelDirectory->update()` (ワーカーを
+  `join` で待つ) と `uptestServiceRegistry->update()` を呼び、`http::get` には全体の期限がない。通知ごとに
+  `system("notify-send … &")` を起こし、コメントが変わるたびに通知する。index.txt の行数と誤りの行の数に上限が
+  なく、誤りは 1 行ずつログに書き、`runProcess` がログを全部溜める。PCP のヒットの宛先 (ループバック・LAN・自分)
+  を確かめずに中継元としてつなぐ。`chanLog` を設定していると、どの相手からの `chan` の atom でも記録を書き足す。
