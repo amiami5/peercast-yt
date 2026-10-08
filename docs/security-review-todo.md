@@ -161,3 +161,52 @@
   - `sys::Random::next` を `next_u32` にした (`Iterator::next` と紛らわしい)。
   - rtmp-server-rs の `flv::State` の要素の名前から `Expect` を外した。
   - `server/tls.rs` の `SSL` は OpenSSL の名前に合わせているので、`clippy::upper_case_acronyms` を許した。
+
+## 2026-10-08 に見つけたもの (#1〜#41 を直したあとの見直し、重さの順)
+
+#42 と #43 は一時的なテスト (コミットしていない) で動かして確かめた。ほかはコードを読んで判断したもの。
+
+- [ ] #42 rtmp-server が、publish を受け付ける前のメタデータと音声・映像も出力先 (PeerCast) に流します (重)。
+  - `session.rs` の `on_message` は、publish を受け付けたかを見ずに 0x12・0x08・0x09 を `FlvWriter` に書き、そこで出力先を開く。このため、ストリームキー (`rtmpStreamKey`) を設定していても、publish を送らない接続はキーを確かめられずに配信できる (配信開始までの期限で切れるが、つなぎ直せば続く)。C++ 版にはキーがないので Rust 版だけの問題。
+  - 確かめたこと: キーを `secret` にした rtmp-server に、publish を送らずにメタデータと映像を送ると、出力先に `POST /?name=t` と FLV のヘッダー・映像が届いた。既存のテスト (`wrong_stream_key_is_rejected`) は publish の名前が違う場合だけを見ている。
+  - 案: publish を受け付けるまでは、メタデータと音声・映像のメッセージは捨てる (か誤りにして切る)。キーを設定していないときも同じにする。robustness に「publish なしのデータは出力先に届かない」テストを足す。
+- [ ] #43 `randomizeBroadcastingChannelID` がオフのとき、チャンネル ID から放送 ID (BCID) を戻せます (中)。
+  - チャンネル ID は、放送 ID に名前・ジャンル (ICY はマウント)・ビットレートを XOR しただけのもの (`gnuid::encode`、`set_broadcast_id_channel_id`、`handshake_icy`)。これらの値は YP の一覧や PCP で公開されているので、同じ計算をもう一度すれば放送 ID になる。放送 ID があれば、どのチャンネル ID についても `?auth=` のトークンを作れる (#36 と同じ影響)。既定はオン (ランダム) なので、オフにした人だけ。C++ 版と同じ。
+  - 確かめたこと: 単体の一時的なテストで、`encode` を同じ値でもう一度かけると放送 ID に戻ることを確かめた。
+  - 案: オフのときのチャンネル ID を一方向の関数 (放送 ID と名前などをまとめたもののハッシュ) で作る (同じ名前なら同じ ID になるのは保てる。ID は今と変わる)。あわせて、`auth` のトークンを放送 ID とは別の秘密から作ることも考える。
+- [ ] #44 `/cgi-bin/flv.cgi` (トランスコード) が、ほかのサイトのページから送らされた要求と DNS リバインディングを断っていません (中。トランスコードを有効にしたときだけ)。
+  - private (localhost を含む) からならトークンなしで受け付け、Sec-Fetch-Site・Origin と Host を見ていない (#34 で `/stream/` などに入れた `trust_private` を通っていない)。localhost からは同時に動かす数の上限 (`maxTranscodes`) も掛からない。さらに ffmpeg が `/stream/` を localhost から取るので、#34 で断ったほかのサイトからの中継の開始が、ここを通ると起きる。
+  - 案: トークンでなく private で通すときは `trust_private` を通す。localhost からも上限に数える (か別の上限を設ける)。あわせて、ffmpeg に入力の形式 (`-f`) を種類から決めて渡し、使うプロトコルを絞ることも考える。
+- [ ] #45 IDLE スレッドが、外部の HTTP の応答を期限なしに待ちます (中〜軽)。
+  - 速度測定の yp4g.xml の取得 (`UptestRegistry::update` → `download`) は IDLE スレッドの中で行い、チャンネルフィードの取得 (`ChannelDirectory::update`) は IDLE スレッドがスレッドの終わりを待つ。読むたびの待ち時間 (30 秒) はあるが全体の期限がないので、少しずつ返す相手に止められる。既定の登録先 (`http://bayonet.ddo.jp/sp/yp4g.xml`、`http://yp.pcgw.pgw.jp/index.txt`) は平文の HTTP。
+  - 止まると、配信を YP に載せる COUT (`connect_broadcaster` でしか始めない)、ヒットの掃除、rtmp-server の再起動、`cmd=shutdown`、フィードの更新なども止まる。
+  - 案: 外向きの HTTP (`http::get`、uptest の `download`) に全体の期限を設ける。uptest の取得も別のスレッドで行い、IDLE スレッドは待たない。
+- [ ] #46 通知に間隔の制限がなく、`--enable-notify-send` のときは通知ごとに notify-send を起動します (軽)。
+  - 中継しているチャンネルのコメントが変わるたびに通知する (`Channel::update_info`) ので、中継元がコメントを変え続けると、1 秒に数十回 notify-send を起こす (通知のデーモンがない環境では 1 つが数十秒残る)。
+  - 案: notify-send は同時に 1 つ (か数秒に 1 回) までにし、間の通知はまとめるか捨てる。コメントの変更の通知もチャンネルごとに間隔を空ける。
+- [ ] #47 フィルターの `.` で始まる名前は、逆引き (PTR) の結果だけで判定しています (軽)。
+  - `ServFilter::matches` の `Suffix` は `dnscache::name_of` の名前の終わりを見るだけで、その名前を正引きして相手のアドレスに戻るかを確かめていない。PTR は相手のアドレスの持ち主が決められるので、private や許可に使うと、その扱いを受けられる。C++ 版と同じ。
+  - 案: 逆引きした名前を正引きし、相手のアドレスが含まれるときだけ使う (forward-confirmed reverse DNS)。
+- [ ] #48 RTMP の設定 (rtmp.html) は GET で送るので、ストリームキーが URL に入ります (軽)。
+  - ブラウザーの履歴に残り、ログの伏せ字 (`redact_query`) も `pass`・`passnew` だけなので、デバッグのログにも残る。rtmp-server でキーをコマンドラインやログに出さないようにしたのと合わない。
+  - 案: フォームを POST にし、`streamkey` も伏せる。
+- [ ] #49 設定のページと JSON-RPC の `getState` に、管理パスワードが平文で入ります (軽)。
+  - settings.html はパスワードの欄の `value` に `servMgr.password` を入れ、`servMgr` の状態にも `password` がある。管理画面に XSS があると読めるので、Cookie を HttpOnly にした (#16) 意図と合わない。
+  - 案: 欄は空で出し、空のまま保存したら変えない。状態からは除く。
+
+見て、問題がなかったもの:
+
+- HTTP の要求の読み方 (行の長さとヘッダーの数の上限、CR の扱い)。`/html/`・`/public/`・`/assets/` のパスは、realpath のあとで文書のディレクトリの中かを確かめている。
+- テンプレートの出力と UI の JS (チャンネル一覧、接続一覧、リレー一覧、掲示板、コンソール): 外から届く値は文字として入れるか `h()` を通し、リンクは http(s) に限っている。新しい版の URL (`upgradeURL`) は `http://www.peercast.org/` で始まるものしか入らない。
+- PCP の atom とハンドシェイクの読み取り (入れ子と長さの上限)、パケットのバッファ。
+- 掲示板の取得と書き込み (公開アドレスだけ、リダイレクト先も確かめる、書き込みは CSRF の確かめのあと)。
+- TLS (証明書とホスト名の検証、ハンドシェイクの期限)、ソケットの期限、Cookie (IP と結び付け、32 個まで)。
+- 外部のプログラムの起動 (引数は配列で渡し、シェルを通さない)。外向きの HTTP の User-Agent はどれも `PCX_AGENT` (#33 の判定が効く)。
+- rtmp-server の AMF0 (入れ子と値の数の上限) とチャンクの保持量。
+- ui/linux/scripts の URL ハンドラー (インストールされない。`\w` しか通さない)。
+
+まだ見ていないところ (この見直しは途中で止まった):
+
+- 止まったところ: #45 を書くために、IDLE スレッドが待つもの (uptest の `download` とフィードの取得) と、C++ 版 (develop-old の `ServMgr::idleProc`、ui/linux/main.cpp の notify-send) が同じかを確かめていた。#45・#46 が C++ 版と同じかはまだ確かめていない (C++ 版も IDLE の中で `channelDirectory->update()` と `uptestServiceRegistry->update()` を呼び、notify-send も通知ごとに起動しているところまでは見た)。
+- 深く読んでいないもの: `server/chanmgr.rs`・`server/chanhit.rs` (ヒットの選び方)、`chanpacket.rs`、`server/servmgr.rs` の設定の読み込み以外の部分、`json/parse.rs`・`jrpc.rs` (認証のあとだけ)、メディアのパーサー (#32 で見たもの以外)、`strutil.rs`・`pcstring.rs`。
+- #44 と #45〜#49 は動かしての確認をしていない。直すときに bvt で「直す前は失敗、直したあとは通る」を確かめる。

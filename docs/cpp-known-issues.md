@@ -247,3 +247,7 @@ C++ のコードは Rust への移行が終わったら消すので、移行の�
   上限がない。管理画面の応答に `X-Frame-Options` も CSP の `frame-ancestors` もなく、ほかのサイトの枠に
   入れられる (クリックジャッキング)。`--enable-notify-send` (ui/linux/main.cpp) は、チャンネル名やコメントを
   エスケープせずに通知の本文に渡すので、通知のデーモンがマークアップとして解釈する。
+* 移行後のセキュリティの見直し (2026-10-08。`docs/security-review-todo.md` の #43・#47): `Servent::setBroadcastIdChannelId`
+  は、`randomizeBroadcastingChannelID` がオフのとき、チャンネル ID を放送 ID に名前・ジャンル・ビットレートを XOR
+  しただけのもの (`GnuID::encode`) にするので、公開されている値から放送 ID に戻せる。`ServFilter` の `T_SUFFIX` は
+  逆引き (`getHostnameByAddress`) の名前の終わりだけを見て、正引きで確かめない。
