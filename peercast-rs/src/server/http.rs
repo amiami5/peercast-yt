@@ -598,6 +598,10 @@ pub fn allowed_untrusted_ip(ip: &Ip, origin: &Ip) -> bool {
     super::bbs_http::is_public(ip.to_std()) || (origin.is_set() && ip == origin)
 }
 
+/// 外へ取りに行く要求 (`get`、速度測定の yp4g.xml) の、1 回の要求の全体の期限。読むたびの待ち時間 (30 秒) だけ
+/// では、少しずつ返す相手にいつまでも待たされるため (security-review #45)
+pub const FETCH_TIMEOUT_MS: u32 = 60_000;
+
 /// `http::get`: URL の中身を取る (リダイレクトは 1 回まで)。リダイレクト先は `allowed_untrusted_ip` のときだけ
 pub fn get(url: &[u8]) -> Result<Vec<u8>> {
     let mut url = url.to_vec();
@@ -624,6 +628,7 @@ pub fn get(url: &[u8]) -> Result<Vec<u8>> {
             return Err(Error::stream("Redirect to a non-public address"));
         }
         let mut sock = if feed.scheme == b"https" { ClientSocket::new_tls(&feed.host) } else { ClientSocket::new() };
+        sock.set_total_timeout(FETCH_TIMEOUT_MS);
         crate::log_trace!("Connecting to {} ({}) port {} ...", String::from_utf8_lossy(&feed.host), host.ip.str(), port);
         sock.connect(host)?;
         crate::log_trace!("Connected to {}", host.str());

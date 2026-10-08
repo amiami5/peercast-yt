@@ -180,10 +180,11 @@
   - private (localhost を含む) からならトークンなしで受け付け、Sec-Fetch-Site・Origin と Host を見ていない (#34 で `/stream/` などに入れた `trust_private` を通っていない)。localhost からは同時に動かす数の上限 (`maxTranscodes`) も掛からない。さらに ffmpeg が `/stream/` を localhost から取るので、#34 で断ったほかのサイトからの中継の開始が、ここを通ると起きる。
   - 案: トークンでなく private で通すときは `trust_private` を通す。localhost からも上限に数える (か別の上限を設ける)。あわせて、ffmpeg に入力の形式 (`-f`) を種類から決めて渡し、使うプロトコルを絞ることも考える。
   - 済み: トークンがないときは `is_private` でなく `trust_private` で通す (`/stream/` と同じく、利用者がリンクを押して開いたものは通す)。localhost からは `maxTranscodes` とは別に、同時に 4 つまで (`MAX_LOCAL_TRANSCODES`。設定の説明「localhost は数えない」はそのまま)。ffmpeg には `type` から決めた入力の形式を `-f` で渡し (MKV・WEBM は matroska、ほかに FLV・MP3・OGG)、知らない種類は 400 にする。bvt の `flv_cgi_cross_site` (ffmpeg がない環境では 403 かどうかだけを見る) と単体テスト `flv` で確かめる。直す前は bvt が失敗することも確かめた。localhost の上限は ffmpeg がないので動かして確かめていない。
-- [ ] #45 IDLE スレッドが、外部の HTTP の応答を期限なしに待ちます (中〜軽)。
+- [x] #45 IDLE スレッドが、外部の HTTP の応答を期限なしに待ちます (中〜軽)。
   - 速度測定の yp4g.xml の取得 (`UptestRegistry::update` → `download`) は IDLE スレッドの中で行い、チャンネルフィードの取得 (`ChannelDirectory::update`) は IDLE スレッドがスレッドの終わりを待つ。読むたびの待ち時間 (30 秒) はあるが全体の期限がないので、少しずつ返す相手に止められる。既定の登録先 (`http://bayonet.ddo.jp/sp/yp4g.xml`、`http://yp.pcgw.pgw.jp/index.txt`) は平文の HTTP。
   - 止まると、配信を YP に載せる COUT (`connect_broadcaster` でしか始めない)、ヒットの掃除、rtmp-server の再起動、`cmd=shutdown`、フィードの更新なども止まる。
   - 案: 外向きの HTTP (`http::get`、uptest の `download`) に全体の期限を設ける。uptest の取得も別のスレッドで行い、IDLE スレッドは待たない。
+  - 済み: チャンネルフィードと速度測定の yp4g.xml の取得を、IDLE から新しい FEEDS のスレッド (`servmgr::feed_proc`) に移した。`ClientSocket` に書いても外れない全体の期限 (`set_total_timeout`) を足し、`http::get` と速度測定の `download` は 1 回の要求を 60 秒まで (`http::FETCH_TIMEOUT_MS`) にした。bvt の `slow_feed_does_not_block_idle` (フィードの相手が 1 秒に 1 バイト返す間に `cmd=shutdown` で終わる) と単体テスト `total_timeout` で確かめる。直す前は bvt が失敗することも確かめた。
 - [ ] #46 通知に間隔の制限がなく、`--enable-notify-send` のときは通知ごとに notify-send を起動します (軽)。
   - 中継しているチャンネルのコメントが変わるたびに通知する (`Channel::update_info`) ので、中継元がコメントを変え続けると、1 秒に数十回 notify-send を起こす (通知のデーモンがない環境では 1 つが数十秒残る)。
   - 案: notify-send は同時に 1 つ (か数秒に 1 回) までにし、間の通知はまとめるか捨てる。コメントの変更の通知もチャンネルごとに間隔を空ける。

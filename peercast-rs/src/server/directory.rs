@@ -483,6 +483,7 @@ fn download(url: &[u8]) -> Result<(Vec<u8>, Ip)> {
         return Err(Error::general("could not resolve host name"));
     }
     let mut sock = ClientSocket::new();
+    sock.set_total_timeout(super::http::FETCH_TIMEOUT_MS);
     sock.connect(host)?;
     let path = [&b"/"[..], &u.path].concat();
     let req = Request::new(b"GET", &path, b"HTTP/1.0", Headers::from(&[("Host", &u.host), ("Connection", b"close"), ("User-Agent", PCX_AGENT.as_bytes())]));

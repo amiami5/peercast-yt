@@ -191,6 +191,8 @@ pub struct ServMgr {
     pub restart_server: AtomicBool,
     pub server_thread: sys::ThreadFlag,
     pub idle_thread: sys::ThreadFlag,
+    /// チャンネルフィードと速度測定の yp4g.xml を取るスレッド (Rust 版で IDLE から分けた。#45)
+    pub feed_thread: sys::ThreadFlag,
     start_time: AtomicU32,
 }
 
@@ -274,6 +276,7 @@ impl ServMgr {
             restart_server: AtomicBool::new(false),
             server_thread: sys::ThreadFlag::new(),
             idle_thread: sys::ThreadFlag::new(),
+            feed_thread: sys::ThreadFlag::new(),
             start_time: AtomicU32::new(sys::get_time()),
         };
         super::log::set_level(super::log::Level::Info as i32);
@@ -576,6 +579,7 @@ impl ServMgr {
         crate::log_debug!("ServMgr is quitting..");
         self.server_thread.shutdown();
         self.idle_thread.shutdown();
+        self.feed_thread.shutdown();
         crate::log_debug!("Disabling RMTP server..");
         self.rtmp_monitor.disable();
         for s in self.servents() {
@@ -1519,6 +1523,10 @@ impl ServMgr {
         if !sys::start_thread(&self.idle_thread, "IDLE", move || idle_proc(&p)) {
             return false;
         }
+        let p = pc.clone();
+        if !sys::start_thread(&self.feed_thread, "FEEDS", move || feed_proc(&p)) {
+            return false;
+        }
         true
     }
 
@@ -1769,9 +1777,19 @@ fn idle_proc(pc: &Arc<Peercast>) {
         if pc.chanmgr.num_idle_channels() > super::chanmgr::MAX_IDLE_CHANNELS {
             pc.chanmgr.close_oldest_idle();
         }
+        sm.rtmp_monitor.update(|ipv| sm.rtmp_server_launch(ipv));
+        sys::sleep(500);
+    }
+}
+
+/// チャンネルフィードと速度測定の yp4g.xml を、間を空けて取り直す。C++ 版は IDLE の中でしていたが、
+/// 外の相手にゆっくり返されると、そのあいだ IDLE (YP への掲載、ヒットの掃除、`cmd=shutdown` など) が
+/// 止まるので、別のスレッドにした (security-review #45)
+fn feed_proc(pc: &Arc<Peercast>) {
+    let sm = &pc.servmgr;
+    while sm.feed_thread.active() {
         let port = sm.settings().server_host.port;
         sm.channel_directory.update(port, super::directory::UpdateMode::Auto);
-        sm.rtmp_monitor.update(|ipv| sm.rtmp_server_launch(ipv));
         sm.uptest.update();
         sys::sleep(500);
     }

@@ -63,6 +63,8 @@ pub struct ClientSocket {
     tls_host: Option<Vec<u8>>,
     /// 要求を読み終えるまでの期限 (Slowloris よけ)。Rust 版で足した
     deadline: Option<Instant>,
+    /// 外へ取りに行く要求の全体の期限 (書いても外れない)。少しずつ返す相手に止められないように。Rust 版で足した
+    total_deadline: Option<Instant>,
     /// 要求を読んでいる間だけ持っておくもの (IP アドレスごとの数の札)
     handshake_slot: Option<Box<dyn Any + Send>>,
 }
@@ -78,6 +80,7 @@ impl Default for ClientSocket {
             closer: Closer::default(),
             tls_host: None,
             deadline: None,
+            total_deadline: None,
             handshake_slot: None,
         }
     }
@@ -188,15 +191,30 @@ impl ClientSocket {
         }
     }
 
+    /// 外へ取りに行く要求の全体の期限を、今から `ms` ミリ秒にする。読むたびの待ち時間とは別に、
+    /// この期限を過ぎたら読むのを `TimeoutException` にする。`begin_handshake` の期限と違い、書いても外れない
+    pub fn set_total_timeout(&mut self, ms: u32) {
+        self.total_deadline = Some(Instant::now() + Duration::from_millis(ms as u64));
+    }
+
+    /// 要求を読み終えるまでの期限と全体の期限の、早いほう
+    fn effective_deadline(&self) -> Option<Instant> {
+        match (self.deadline, self.total_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
     /// 期限があれば、読む待ち時間を期限までの残りに縮める。過ぎていれば `TimeoutException`
     fn apply_deadline(&self) -> Result<()> {
-        let d = match self.deadline {
+        let d = match self.effective_deadline() {
             Some(d) => d,
             None => return Ok(()),
         };
         let rest = d.saturating_duration_since(Instant::now()).as_millis().min(u32::MAX as u128) as u32;
         if rest == 0 {
-            return Err(Error::new(super::error::Kind::Timeout, "Handshake timeout"));
+            let msg = if self.deadline == Some(d) { "Handshake timeout" } else { "Timeout" };
+            return Err(Error::new(super::error::Kind::Timeout, msg));
         }
         let ms = if self.read_timeout == 0 { rest } else { rest.min(self.read_timeout) };
         if let Some(c) = &self.conn {
@@ -280,7 +298,7 @@ impl ClientSocket {
     fn read_once(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.apply_deadline()?;
         #[cfg(unix)]
-        let deadline = self.deadline;
+        let deadline = self.effective_deadline();
         let c = self.conn.as_mut().ok_or_else(|| Error::sock("Closed on read"))?;
         match c {
             Conn::Tcp(s) => loop {
@@ -397,8 +415,8 @@ impl Stream for ClientSocket {
 
     /// `readReady`: `ms` ミリ秒以内に読めるようになるか (相手が閉じたときも真)
     fn read_ready(&mut self, ms: u32) -> bool {
-        let ms = match self.deadline {
-            // 要求を読み終えるまでの期限より長くは待たない
+        let ms = match self.effective_deadline() {
+            // 要求を読み終えるまでの期限 (と全体の期限) より長くは待たない
             Some(d) if ms != 0 => (d.saturating_duration_since(Instant::now()).as_millis().min(u32::MAX as u128) as u32).clamp(1, ms),
             _ => ms,
         };
@@ -533,5 +551,42 @@ mod tests {
         drop(server);
         let mut c = ClientSocket::new();
         assert!(c.connect(Host::v4(0x7f000001, 1)).unwrap_err().is_sock());
+    }
+
+    /// 全体の期限は、相手が少しずつ送り続けても、書いたあとでも効く (security-review #45)
+    #[test]
+    fn total_timeout() {
+        let server = ServerSocket::bind(Host::v4(0x7f000001, 0)).unwrap();
+        let port = server.listener.local_addr().unwrap().port();
+        let mut c = ClientSocket::new();
+        c.set_total_timeout(800);
+        c.connect(Host::v4(0x7f000001, port)).unwrap();
+        c.write_line("GET / HTTP/1.0").unwrap();
+        let mut s = loop {
+            if let Some(s) = server.accept() {
+                break s;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let t = std::thread::spawn(move || {
+            for _ in 0..30 {
+                if s.write(b"x").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let t0 = Instant::now();
+        let mut b = [0u8; 1];
+        let e = loop {
+            match c.read(&mut b) {
+                Ok(_) => continue,
+                Err(e) => break e,
+            }
+        };
+        assert!(e.is_timeout(), "{}", e);
+        assert!(t0.elapsed() < Duration::from_millis(2000), "{:?}", t0.elapsed());
+        drop(c);
+        t.join().unwrap();
     }
 }

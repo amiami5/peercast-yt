@@ -158,6 +158,49 @@ fn int_kills() {
     }
 }
 
+/// チャンネルフィード (index.txt) の相手が少しずつしか返さなくても、IDLE スレッドは止まらない
+/// (`cmd=shutdown` は IDLE が実行する。security-review #45)
+#[test]
+fn slow_feed_does_not_block_idle() {
+    // 応答の頭だけ返し、あとは 1 バイトずつ間を空けて送り続ける (読むたびの待ち時間には掛からない)
+    let l = std::net::TcpListener::bind("127.0.0.1:17243").unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let st = stop.clone();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(mut c) = c else { continue };
+            let st = st.clone();
+            std::thread::spawn(move || {
+                let _ = c.write_all(b"HTTP/1.0 200 OK\r\n");
+                while !st.load(Ordering::SeqCst) {
+                    if c.write_all(b"X").is_err() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            });
+        }
+    });
+    let mut s = Server::start_with(17242, |ini| {
+        ini.replacen("[Privacy]", "[Feed]\r\nurl = http://127.0.0.1:17243/index.txt\r\n[End]\r\n\r\n[Privacy]", 1)
+    });
+    // フィードを取りに行き始めるのを待ってから
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(get(s.port, "/admin?cmd=shutdown").code, 200);
+    let t0 = Instant::now();
+    let exited = loop {
+        if s.child.try_wait().unwrap().is_some() {
+            break true;
+        }
+        if t0.elapsed() > Duration::from_secs(10) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    stop.store(true, Ordering::SeqCst);
+    assert!(exited, "cmd=shutdown で終わらない (IDLE が止まっている)");
+}
+
 /// 02-html: 管理画面のページ
 #[test]
 fn html() {
