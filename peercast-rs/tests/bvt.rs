@@ -2063,3 +2063,108 @@ fn speedtest_cached_xml_as_text() {
     assert_eq!(r.header("X-Content-Type-Options"), Some("nosniff"));
     assert_eq!(r.header("Content-Security-Policy"), Some("sandbox"));
 }
+
+/// SP 現行仕様 (HTML + /sp/uptest.cgi へ 250,000 バイト POST) で速度測定が動き、HTML の偽情報や
+/// 404 応答文字列・不正なリダイレクト先に誘導されない
+#[test]
+fn sp_html_speedtest() {
+    let s = Server::start(17247);
+    let p = s.port;
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let fp = l.local_addr().unwrap().port();
+    let phase = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let posts: Arc<std::sync::Mutex<Vec<(String, usize)>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (ph, ps) = (phase.clone(), posts.clone());
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(mut c) = c else { continue };
+            let (ph, ps) = (ph.clone(), ps.clone());
+            std::thread::spawn(move || {
+                c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut buf = Vec::new();
+                let mut b = [0u8; 4096];
+                let end = loop {
+                    if let Some(e) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break e + 4;
+                    }
+                    match c.read(&mut b) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&b[..n]),
+                    }
+                };
+                let head = String::from_utf8_lossy(&buf[..end]).into_owned();
+                let len = head
+                    .lines()
+                    .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                    .unwrap_or(0);
+                while buf.len() < end + len {
+                    match c.read(&mut b) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&b[..n]),
+                    }
+                }
+                let req_line = head.lines().next().unwrap_or("");
+                if req_line.starts_with("POST ") {
+                    ps.lock().unwrap().push((req_line.to_string(), buf.len().min(end + len) - end));
+                    let cur = ph.load(Ordering::SeqCst);
+                    let res = if cur == 0 {
+                        ph.store(1, Ordering::SeqCst);
+                        "HTTP/1.0 302 Found\r\nLocation: /sp/result.php\r\nContent-Length: 0\r\n\r\n".to_string()
+                    } else {
+                        let body = "It's not necessary to test. <script>alert(1)</script>";
+                        format!("HTTP/1.0 404 Not Found\r\nContent-Length: {}\r\n\r\n{}", body.len(), body)
+                    };
+                    let _ = c.write_all(res.as_bytes());
+                    return;
+                }
+                if req_line.contains("/redir-lan") {
+                    let res = "HTTP/1.0 301 Moved Permanently\r\nLocation: http://127.0.0.2:1/evil\r\nContent-Length: 0\r\n\r\n";
+                    let _ = c.write_all(res.as_bytes());
+                    return;
+                }
+                let bitrate = if ph.load(Ordering::SeqCst) == 0 {
+                    "<span class=\"slow\">500 kbps</span>"
+                } else {
+                    "<span class=\"fast\">2000 kbps over</span>"
+                };
+                let body = format!(
+                    "<html><body><div>Channel: <div class=\"setting\">Max playable bitrate : 99999 kbps</div>\
+                     <form action=\"http://127.0.0.2:12345/evil\" method=\"post\"></form></div>\
+                     <div class=\"setting\">Use Port : 7144<br />Port check : <span class=\"pass\">Pass</span><br />\
+                     Max playable bitrate : {}<br /></div></body></html>",
+                    bitrate
+                );
+                let res = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body);
+                let _ = c.write_all(res.as_bytes());
+            });
+        }
+    });
+
+    let r = get(p, &format!("/admin?cmd=add_speedtest&url=http%3A%2F%2F127.0.0.1%3A{}%2Fsp%2Findex.php", fp));
+    assert_eq!(r.code, 302, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(get(p, "/admin?cmd=refresh_speedtest").code, 302);
+    let page = String::from_utf8_lossy(&get(p, "/html/en/speedtest.html").body).into_owned();
+    assert!(page.contains("500 Kbps") && !page.contains("99999"), "{}", page);
+
+    // 測定を実行すると /sp/uptest.cgi に 250,000 バイト POST して結果が更新される
+    assert_eq!(get(p, "/admin?cmd=take_speedtest&index=0").code, 302);
+    {
+        let ps = posts.lock().unwrap();
+        assert_eq!(ps.len(), 1);
+        assert!(ps[0].0.starts_with("POST /sp/uptest.cgi HTTP/1.0"), "{}", ps[0].0);
+        assert_eq!(ps[0].1, 250_000);
+    }
+    let page = String::from_utf8_lossy(&get(p, "/html/en/speedtest.html").body).into_owned();
+    assert!(page.contains("≥") && page.contains("2000 Kbps"), "{}", page);
+
+    // クールダウン中の 404 応答は生の HTML を反射しない
+    let r = get(p, "/admin?cmd=take_speedtest&index=0");
+    assert_eq!(r.code, 500);
+    let err_body = String::from_utf8_lossy(&r.body);
+    assert!(!err_body.contains("<script>"), "{}", err_body);
+    assert!(err_body.contains("not necessary"), "{}", err_body);
+
+    // LAN 内別アドレスへのリダイレクトは拒否される
+    assert_eq!(get(p, &format!("/admin?cmd=add_speedtest&url=http%3A%2F%2F127.0.0.1%3A{}%2Fredir-lan", fp)).code, 302);
+    assert_eq!(get(p, "/admin?cmd=take_speedtest&index=1").code, 500);
+}

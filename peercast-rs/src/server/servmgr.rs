@@ -281,7 +281,7 @@ impl ServMgr {
         };
         super::log::set_level(super::log::Level::Info as i32);
         sm.channel_directory.add_feed(b"http://yp.pcgw.pgw.jp/index.txt");
-        let _ = sm.uptest.add_url(b"http://bayonet.ddo.jp/sp/yp4g.xml");
+        let _ = sm.uptest.add_url(b"https://bayonet.ddo.jp/sp/index.php");
         sm
     }
 

@@ -227,13 +227,165 @@ pub fn text_status(status: i32) -> Option<&'static [u8]> {
 pub fn check_add_url(valid: bool, scheme: &[u8], url: &[u8], existing: &[&[u8]]) -> Result<(), &'static [u8]> {
     if !valid {
         Err(b"invalid URL")
-    } else if scheme != b"http" {
+    } else if scheme != b"http" && scheme != b"https" {
         Err(b"unsupported protocol")
     } else if existing.contains(&url) {
         Err(b"URL already exists")
     } else {
         Ok(())
     }
+}
+
+fn find_ascii_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w.eq_ignore_ascii_case(needle))
+}
+
+fn rfind_ascii_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).rposition(|w| w.eq_ignore_ascii_case(needle))
+}
+
+fn strip_html_tags(s: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut in_tag = false;
+    for &b in s {
+        if b == b'<' {
+            in_tag = true;
+        } else if b == b'>' {
+            in_tag = false;
+        } else if !in_tag {
+            out.push(b);
+            if out.len() >= 256 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn extract_line_after(section: &[u8], label: &[u8]) -> Option<Vec<u8>> {
+    let pos = find_ascii_ci(section, label)?;
+    let mut rest = &section[pos + label.len()..];
+    rest = &rest[..rest.len().min(512)];
+    if let Some(colon) = rest.iter().take(16).position(|&c| c == b':') {
+        rest = &rest[colon + 1..];
+    }
+    let end = [b"<br".as_slice(), b"</li>", b"</div>"]
+        .iter()
+        .filter_map(|tag| find_ascii_ci(rest, tag))
+        .min()
+        .unwrap_or(rest.len());
+    Some(strip_html_tags(&rest[..end]))
+}
+
+fn has_ascii_word(haystack: &[u8], word: &[u8]) -> bool {
+    let mut i = 0;
+    while i + word.len() <= haystack.len() {
+        if let Some(rel) = find_ascii_ci(&haystack[i..], word) {
+            let start = i + rel;
+            let end = start + word.len();
+            let left_ok = start == 0 || !haystack[start - 1].is_ascii_alphanumeric();
+            let right_ok = end == haystack.len() || !haystack[end].is_ascii_alphanumeric();
+            if left_ok && right_ok {
+                return true;
+            }
+            i = start + 1;
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+fn parse_bitrate_text(text: &[u8]) -> (Vec<u8>, bool) {
+    let over = has_ascii_word(text, b"over");
+    let Some(kbps_pos) = find_ascii_ci(text, b"kbps") else {
+        return (b"0".to_vec(), false);
+    };
+    let mut end = kbps_pos;
+    while end > 0 && text[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && text[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+    let digits = &text[start..end];
+    if digits.is_empty() || digits.len() > 10 {
+        (b"0".to_vec(), false)
+    } else {
+        (digits.to_vec(), over)
+    }
+}
+
+/// SP 現行 HTML (`index.php` の `<div class="setting">` や `result.php` の `Uptest result`) から
+/// 帯域情報を読む。チャンネル一覧の文字列による偽装を防ぐため、最後の設定欄/結果欄だけを見る。
+/// 接続先の `addr`・`port`・`object`・`post_size` は HTML からは読まず、呼び出し元が信頼された
+/// URL から決めた値を使う。
+pub fn read_sp_html(body: &[u8], addr: &[u8], port: u16, object: &[u8]) -> Result<Info, ReadError> {
+    let (start, end_tag) = if let Some(p) = rfind_ascii_ci(body, b"<div class=\"setting\"") {
+        (p, b"</div>".as_slice())
+    } else if let Some(p) = rfind_ascii_ci(body, b"<h2>uptest result</h2>") {
+        (p, b"<div class=\"powered\"".as_slice())
+    } else {
+        return Err(ReadError::Null);
+    };
+    let tail = &body[start..body.len().min(start + 4096)];
+    let section_end = find_ascii_ci(tail, end_tag).unwrap_or(tail.len());
+    let section = &tail[..section_end];
+
+    let bitrate_text = extract_line_after(section, b"Max playable bitrate").ok_or(ReadError::Null)?;
+    let (speed, over) = parse_bitrate_text(&bitrate_text);
+    let port_open = extract_line_after(section, b"Port check")
+        .is_some_and(|t| has_ascii_word(&t, b"pass"));
+
+    let mut info: Info = Default::default();
+    info[0] = if addr.eq_ignore_ascii_case(b"bayonet.ddo.jp") { b"SP".to_vec() } else { addr.to_vec() };
+    info[2] = if port_open { b"1".to_vec() } else { b"0".to_vec() };
+    info[3] = speed;
+    info[4] = if over { b"1".to_vec() } else { b"0".to_vec() };
+    info[5] = b"1".to_vec(); // checkable
+    info[6] = b"0".to_vec(); // remain
+    info[7] = addr.to_vec();
+    info[8] = port.to_string().into_bytes();
+    info[9] = object.to_vec();
+    info[10] = b"250".to_vec(); // post_size (250,000 bytes)
+    info[11] = b"2000".to_vec(); // limit
+    info[12] = b"15".to_vec(); // interval
+    info[13] = b"1".to_vec(); // enabled
+    Ok(info)
+}
+
+/// SP HTML 方式で POST する固定パスを、登録された URL のパスだけから導出する
+/// (HTML 内の `<form action>` は使わない)。
+pub fn sp_post_object(path: &[u8]) -> Vec<u8> {
+    let mut segs: Vec<&[u8]> = path
+        .split(|&c| c == b'/')
+        .filter(|s| !s.is_empty() && *s != b"." && *s != b"..")
+        .collect();
+    if segs.last().is_some_and(|s| s.contains(&b'.')) {
+        segs.pop();
+    }
+    if segs.last().is_some_and(|s| s.eq_ignore_ascii_case(b"uptest")) {
+        segs.pop();
+    }
+    let mut out = Vec::new();
+    for s in segs {
+        out.push(b'/');
+        out.extend_from_slice(s);
+    }
+    out.extend_from_slice(b"/uptest.cgi");
+    out
+}
+
+/// 旧既定 URL (`http(s)://bayonet.ddo.jp/sp/yp4g.xml`) かどうか
+pub fn is_legacy_sp_yp4g_url(host: &[u8], path: &[u8]) -> bool {
+    host.eq_ignore_ascii_case(b"bayonet.ddo.jp") && path.eq_ignore_ascii_case(b"sp/yp4g.xml")
 }
 
 #[cfg(test)]
@@ -362,8 +514,66 @@ mod tests {
         assert_eq!(text_status(3), None);
         let ex: [&[u8]; 1] = [b"http://a/"];
         assert_eq!(check_add_url(false, b"http", b"x", &ex), Err(&b"invalid URL"[..]));
-        assert_eq!(check_add_url(true, b"https", b"x", &ex), Err(&b"unsupported protocol"[..]));
+        assert_eq!(check_add_url(true, b"ftp", b"x", &ex), Err(&b"unsupported protocol"[..]));
+        assert_eq!(check_add_url(true, b"https", b"https://b/", &ex), Ok(()));
         assert_eq!(check_add_url(true, b"http", b"http://a/", &ex), Err(&b"URL already exists"[..]));
         assert_eq!(check_add_url(true, b"http", b"http://b/", &ex), Ok(()));
+    }
+
+    #[test]
+    fn sp_html_and_paths() {
+        assert_eq!(sp_post_object(b""), b"/uptest.cgi");
+        assert_eq!(sp_post_object(b"index.php"), b"/uptest.cgi");
+        assert_eq!(sp_post_object(b"sp"), b"/sp/uptest.cgi");
+        assert_eq!(sp_post_object(b"sp/"), b"/sp/uptest.cgi");
+        assert_eq!(sp_post_object(b"sp/index.php"), b"/sp/uptest.cgi");
+        assert_eq!(sp_post_object(b"sp/result.php"), b"/sp/uptest.cgi");
+        assert_eq!(sp_post_object(b"sp/uptest/"), b"/sp/uptest.cgi");
+        assert_eq!(sp_post_object(b"sp/uptest/uptest_js.php"), b"/sp/uptest.cgi");
+        assert_eq!(sp_post_object(b"sp/../admin/index.php"), b"/sp/admin/uptest.cgi");
+
+        assert!(is_legacy_sp_yp4g_url(b"bayonet.ddo.jp", b"sp/yp4g.xml"));
+        assert!(is_legacy_sp_yp4g_url(b"Bayonet.DDO.jp", b"sp/yp4g.xml"));
+        assert!(!is_legacy_sp_yp4g_url(b"bayonet.ddo.jp", b"sp/index.php"));
+
+        let html = br#"<html><body>
+            <div>Channel comment: <div class="setting">Max playable bitrate : 99999 kbps</div></div>
+            <table class="chlist"><tr><td>Max playable bitrate : 88888 kbps</td></tr></table>
+            <div class="setting"><a href="?mode=setting">Settings</a><br />Use Port : 7144<br />
+            Port check : <span class="pass">Pass</span><br />
+            Max playable bitrate : <span class="fast">2000 kbps over</span><br />
+            Generate time : 0 msec</div></body>"#;
+        let info = read_sp_html(html, b"bayonet.ddo.jp", 443, b"/sp/uptest.cgi").unwrap();
+        assert_eq!(info[0], b"SP");
+        assert_eq!(info[2], b"1");
+        assert_eq!(info[3], b"2000");
+        assert_eq!(info[4], b"1");
+        assert_eq!(info[5], b"1");
+        assert_eq!(info[7], b"bayonet.ddo.jp");
+        assert_eq!(info[8], b"443");
+        assert_eq!(info[9], b"/sp/uptest.cgi");
+        assert_eq!(info[10], b"250");
+
+        let slow = br#"<div class="setting">Port check : <span class="fail">Fail</span><br />
+            Max playable bitrate : <span class="slow">1234 kbps</span></div>"#;
+        let info2 = read_sp_html(slow, b"127.0.0.1", 8080, b"/uptest.cgi").unwrap();
+        assert_eq!(info2[0], b"127.0.0.1");
+        assert_eq!(info2[2], b"0");
+        assert_eq!(info2[3], b"1234");
+        assert_eq!(info2[4], b"0");
+
+        let untested = br#"<div class="setting">Max playable bitrate : <span>Untested</span></div>"#;
+        let info3 = read_sp_html(untested, b"bayonet.ddo.jp", 443, b"/sp/uptest.cgi").unwrap();
+        assert_eq!(info3[3], b"0");
+        assert_eq!(info3[4], b"0");
+
+        let result_page = br#"<div class="header"><h2>Uptest result</h2></div>
+            <div><ul><li>Max playable bitrate : <span class="fast">2000 kbps over</span></li></ul></div>
+            <div class="powered">Powered by YP4G</div>"#;
+        let info4 = read_sp_html(result_page, b"bayonet.ddo.jp", 443, b"/sp/uptest.cgi").unwrap();
+        assert_eq!(info4[3], b"2000");
+        assert_eq!(info4[4], b"1");
+
+        assert_eq!(read_sp_html(b"<html><body>Not found</body></html>", b"a", 80, b"/uptest.cgi"), Err(ReadError::Null));
     }
 }

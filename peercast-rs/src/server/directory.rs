@@ -421,15 +421,37 @@ impl UptestEndpoint {
     }
 }
 
-/// yp4g.xml を取って読む。取りに行った先のアドレスも返す
-fn fetch_info(url: &[u8]) -> Result<(Vec<u8>, crate::uptest::Info, Ip)> {
-    let (x, ip) = download(url)?;
-    let info = read_info(&x)?;
-    Ok((x, info, ip))
+/// yp4g.xml または SP 現行 HTML を取って読む。取りに行った先のアドレスと POST で TLS を使うかも返す
+fn fetch_info(url: &[u8]) -> Result<(Vec<u8>, crate::uptest::Info, Ip, bool)> {
+    let orig = crate::url::parse_url(url).map_err(|_| Error::general("invalid URI"))?;
+    let (mut x, mut final_url, mut ip, mut status) = download_raw(url)?;
+    if status == 404 && crate::uptest::is_legacy_sp_yp4g_url(&orig.host, &orig.path) {
+        crate::log_debug!("Speedtest: {} returned 404, falling back to https://bayonet.ddo.jp/sp/index.php", String::from_utf8_lossy(url));
+        (x, final_url, ip, status) = download_raw(b"https://bayonet.ddo.jp/sp/index.php")?;
+    }
+    if status != 200 {
+        return Err(Error::general(format!("unexpected status code {}", status)));
+    }
+    match read_info(&x) {
+        Ok(info) => {
+            let port = crate::uptest::check_srv(info_field(&info, "addr"), info_field(&info, "port"), info_field(&info, "object")).ok();
+            let use_tls = final_url.scheme == b"https" && port == Some(443);
+            Ok((x, info, ip, use_tls))
+        }
+        Err(xml_err) => {
+            let port = super::http::uri_port(&final_url);
+            let object = crate::uptest::sp_post_object(&final_url.path);
+            if let Ok(info) = crate::uptest::read_sp_html(&x, &final_url.host, port, &object) {
+                Ok((x, info, ip, final_url.scheme == b"https"))
+            } else {
+                Err(xml_err)
+            }
+        }
+    }
 }
 
-/// `takeSpeedtest` の後半: 乱数のデータを送って測ってもらう。`yp` は yp4g.xml を取ったアドレス
-fn post_speedtest(info: &crate::uptest::Info, yp: Ip) -> std::result::Result<(), Vec<u8>> {
+/// `takeSpeedtest` の後半: 乱数のデータを送って測ってもらう。`yp` は情報取得先のアドレス
+fn post_speedtest(info: &crate::uptest::Info, yp: Ip, use_tls: bool) -> std::result::Result<(), Vec<u8>> {
     if info_field(info, "checkable") != b"1" {
         crate::log_error!("speedtest server unavailable: checkable != 1");
         return Err(b"speedtest server unavailable".to_vec());
@@ -443,12 +465,24 @@ fn post_speedtest(info: &crate::uptest::Info, yp: Ip) -> std::result::Result<(),
         crate::log_error!("Speedtest: {}", e);
         e.as_bytes().to_vec()
     })?;
-    crate::log_debug!("Posting {} bytes of random data to {} ...", size, String::from_utf8_lossy(&crate::uptest::post_url(addr, &port.to_string().into_bytes(), object)));
-    match post_random_data(addr, port, object, size, yp) {
-        Ok(code) => {
+    let scheme = if use_tls { "https" } else { "http" };
+    crate::log_debug!(
+        "Posting {} bytes of random data to {}://{}:{}{} ...",
+        size,
+        scheme,
+        String::from_utf8_lossy(&crate::uptest::url_host(addr)),
+        port,
+        String::from_utf8_lossy(object)
+    );
+    match post_random_data(addr, port, object, size, yp, use_tls) {
+        Ok((code, body)) => {
             crate::log_trace!("... done");
+            const NOT_NECESSARY: &[u8] = b"it's not necessary to test";
             if code == 302 {
                 Ok(())
+            } else if code == 404 && body.windows(NOT_NECESSARY.len()).any(|w| w.eq_ignore_ascii_case(NOT_NECESSARY)) {
+                crate::log_info!("Speedtest: server reported test is not necessary right now");
+                Err(b"speedtest not necessary right now (already tested recently)".to_vec())
             } else {
                 Err(format!("unexpected status code {}", code).into_bytes())
             }
@@ -472,26 +506,63 @@ fn read_info(x: &[u8]) -> Result<crate::uptest::Info> {
     })
 }
 
-/// `UptestEndpoint::download`: 本体と、つないだ先のアドレス
-fn download(url: &[u8]) -> Result<(Vec<u8>, Ip)> {
-    let u = crate::url::parse_url(url).map_err(|_| Error::general("invalid URI"))?;
-    if u.scheme != b"http" {
-        return Err(Error::general("unsupported protocol"));
+/// `UptestEndpoint::download`: 本体、最終 URL、つないだ先のアドレス、HTTP 状態コードを返す
+/// (リダイレクトは 1 回まで、`allowed_untrusted_ip` のみ、HTTPS から HTTP へのダウングレードは禁止)
+fn download_raw(url: &[u8]) -> Result<(Vec<u8>, crate::url::Url, Ip, i32)> {
+    let mut current = url.to_vec();
+    let mut origin = Ip::default();
+    let mut was_https = false;
+    let mut retry = 0;
+    loop {
+        if retry > 1 {
+            return Err(Error::stream("Too many redirections. Giving up ..."));
+        }
+        let u = crate::url::parse_url(&current).map_err(|_| Error::general("invalid URI"))?;
+        if u.scheme != b"http" && u.scheme != b"https" {
+            return Err(Error::general("unsupported protocol"));
+        }
+        if was_https && u.scheme != b"https" {
+            return Err(Error::stream("Redirect downgrade to HTTP"));
+        }
+        let host = Host::from_str_name(&u.host, super::http::uri_port(&u));
+        if !host.ip.is_set() {
+            return Err(Error::general("could not resolve host name"));
+        }
+        if retry == 0 {
+            origin = host.ip;
+        } else if !super::http::allowed_untrusted_ip(&host.ip, &origin) {
+            crate::log_error!("Refusing a redirect to a non-public address: {}", String::from_utf8_lossy(&current));
+            return Err(Error::stream("Redirect to a non-public address"));
+        }
+        let tls_host = crate::uptest::ipv6_literal(&u.host).unwrap_or(&u.host);
+        let mut sock = if u.scheme == b"https" { ClientSocket::new_tls(tls_host) } else { ClientSocket::new() };
+        sock.set_total_timeout(super::http::FETCH_TIMEOUT_MS);
+        sock.connect(host)?;
+        let mut path = [&b"/"[..], &u.path].concat();
+        if !u.query.is_empty() {
+            path.push(b'?');
+            path.extend_from_slice(&u.query);
+        }
+        let req = Request::new(b"GET", &path, b"HTTP/1.1", Headers::from(&[("Host", &u.host), ("Connection", b"close"), ("User-Agent", PCX_AGENT.as_bytes())]));
+        let res = Http::new(&mut sock).send_request(&req)?;
+        match res.status_code {
+            301 | 302 | 307 | 308 => {
+                let loc = res.headers.get(b"Location");
+                if loc.is_empty() {
+                    return Err(Error::stream("No Location header"));
+                }
+                was_https = u.scheme == b"https";
+                current = if loc.starts_with(b"/") {
+                    let port_part = if u.port.is_empty() { Vec::new() } else { [&b":"[..], &u.port].concat() };
+                    [&u.scheme[..], b"://", &u.host, &port_part, &loc].concat()
+                } else {
+                    loc
+                };
+                retry += 1;
+            }
+            code => return Ok((res.body, u, host.ip, code)),
+        }
     }
-    let host = Host::from_str_name(&u.host, super::http::uri_port(&u));
-    if !host.ip.is_set() {
-        return Err(Error::general("could not resolve host name"));
-    }
-    let mut sock = ClientSocket::new();
-    sock.set_total_timeout(super::http::FETCH_TIMEOUT_MS);
-    sock.connect(host)?;
-    let path = [&b"/"[..], &u.path].concat();
-    let req = Request::new(b"GET", &path, b"HTTP/1.0", Headers::from(&[("Host", &u.host), ("Connection", b"close"), ("User-Agent", PCX_AGENT.as_bytes())]));
-    let res = Http::new(&mut sock).send_request(&req)?;
-    if res.status_code != 200 {
-        return Err(Error::general(format!("unexpected status code {}", res.status_code)));
-    }
-    Ok((res.body, host.ip))
 }
 
 /// 速度測定のデータを送ってよい宛先か。yp4g.xml は平文の HTTP で取るので書き換えられうる。
@@ -504,9 +575,9 @@ fn uptest_dest_allowed(dest: &Host, yp: Ip) -> bool {
     dest.ip == yp || !(dest.ip.is_lan() || super::servent::is_localhost(dest))
 }
 
-/// `UptestEndpoint::postRandomData`: 状態の番号を返す。`addr`・`port`・`object` は `uptest::check_srv` で
+/// `UptestEndpoint::postRandomData`: 状態の番号と本体を返す。`addr`・`port`・`object` は `uptest::check_srv` で
 /// 確かめたもの
-fn post_random_data(addr: &[u8], port: u16, object: &[u8], size: usize, yp: Ip) -> Result<i32> {
+fn post_random_data(addr: &[u8], port: u16, object: &[u8], size: usize, yp: Ip, use_tls: bool) -> Result<(i32, Vec<u8>)> {
     // IPv6 アドレスは名前を引かずにそのまま使う
     let host = match crate::uptest::ipv6_literal(addr) {
         Some(v6) => Host::new(Ip::parse(v6).unwrap_or_default(), port),
@@ -518,7 +589,9 @@ fn post_random_data(addr: &[u8], port: u16, object: &[u8], size: usize, yp: Ip) 
     if !uptest_dest_allowed(&host, yp) {
         return Err(Error::general(format!("destination not allowed: {}", host.str())));
     }
-    let mut sock = ClientSocket::new();
+    let tls_host = crate::uptest::ipv6_literal(addr).unwrap_or(addr);
+    let mut sock = if use_tls { ClientSocket::new_tls(tls_host) } else { ClientSocket::new() };
+    sock.set_total_timeout(super::http::FETCH_TIMEOUT_MS);
     sock.connect(host)?;
     let mut req = Request::new(
         b"POST",
@@ -534,7 +607,8 @@ fn post_random_data(addr: &[u8], port: u16, object: &[u8], size: usize, yp: Ip) 
     );
     let mut r = sys::Random::default();
     req.body = (0..size).map(|_| r.next_u32() as u8).collect();
-    Ok(Http::new(&mut sock).send_request(&req)?.status_code)
+    let res = Http::new(&mut sock).send_request(&req)?;
+    Ok((res.status_code, res.body))
 }
 
 /// `UptestServiceRegistry`。通信は一覧のロックの外で行う (C++ 版はロックを持ったまま取りに行き、
@@ -583,7 +657,7 @@ impl UptestServiceRegistry {
             }
             p[index as usize].url.clone()
         };
-        let (x, info, yp) = match fetch_info(&url) {
+        let (x, info, yp, use_tls) = match fetch_info(&url) {
             Ok(v) => v,
             Err(e) => {
                 crate::log_error!("Speedtest {}: {}", String::from_utf8_lossy(&url), e);
@@ -600,7 +674,7 @@ impl UptestServiceRegistry {
             e.xml = x;
             e.info = info.clone();
         }
-        post_speedtest(&info, yp)
+        post_speedtest(&info, yp, use_tls)
     }
 
     /// `getXML`
@@ -631,7 +705,7 @@ impl UptestServiceRegistry {
                 None => continue,
             };
             match r {
-                Ok((x, i, _)) => {
+                Ok((x, i, _, _)) => {
                     e.xml = x;
                     e.info = i;
                     e.status = crate::uptest::SUCCESS;
